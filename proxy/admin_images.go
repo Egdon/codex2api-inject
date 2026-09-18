@@ -7,12 +7,73 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/codex2api/database"
 	"github.com/codex2api/security"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
+
+// adminImageRecorder keeps informational keepalives separate from the final
+// response. httptest.ResponseRecorder otherwise commits the first 102 forever.
+// This adapter is used only for in-process Studio calls, never public traffic.
+// Deliberately no Unwrap: keepalive must reach this adapter, not the recorder.
+type adminImageRecorder struct {
+	*httptest.ResponseRecorder
+	finalCode int
+}
+
+func newAdminImageRecorder() *adminImageRecorder {
+	return &adminImageRecorder{ResponseRecorder: httptest.NewRecorder()}
+}
+
+func (r *adminImageRecorder) WriteHeader(code int) {
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		return
+	}
+	if r.finalCode != 0 {
+		return
+	}
+	r.ResponseRecorder.WriteHeader(code)
+	r.finalCode = code
+}
+
+func (r *adminImageRecorder) Write(body []byte) (int, error) {
+	if r.finalCode == 0 {
+		r.WriteHeader(http.StatusOK)
+	}
+	return r.ResponseRecorder.Write(body)
+}
+
+func (r *adminImageRecorder) WriteString(body string) (int, error) {
+	if r.finalCode == 0 {
+		r.WriteHeader(http.StatusOK)
+	}
+	return r.ResponseRecorder.WriteString(body)
+}
+
+func (r *adminImageRecorder) Flush() {
+	if r.finalCode == 0 {
+		r.WriteHeader(http.StatusOK)
+	}
+	r.ResponseRecorder.Flush()
+}
+
+func (r *adminImageRecorder) imageResult(operation string) ([]byte, int, error) {
+	body := r.Body.Bytes()
+	if r.finalCode == 0 {
+		return body, http.StatusBadGateway, fmt.Errorf("image %s ended without a final HTTP response", operation)
+	}
+	if r.finalCode < 200 || r.finalCode >= 300 {
+		message := extractAdminImageErrorMessage(body)
+		if message == "" {
+			return body, r.finalCode, fmt.Errorf("image %s failed with HTTP %d", operation, r.finalCode)
+		}
+		return body, r.finalCode, fmt.Errorf("image %s failed with HTTP %d: %s", operation, r.finalCode, message)
+	}
+	return body, r.finalCode, nil
+}
 
 // GenerateImageOnceForAdmin executes the existing Images API handler in-process.
 // It keeps model aliasing, account dispatch, usage logging, and image parsing in one code path.
@@ -24,7 +85,7 @@ func (h *Handler) GenerateImageOnceForAdmin(ctx context.Context, rawBody []byte,
 		return nil, http.StatusInternalServerError, fmt.Errorf("image proxy handler is not initialized")
 	}
 
-	recorder := httptest.NewRecorder()
+	recorder := newAdminImageRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(rawBody)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
@@ -49,30 +110,46 @@ func (h *Handler) GenerateImageOnceForAdmin(ctx context.Context, rawBody []byte,
 
 	h.ImagesGenerations(ginCtx)
 
-	body := recorder.Body.Bytes()
-	if recorder.Code < 200 || recorder.Code >= 300 {
-		msg := strings.TrimSpace(extractAdminImageErrorMessage(body))
-		if msg == "" {
-			msg = fmt.Sprintf("image generation failed with HTTP %d", recorder.Code)
-		}
-		return body, recorder.Code, fmt.Errorf("%s", msg)
-	}
-	return body, recorder.Code, nil
+	return recorder.imageResult("generation")
 }
+
+const maxAdminImageErrorBytes = 2048
+const maxAdminImageErrorInspectBytes = 64 * 1024
 
 func extractAdminImageErrorMessage(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
+	// Do not stringify/parse multi-megabyte image payloads on the error path.
+	if len(body) > maxAdminImageErrorInspectBytes {
+		return "large response body omitted"
+	}
+	if bytes.Contains(body, []byte(`"b64_json"`)) || bytes.Contains(bytes.ToLower(body), []byte("data:image/")) {
+		return "image response body omitted"
+	}
 	message := strings.TrimSpace(gjsonGetString(body, "error.message"))
-	if message != "" {
-		return message
+	if message == "" {
+		value := gjson.GetBytes(body, "error")
+		if value.Type == gjson.String {
+			message = strings.TrimSpace(value.String())
+		}
 	}
-	message = strings.TrimSpace(gjsonGetString(body, "error"))
-	if message != "" {
-		return message
+	if message == "" {
+		// Structured non-error JSON may contain image data in another field.
+		// Never echo the whole JSON document as a diagnostic.
+		if gjson.ValidBytes(body) {
+			return "JSON response contained no error message"
+		}
+		message = strings.TrimSpace(string(body))
 	}
-	return strings.TrimSpace(string(body))
+	if len(message) > maxAdminImageErrorBytes {
+		message = message[:maxAdminImageErrorBytes]
+		for !utf8.ValidString(message) && len(message) > 0 {
+			message = message[:len(message)-1]
+		}
+		message += "…"
+	}
+	return message
 }
 
 // GenerateImageEditForAdmin executes the ImagesEdits handler in-process for
@@ -85,7 +162,7 @@ func (h *Handler) GenerateImageEditForAdmin(ctx context.Context, rawBody []byte,
 		return nil, http.StatusInternalServerError, fmt.Errorf("image proxy handler is not initialized")
 	}
 
-	recorder := httptest.NewRecorder()
+	recorder := newAdminImageRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(rawBody)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
@@ -107,15 +184,7 @@ func (h *Handler) GenerateImageEditForAdmin(ctx context.Context, rawBody []byte,
 
 	h.ImagesEdits(ginCtx)
 
-	body := recorder.Body.Bytes()
-	if recorder.Code < 200 || recorder.Code >= 300 {
-		msg := strings.TrimSpace(extractAdminImageErrorMessage(body))
-		if msg == "" {
-			msg = fmt.Sprintf("image edit failed with HTTP %d", recorder.Code)
-		}
-		return body, recorder.Code, fmt.Errorf("%s", msg)
-	}
-	return body, recorder.Code, nil
+	return recorder.imageResult("edit")
 }
 
 func gjsonGetString(body []byte, path string) string {
