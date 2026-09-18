@@ -21,6 +21,8 @@ import (
 )
 
 const harvestUpstream = "https://chatgpt.com/backend-api/codex/responses"
+const harvestClientVersion = "0.153.4"
+const harvestUserAgent = "codex-tui/" + harvestClientVersion + " (Mac OS 15.5.0; arm64) xterm-256color (codex-tui; " + harvestClientVersion + ")"
 
 type Store interface {
 	Accounts() []*auth.Account
@@ -74,6 +76,7 @@ type Harvester struct {
 	scheduler    *harvestScheduler
 	rootCtx      context.Context
 	startOnce    sync.Once
+	autoWake     chan struct{}
 	breaker      harvestBreaker
 	// publishMu serializes generation checks and the complete memory/DB publish.
 	publishMu   sync.Mutex
@@ -83,7 +86,7 @@ type Harvester struct {
 }
 
 func NewHarvester(db *database.DB, store Store, cache *Cache) *Harvester {
-	return &Harvester{db: db, store: store, cache: cache, generations: make(map[string]*cellGeneration), tlsSessions: tls.NewLRUClientSessionCache(64)}
+	return &Harvester{autoWake: make(chan struct{}, 1), db: db, store: store, cache: cache, generations: make(map[string]*cellGeneration), tlsSessions: tls.NewLRUClientSessionCache(64)}
 }
 
 func (h *Harvester) LoadFromDB(ctx context.Context) error {
@@ -350,7 +353,7 @@ func (h *Harvester) probe(ctx context.Context, cfg Config, acc *auth.Account, mo
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 25 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	body := fmt.Sprintf(`{"model":%q,"instructions":"","store":false,"stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"ping"}]}]}`, model)
+	body := fmt.Sprintf(`{"model":%q,"instructions":"Reply with exactly: pong","store":false,"stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"ping"}]}]}`, model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, harvestUpstream, strings.NewReader(body))
 	if err != nil {
 		return "", nil, err
@@ -359,8 +362,8 @@ func (h *Harvester) probe(ctx context.Context, cfg Config, acc *auth.Account, mo
 	req.Header.Set("Chatgpt-Account-Id", h.probeAccountID(acc))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", "codex-tui/0.153.3 (Mac OS 15.5.0; arm64) xterm-256color (codex-tui; 0.153.3)")
-	req.Header.Set("Version", "0.153.3")
+	req.Header.Set("User-Agent", harvestUserAgent)
+	req.Header.Set("Version", harvestClientVersion)
 	req.Header.Set("Originator", "codex-tui")
 	req.Header.Set("X-Codex-Beta-Features", "remote_compaction_v2")
 	if inject != "" {
@@ -490,6 +493,10 @@ func (h *Harvester) SaveConfig(ctx context.Context, req Config, keepPassword, ke
 		return Config{}, err
 	}
 	SetConfig(req)
+	if req.AutoHarvest && !cfg.AutoHarvest {
+		// Nonblocking: scanAuto takes mu after this settings transaction exits.
+		h.requestAutoScan()
+	}
 	return req, nil
 }
 

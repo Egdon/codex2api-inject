@@ -87,14 +87,26 @@ func (h *Harvester) Start(ctx context.Context) {
 	})
 }
 
+// Multiple enable events collapse into one pending scan; no extra worker or
+// timer is created and the scanner rechecks current settings before admission.
+func (h *Harvester) requestAutoScan() {
+	select {
+	case h.autoWake <- struct{}{}:
+	default:
+	}
+}
+
 func (h *Harvester) loop(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
+	h.scanAuto(ctx) // Startup: no initial one-minute wait.
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			h.scanAuto(ctx)
+		case <-h.autoWake:
 			h.scanAuto(ctx)
 		}
 	}
