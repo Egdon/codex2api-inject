@@ -1,0 +1,115 @@
+name: Publish patched binaries
+
+on:
+  push:
+    tags: ['patched-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing canonical patched-vMAJOR.MINOR.PATCH tag on main history'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patched-binary-publish
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    if: github.repository == 'Egdon/codex2api-inject' && github.event.repository.default_branch == 'main' && (github.event_name == 'push' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      upstream_base: ${{ steps.resolve.outputs.upstream_base }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve immutable candidate and official upstream ancestry
+        id: resolve
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          source .github/scripts/patched-release-common.sh
+          canonical_patched_tag "$RELEASE_TAG"
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+          sha=$(git rev-parse 'FETCH_HEAD^{commit}')
+          git checkout --detach "$sha"
+          revalidate_candidate "$sha" "$RELEASE_TAG"
+          base=$(upstream_base "$sha")
+          printf 'sha=%s\ntag=%s\nupstream_base=%s\n' "$sha" "$RELEASE_TAG" "$base" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: candidate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pr-check.yml
+    with:
+      candidate_sha: ${{ needs.candidate.outputs.sha }}
+
+  publish:
+    needs: [candidate, ci]
+    if: github.repository == 'Egdon/codex2api-inject'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: patched-publish
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+      CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
+      UPSTREAM_BASE: ${{ needs.candidate.outputs.upstream_base }}
+      GH_REPO: Egdon/codex2api-inject
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Revalidate approved candidate
+        run: |
+          source .github/scripts/patched-release-common.sh
+          revalidate_candidate "$CANDIDATE_SHA" "$RELEASE_TAG"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build frontend with exact release version
+        working-directory: frontend
+        env:
+          VITE_APP_VERSION: ${{ needs.candidate.outputs.tag }}
+        run: |
+          npm ci
+          npm run build
+      - name: Assemble all binary archives and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist build
+          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            goos=${target%_*}
+            goarch=${target#*_}
+            workdir="build/$target"
+            mkdir -p "$workdir"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+              -ldflags="-s -w -X github.com/codex2api/internal/version.Version=$RELEASE_TAG -X github.com/codex2api/internal/version.Source=patched -X github.com/codex2api/internal/version.UpstreamBase=$UPSTREAM_BASE -X github.com/codex2api/internal/version.Revision=$CANDIDATE_SHA" \
+              -o "$workdir/codex2api" .
+            cp .env.example README.md "$workdir/"
+            tar -C "$workdir" -czf "dist/codex2api_${RELEASE_TAG}_${target}.tar.gz" codex2api .env.example README.md
+          done
+          (cd dist && sha256sum codex2api_*.tar.gz > SHA256SUMS.txt)
+      - name: Create draft, upload without replacement, then publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: bash .github/scripts/publish-patched-binaries.sh

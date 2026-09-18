@@ -79,8 +79,9 @@ suite against `admin/inject_page.go`, extract the embedded script and run
 `node --check`. A separate Docker build runs with **push: false**. Ordinary
 pull-request CI has read-only permissions and no publish secrets.
 
-`docker-image.yml` only accepts custom **patched-v*** tag pushes (validated to
-start with a numeric version), or a manual run selecting **main**. It never
+`docker-image.yml` only accepts canonical **patched-vMAJOR.MINOR.PATCH** tag
+pushes (three numeric components, no leading zero except zero itself), or a manual
+run selecting **main**, in exactly `Egdon/codex2api-inject`. It never
 publishes on upstream `v*` tags or regular main pushes. The candidate must be an
 ancestor of current main, and the exact resolved SHA is checked by every reusable
 CI job and checked out again for publication. Tags must point to reviewed main
@@ -89,14 +90,21 @@ that tagged commit. The reusable CI is from that same trusted workflow revision;
 manual publishing loads main. There is no privileged `workflow_run` or
 `pull_request_target` bridge to untrusted PR code.
 
-The `build_version` input is passed via environment data, validated to a bounded
-single-line allowlist, and then passed as a Docker build argument. It is never
-interpolated into shell source. It changes the UI version, not publication tags.
+The manual `build_version` input is environment data, never interpolated into
+shell source. If supplied, it must be a canonical patched tag already resolving
+to the selected main SHA. If empty, the version is `dev-<full SHA>`, never `main`
+or an official upstream version. Tag pushes use the exact tag. Docker passes
+`BUILD_SOURCE=patched`, `BUILD_UPSTREAM_BASE` and `BUILD_REVISION` alongside the
+version; frontend and binary use the same version. The Dockerfile defaults to
+`dev`, `patched`, `unknown`, `unknown` for honest standalone builds.
 
 After all CI succeeds and environment approval is granted, publication builds
 linux/amd64 and linux/arm64 and pushes **ghcr.io/<owner>/<repo>:sha-<full SHA>**.
-That tag is treated as immutable: reruns reuse its digest, never rebuild over it;
-a rerun with a different display version still uses the first image. Restrict
+That tag is treated as immutable: reruns reuse its digest, never rebuild over it.
+Reuse requires both platform images' metadata labels to match the requested
+version, source, upstream base and revision; missing/mismatched labels fail closed.
+A dev image already published at that SHA cannot become a differently versioned
+release image: use a new reviewed commit, not an overwrite. Restrict
 other package writers, since GHCR does not enforce this convention for external
 writers. Unexpected registry inspection failures fail closed.
 
@@ -117,6 +125,63 @@ on this fork's upstream `v*` tags. Preserve this guard during upstream merges.
 Historical tags containing older workflows are not retroactively protected:
 do not repush old tags or rerun historical unguarded publish/release runs. If
 needed, disable inherited release automation in repository Actions settings.
+
+## Fork binary releases and exact-tag trust contract
+
+`patched-release.yml` is restricted to exactly **Egdon/codex2api-inject**. It
+accepts patched tag pushes or a manual run on main with an existing tag. Valid
+examples include `patched-v1.0.0` and `patched-v0.0.0`; suffixes, leading zeros,
+missing components, and upstream `v*` tags are rejected. The workflow resolves
+and peels the remote tag once to a full immutable commit SHA, verifies main
+ancestry, and calls all reusable CI jobs with that exact SHA. Only the publish
+job has `contents: write`, behind the protected **patched-publish** environment.
+Permit that token permission in repository settings after explicit approval.
+
+After approval, the job revalidates main ancestry and remote tag SHA, builds the
+frontend with `VITE_APP_VERSION` equal to the exact tag, and embeds these Go
+`internal/version` string variables with ldflags:
+
+- `Version`: exact patched tag, never stripped to upstream semver.
+- `Source`: `patched`.
+- `Revision`: full tested commit SHA.
+- `UpstreamBase`: nearest ancestral canonical official `vX.Y.Z` tag, fetched
+  directly from `james-6-23/codex2api` into an isolated ref namespace. Distance is
+  the number of commits in `tag..candidate`; ties use lexical ref order. Local
+  similarly named tags are not proof. If provenance cannot be established, use
+  `unknown` rather than inventing an upstream version.
+
+The draft contains exactly four archives and `SHA256SUMS.txt`. For example,
+`codex2api_patched-v1.0.0_linux_amd64.tar.gz` contains `codex2api`, `.env.example`,
+and `README.md` at its root. Targets are linux/darwin × amd64/arm64. Windows
+installation is unsupported; this workflow does not publish Windows packages.
+Archive names retain the **complete exact patched tag**. The checksum manifest
+uses standard SHA-256 lines for these exact archive basenames.
+
+No existing release (public or draft) or asset is overwritten. Upload does not
+use `--clobber`. Before publication, all five uploaded assets must have exactly
+the expected names, uploaded state, sizes and GitHub SHA-256 digests matching
+local bytes. Missing digests fail closed. Remote tag SHA and main ancestry are
+checked again as the last Git operation before making the draft public. Latest
+selection is explicit and numeric-safe: an older canonical version is published
+with `make_latest=false`, so an older manual release cannot demote latest.
+
+If assembly/upload/validation fails, the draft remains private and the next run
+refuses it. After separately approved manual inspection, delete **only that
+failed draft**, keep the tag unchanged, and rerun from the start. Automatic resume
+is intentionally unsupported. Never delete or recreate a public release to retry;
+publish a new canonical version instead. Protect release assets and tag update/
+deletion with rulesets and restrict other release writers. Git checks and GitHub
+release publication are not atomic; protections against concurrent retagging or
+out-of-band publication are part of the trust boundary.
+
+Updater integration must bind repository, exact canonical tag, selected platform
+archive basename, and checksum manifest from **that same tag release**. It must
+verify SHA-256 before extraction/replacement, never substitute `latest` download
+URLs, upstream assets, or checksums from another release. The manifest is an
+integrity check under the trusted repository/publisher boundary, not an independent
+signature: a compromised writer can replace both archive and manifest. Keep
+frontend/backend strict-tag parsing and metadata in agreement with this contract.
+GitHub's moving latest release pointer is discovery only, not artifact identity.
 
 ## Review boundary
 
