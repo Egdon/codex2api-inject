@@ -36,6 +36,49 @@ func testAccount(id int64) *auth.Account {
 	}
 }
 
+func TestHarvestPlanWeightsConfigAndAliases(t *testing.T) {
+	for _, raw := range []string{"", "{}", `{"max_attempts":10}`, `{"plan_weight_pro":0,"plan_weight_prolite":0,"plan_weight_plus":0}`} {
+		cfg, err := ParseConfigJSON(raw)
+		if err != nil || cfg.PlanWeightPro != 3 || cfg.PlanWeightProlite != 2 || cfg.PlanWeightPlus != 1 {
+			t.Fatalf("legacy/zero config %q: %+v %v", raw, cfg, err)
+		}
+	}
+	cfg, err := ParseConfigJSON(`{"plan_weight_pro":-3,"plan_weight_prolite":99,"plan_weight_plus":7}`)
+	if err != nil || cfg.PlanWeightPro != 1 || cfg.PlanWeightProlite != 10 || cfg.PlanWeightPlus != 7 {
+		t.Fatalf("clamp config %+v %v", cfg, err)
+	}
+	raw, err := EncodeConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseConfigJSON(raw)
+	if err != nil || parsed.PlanWeightPro != 1 || parsed.PlanWeightProlite != 10 || parsed.PlanWeightPlus != 7 {
+		t.Fatalf("round trip %+v %v", parsed, err)
+	}
+	public := Publicize(cfg)
+	if public.PlanWeightPro != 1 || public.PlanWeightProlite != 10 || public.PlanWeightPlus != 7 {
+		t.Fatal("public API lost weights")
+	}
+	for _, tc := range []struct {
+		raw, plan string
+		weight    int
+	}{
+		{" PRO ", "pro", 3}, {"prolite", "prolite", 2}, {" Pro_Lite ", "prolite", 2},
+		{"PRO-LITE", "prolite", 2}, {" Plus ", "plus", 1}, {"enterprise", "enterprise", 1},
+		{"", "", 1}, {"pro lite", "pro lite", 1},
+	} {
+		if got := normalizeHarvestPlan(tc.raw); got != tc.plan {
+			t.Fatalf("plan %q = %q", tc.raw, got)
+		}
+		if got := harvestPlanWeight(Config{}, tc.raw); got != tc.weight {
+			t.Fatalf("weight %q = %d", tc.raw, got)
+		}
+	}
+	if harvestPlanWeight(Config{PlanWeightPro: 10, PlanWeightProlite: 10, PlanWeightPlus: 10}, "unknown") != 1 {
+		t.Fatal("unknown plan inherited configured weight")
+	}
+}
+
 func TestNormalizeConfigAllowsTenPlusAttempts(t *testing.T) {
 	got := NormalizeConfig(Config{MaxAttempts: 10, CooldownMinutes: 15})
 	if got.MaxAttempts != 10 {

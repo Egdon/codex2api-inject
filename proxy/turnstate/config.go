@@ -22,6 +22,9 @@ type Config struct {
 	Models               []string `json:"models"`
 	Concurrency          int      `json:"concurrency"`
 	AccountConcurrency   int      `json:"account_concurrency"`
+	PlanWeightPro        int      `json:"plan_weight_pro"`
+	PlanWeightProlite    int      `json:"plan_weight_prolite"`
+	PlanWeightPlus       int      `json:"plan_weight_plus"`
 	CooldownMinutes      int      `json:"cooldown_minutes"`
 	SkipTTLMinutes       int      `json:"skip_ttl_minutes"`
 	ZooHost              string   `json:"zoo_host"`
@@ -52,6 +55,9 @@ func DefaultConfig() Config {
 		Models:              append([]string(nil), DefaultModels...),
 		Concurrency:         2,
 		AccountConcurrency:  1,
+		PlanWeightPro:       3,
+		PlanWeightProlite:   2,
+		PlanWeightPlus:      1,
 		CooldownMinutes:     15,
 		SkipTTLMinutes:      15,
 		ZooHost:             "us-eu.zooproxy.com:5000",
@@ -82,6 +88,9 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	out.InjectEnabled = cfg.InjectEnabled
 	out.AutoHarvest = cfg.AutoHarvest
+	out.PlanWeightPro = normalizePlanWeight(cfg.PlanWeightPro, 3)
+	out.PlanWeightProlite = normalizePlanWeight(cfg.PlanWeightProlite, 2)
+	out.PlanWeightPlus = normalizePlanWeight(cfg.PlanWeightPlus, 1)
 	if cfg.IntervalMinutes > 0 {
 		out.IntervalMinutes = clampInt(cfg.IntervalMinutes, 5, 24*60)
 	}
@@ -210,6 +219,37 @@ func uniqueIDs(in []int64) []int64 {
 		out = append(out, id)
 	}
 	return out
+}
+
+// Harvest plan aliases intentionally do not use auth's global normalization.
+func normalizeHarvestPlan(plan string) string {
+	plan = strings.ToLower(strings.TrimSpace(plan))
+	switch plan {
+	case "prolite", "pro_lite", "pro-lite":
+		return "prolite"
+	default:
+		return plan
+	}
+}
+
+func normalizePlanWeight(weight, fallback int) int {
+	if weight == 0 {
+		return fallback
+	}
+	return clampInt(weight, 1, 10)
+}
+
+func harvestPlanWeight(cfg Config, plan string) int {
+	switch normalizeHarvestPlan(plan) {
+	case "pro":
+		return normalizePlanWeight(cfg.PlanWeightPro, 3)
+	case "prolite":
+		return normalizePlanWeight(cfg.PlanWeightProlite, 2)
+	case "plus":
+		return normalizePlanWeight(cfg.PlanWeightPlus, 1)
+	default:
+		return 1
+	}
 }
 
 func clampInt(v, lo, hi int) int {
