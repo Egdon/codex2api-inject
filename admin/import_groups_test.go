@@ -83,14 +83,19 @@ func TestResolveImportGroupIDsFormAcceptsBothSyntaxes(t *testing.T) {
 func TestBindImportedAccountGroupsSyncsRuntimePool(t *testing.T) {
 	handler, db, store, groupID := newImportGroupsTestHandler(t)
 	ctx := context.Background()
-	account := &auth.Account{DBID: 77, AccessToken: "token"}
+	// Group mutation now locks the persisted account for policy ownership.
+	accountID, err := db.InsertAccount(ctx, "import-group-fixture", "fixture-refresh", "")
+	if err != nil {
+		t.Fatalf("InsertAccount: %v", err)
+	}
+	account := &auth.Account{DBID: accountID, AccessToken: "token"}
 	store.AddAccount(account)
 
-	if err := handler.bindImportedAccountGroups(ctx, []int64{77}, []int64{groupID}); err != nil {
+	if err := handler.bindImportedAccountGroups(ctx, []int64{accountID}, []int64{groupID}); err != nil {
 		t.Fatalf("bindImportedAccountGroups: %v", err)
 	}
 
-	persisted, err := db.GetAccountGroupIDs(ctx, 77)
+	persisted, err := db.GetAccountGroupIDs(ctx, accountID)
 	if err != nil {
 		t.Fatalf("GetAccountGroupIDs: %v", err)
 	}
@@ -103,10 +108,10 @@ func TestBindImportedAccountGroupsSyncsRuntimePool(t *testing.T) {
 	}
 
 	// 空分组表示不绑，不该把已有归属清掉。
-	if err := handler.bindImportedAccountGroups(ctx, []int64{77}, nil); err != nil {
+	if err := handler.bindImportedAccountGroups(ctx, []int64{accountID}, nil); err != nil {
 		t.Fatalf("bind with empty groups: %v", err)
 	}
-	if persisted, _ := db.GetAccountGroupIDs(ctx, 77); len(persisted) != 1 {
+	if persisted, _ := db.GetAccountGroupIDs(ctx, accountID); len(persisted) != 1 {
 		t.Fatalf("persisted groups after empty bind = %v, want them untouched", persisted)
 	}
 }
