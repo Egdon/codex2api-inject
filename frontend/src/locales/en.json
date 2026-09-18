@@ -1,4 +1,32 @@
 {
+  "updates": {
+    "buildMetadata": "Upstream base: {{base}} · Revision: {{revision}}",
+    "identityUnavailable": "Cannot verify the running build identity. Installation was not started.",
+    "lockedPlan": "This confirmation is locked to the source and exact target shown above. Refreshing release data cannot change this installation plan.",
+    "title": "System updates",
+    "localBuild": "Running build: {{version}} · {{source}}",
+    "patched": "Patched (default)",
+    "official": "Official upstream",
+    "patchedDescription": "Keep patches and the dual-entry interface. If this source is unavailable, no official fallback is selected.",
+    "officialDescription": "Explicit opt-in migration to upstream. Patches and the dual-entry interface will be lost.",
+    "status": {
+      "available": "Update available",
+      "latest": "Already current",
+      "migration": "Source/build migration available",
+      "unavailable": "Source unavailable — installation disabled"
+    },
+    "refresh": "Refresh this source",
+    "expired": "This installation plan expired. Refresh the selected source and review again.",
+    "review": "Review selected installation",
+    "verifying": "Waiting for the running build identity to change…",
+    "confirmTitle": "Confirm installation",
+    "officialConfirmTitle": "Confirm replacement with official upstream",
+    "backupWarning": "Back up your database before proceeding. Existing groups remain in the database; replacing the binary does not remove them, but the target build may not expose patched features.",
+    "officialWarning": "I understand that official upstream removes patches and the dual-entry interface. I have backed up the database; existing groups stay in the database.",
+    "migrationWarning": "I explicitly accept this local/development build or cross-source migration and have checked target compatibility and database backups.",
+    "dockerWarning": "Docker: this changes the running binary only. Rebuilding or recreating the container returns to the version bundled in its image unless you update the image.",
+    "confirmInstall": "Confirm and install this exact version"
+  },
   "qualityTest": {
     "studioTab": "Test studio",
     "recordsTab": "Test history",

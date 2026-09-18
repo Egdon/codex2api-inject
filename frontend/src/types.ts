@@ -1690,7 +1690,36 @@ export interface MessageResponse {
   warning?: string
 }
 
+export type UpdateSource = 'patched' | 'official'
+
+export interface SystemBuildInfo {
+  version: string
+  source: string
+  upstream_base: string
+  revision: string
+  local: boolean
+  runtime_os: string
+  runtime_arch: string
+}
+
+export interface SystemUpdateRequest {
+  source: UpdateSource
+  target_tag: string
+  plan_token: string
+  confirm_official: boolean
+  confirm_migration: boolean
+}
+
 export interface SystemUpdateInfo {
+  source: UpdateSource
+  current_source: string
+  current_local: boolean
+  status: 'available' | 'latest' | 'migration' | 'unavailable'
+  target_tag: string
+  plan_token: string
+  plan_expires_at: string
+  requires_official_confirmation: boolean
+  requires_migration_confirmation: boolean
   current_version: string
   latest_version: string
   has_update: boolean

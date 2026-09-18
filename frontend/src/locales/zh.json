@@ -1,4 +1,32 @@
 {
+  "updates": {
+    "buildMetadata": "上游基线：{{base}} · 修订：{{revision}}",
+    "identityUnavailable": "无法核实当前运行构建身份，未开始安装。",
+    "lockedPlan": "此确认锁定上方显示的来源与精确目标版本。刷新发行信息不会改变此安装计划。",
+    "title": "系统更新",
+    "localBuild": "当前运行构建：{{version}} · {{source}}",
+    "patched": "补丁版（默认）",
+    "official": "官方上游版",
+    "patchedDescription": "保留补丁与双入口界面。此来源不可用时，不会自动切换到官方版。",
+    "officialDescription": "需明确确认迁移到上游官方版；补丁与双入口界面将丢失。",
+    "status": {
+      "available": "有可用更新",
+      "latest": "已是当前版本",
+      "migration": "可迁移来源或构建",
+      "unavailable": "此来源不可用，已禁用安装"
+    },
+    "refresh": "刷新此来源",
+    "expired": "安装计划已过期，请刷新所选来源并重新确认。",
+    "review": "审阅所选安装计划",
+    "verifying": "等待实际运行构建身份发生变化…",
+    "confirmTitle": "确认安装",
+    "officialConfirmTitle": "确认替换为官方上游版",
+    "backupWarning": "继续前请备份数据库。现有分组会保留在数据库中；替换二进制不会删除分组，但目标版本可能不提供补丁功能。",
+    "officialWarning": "我理解官方版会移除补丁与双入口界面。我已备份数据库，现有分组仍保留在数据库中。",
+    "migrationWarning": "我明确同意此次本地／开发构建或跨来源迁移，并已检查目标兼容性与数据库备份。",
+    "dockerWarning": "Docker：此操作仅替换当前运行的二进制。重建或重新创建容器会恢复为镜像内置版本，除非同步更新镜像。",
+    "confirmInstall": "确认并安装此精确版本"
+  },
   "qualityTest": {
     "studioTab": "检测工作台",
     "recordsTab": "检测记录",

@@ -1063,11 +1063,12 @@ export const api = {
     request<MessageResponse>(`/prompt-filter/newapi-bindings/${apiKeyId}`, { method: 'DELETE' }),
   getOpsOverview: (signal?: AbortSignal) => request<OpsOverviewResponse>('/ops/overview', { signal }),
   getRuntimeStatus: () => request<RuntimeStatusResponse>('/runtime-status'),
-  getSystemUpdate: () => request<SystemUpdateInfo>('/system/update', { timeoutMs: 20_000 }),
-  performSystemUpdate: () =>
-    // 后端下载上游二进制最长约 10 分钟,客户端给到 11 分钟兜底:既不会误伤慢下载,
-    // 又能保证请求最终有界返回,不会无限期卡在“更新中”。
-    request<SystemUpdateResult>('/system/update', { method: 'POST', timeoutMs: 11 * 60_000 }),
+  getSystemUpdate: (source: import('./types').UpdateSource = 'patched') =>
+    request<SystemUpdateInfo>(`/system/update?source=${source}`, { timeoutMs: 20_000 }),
+  getSystemBuild: () => request<import('./types').SystemBuildInfo>('/system/build', { timeoutMs: 5_000 }),
+  getLegacySystemVersion: () => request<{ current_version: string }>('/system/update', { timeoutMs: 5_000 }),
+  performSystemUpdate: (plan: import('./types').SystemUpdateRequest) =>
+    request<SystemUpdateResult>('/system/update', { method: 'POST', body: JSON.stringify(plan), timeoutMs: 11 * 60_000 }),
   getOpsErrorSummary: (params: {
     start: string
     end: string

@@ -6,6 +6,8 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"debug/elf"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -102,16 +104,16 @@ func TestValidateSystemUpdateURL(t *testing.T) {
 
 func TestSystemUpdaterCheckFindsMatchingAsset(t *testing.T) {
 	client := &fakeSystemReleaseClient{release: &systemGitHubRelease{
-		TagName: "v2.4.4",
+		TagName: "patched-v2.4.4",
 		HTMLURL: "https://github.com/james-6-23/codex2api/releases/tag/v2.4.4",
 		Assets: []systemGitHubAsset{
-			{Name: "codex2api_2.4.4_linux_arm64.tar.gz", BrowserDownloadURL: "https://github.com/arm64"},
-			{Name: "codex2api_2.4.4_linux_amd64.tar.gz", BrowserDownloadURL: "https://github.com/amd64"},
-			{Name: "SHA256SUMS.txt", BrowserDownloadURL: "https://github.com/sums"},
+			{Name: "codex2api_patched-v2.4.4_linux_arm64.tar.gz", BrowserDownloadURL: "https://github.com/arm64"},
+			{Name: "codex2api_patched-v2.4.4_linux_amd64.tar.gz", Size: 100, BrowserDownloadURL: "https://github.com/Egdon/codex2api-inject/releases/download/patched-v2.4.4/codex2api_patched-v2.4.4_linux_amd64.tar.gz"},
+			{Name: "SHA256SUMS.txt", BrowserDownloadURL: "https://github.com/Egdon/codex2api-inject/releases/download/patched-v2.4.4/SHA256SUMS.txt"},
 		},
 	}}
 	updater := &systemUpdater{
-		currentVersion: "v2.4.3",
+		currentVersion: "patched-v2.4.3",
 		client:         client,
 		goos:           "linux",
 		goarch:         "amd64",
@@ -127,18 +129,18 @@ func TestSystemUpdaterCheckFindsMatchingAsset(t *testing.T) {
 	if !info.Supported {
 		t.Fatalf("Supported = false: %s", info.UnsupportedReason)
 	}
-	if info.AssetName != "codex2api_2.4.4_linux_amd64.tar.gz" {
+	if info.AssetName != "codex2api_patched-v2.4.4_linux_amd64.tar.gz" {
 		t.Fatalf("AssetName = %q", info.AssetName)
 	}
 }
 
 func TestSystemUpdaterContainerWarning(t *testing.T) {
 	client := &fakeSystemReleaseClient{release: &systemGitHubRelease{
-		TagName: "v2.4.4",
-		Assets:  []systemGitHubAsset{{Name: "codex2api_2.4.4_linux_amd64.tar.gz"}},
+		TagName: "patched-v2.4.4",
+		Assets:  dualRelease("patched", "patched-v2.4.4").Assets,
 	}}
 	updater := &systemUpdater{
-		currentVersion:     "v2.4.3",
+		currentVersion:     "patched-v2.4.3",
 		client:             client,
 		goos:               "linux",
 		goarch:             "amd64",
@@ -166,10 +168,10 @@ func TestSystemUpdaterContainerWarning(t *testing.T) {
 	}
 }
 
-func TestSystemUpdaterRejectsDevBuild(t *testing.T) {
+func TestSystemUpdaterDevBuildRequiresMigration(t *testing.T) {
 	client := &fakeSystemReleaseClient{release: &systemGitHubRelease{
-		TagName: "v2.4.4",
-		Assets:  []systemGitHubAsset{{Name: "codex2api_2.4.4_linux_amd64.tar.gz"}},
+		TagName: "patched-v2.4.4",
+		Assets:  dualRelease("patched", "patched-v2.4.4").Assets,
 	}}
 	updater := &systemUpdater{
 		currentVersion: "dev",
@@ -182,15 +184,15 @@ func TestSystemUpdaterRejectsDevBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check() error: %v", err)
 	}
-	if info.Supported {
-		t.Fatal("Supported = true, want false")
+	if !info.Supported || !info.CurrentLocal || !info.RequiresMigrationConfirmation || info.HasUpdate {
+		t.Fatalf("local build must require explicit migration: %+v", info)
 	}
 }
 
-func TestSystemUpdaterRejectsNonSemverBuild(t *testing.T) {
+func TestSystemUpdaterNonSemverBuildRequiresMigration(t *testing.T) {
 	client := &fakeSystemReleaseClient{release: &systemGitHubRelease{
-		TagName: "v2.4.4",
-		Assets:  []systemGitHubAsset{{Name: "codex2api_2.4.4_linux_amd64.tar.gz"}},
+		TagName: "patched-v2.4.4",
+		Assets:  dualRelease("patched", "patched-v2.4.4").Assets,
 	}}
 	updater := &systemUpdater{
 		currentVersion: "main",
@@ -203,18 +205,18 @@ func TestSystemUpdaterRejectsNonSemverBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check() error: %v", err)
 	}
-	if info.Supported {
-		t.Fatal("Supported = true, want false")
+	if !info.Supported || !info.CurrentLocal || !info.RequiresMigrationConfirmation || info.HasUpdate {
+		t.Fatalf("local build must require explicit migration: %+v", info)
 	}
 }
 
 func TestSystemUpdaterCachesLatestRelease(t *testing.T) {
 	client := &fakeSystemReleaseClient{release: &systemGitHubRelease{
-		TagName: "v2.4.4",
-		Assets:  []systemGitHubAsset{{Name: "codex2api_2.4.4_linux_amd64.tar.gz"}},
+		TagName: "patched-v2.4.4",
+		Assets:  dualRelease("patched", "patched-v2.4.4").Assets,
 	}}
 	updater := &systemUpdater{
-		currentVersion: "v2.4.3",
+		currentVersion: "patched-v2.4.3",
 		client:         client,
 		goos:           "linux",
 		goarch:         "amd64",
@@ -234,7 +236,7 @@ func TestSystemUpdaterCachesLatestRelease(t *testing.T) {
 func TestGetSystemUpdateDegradesGracefullyWhenReleaseSourceIsUnavailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := &Handler{systemUpdate: &systemUpdater{
-		currentVersion: "v2.4.3",
+		currentVersion: "patched-v2.4.3",
 		client:         &fakeSystemReleaseClient{fetchErr: errors.New("release source unavailable")},
 		goos:           "linux",
 		goarch:         "amd64",
@@ -248,11 +250,11 @@ func TestGetSystemUpdateDegradesGracefullyWhenReleaseSourceIsUnavailable(t *test
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), `"latest_version":"2.4.3"`) {
-		t.Fatalf("fallback response should retain the current version: %s", recorder.Body.String())
+	if !strings.Contains(recorder.Body.String(), `"latest_version":""`) {
+		t.Fatalf("fallback must not report a fabricated latest version: %s", recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), `"warning"`) {
-		t.Fatalf("fallback response should expose a non-fatal warning: %s", recorder.Body.String())
+	if !strings.Contains(recorder.Body.String(), `"status":"unavailable"`) {
+		t.Fatalf("fallback should expose unavailable status: %s", recorder.Body.String())
 	}
 }
 
@@ -289,30 +291,36 @@ func TestHandlerSystemUpdaterConcurrentSingleInstance(t *testing.T) {
 }
 
 func TestSystemUpdaterPerformUpdateReplacesBinaryAndKeepsBackup(t *testing.T) {
+	t.Cleanup(func() {
+		systemUpdateGlobal.Lock()
+		systemUpdateGlobal.restartPending = false
+		systemUpdateGlobal.Unlock()
+	})
 	tempDir := t.TempDir()
 	currentPath := filepath.Join(tempDir, "codex2api")
 	if err := os.WriteFile(currentPath, []byte("old-binary"), 0755); err != nil {
 		t.Fatalf("write current binary: %v", err)
 	}
 
-	archive := buildSystemUpdateTarball(t, "codex2api", []byte("new-binary"))
+	archive := buildSystemUpdateTarball(t, "codex2api", systemTestELFHeader())
 	archiveHash := sha256.Sum256(archive)
-	archiveURL := "https://github.com/james-6-23/codex2api/releases/download/v2.4.4/codex2api_2.4.4_linux_amd64.tar.gz"
+	archiveURL := "https://github.com/Egdon/codex2api-inject/releases/download/patched-v2.4.4/codex2api_patched-v2.4.4_linux_amd64.tar.gz"
 	restarted := make(chan string, 1)
 	client := &fakeSystemReleaseClient{
 		release: &systemGitHubRelease{
-			TagName: "v2.4.4",
+			TagName: "patched-v2.4.4",
 			HTMLURL: "https://github.com/james-6-23/codex2api/releases/tag/v2.4.4",
 			Assets: []systemGitHubAsset{{
-				Name:               "codex2api_2.4.4_linux_amd64.tar.gz",
+				Name:               "codex2api_patched-v2.4.4_linux_amd64.tar.gz",
 				BrowserDownloadURL: archiveURL,
+				Size:               int64(len(archive)),
 				Digest:             "sha256:" + hex.EncodeToString(archiveHash[:]),
 			}},
 		},
 		files: map[string][]byte{archiveURL: archive},
 	}
 	updater := &systemUpdater{
-		currentVersion: "v2.4.3",
+		currentVersion: "patched-v2.4.3",
 		client:         client,
 		goos:           "linux",
 		goarch:         "amd64",
@@ -324,14 +332,18 @@ func TestSystemUpdaterPerformUpdateReplacesBinaryAndKeepsBackup(t *testing.T) {
 		restartDelay: 0,
 	}
 
-	result, err := updater.PerformUpdate(context.Background())
+	info, err := updater.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := updater.PerformPlannedUpdate(context.Background(), systemUpdateRequest{Source: "patched", TargetTag: info.TargetTag, PlanToken: info.PlanToken})
 	if err != nil {
 		t.Fatalf("PerformUpdate() error: %v", err)
 	}
 	if !result.Restarting || !result.NeedRestart {
 		t.Fatalf("restart flags = restarting:%v need:%v, want true/true", result.Restarting, result.NeedRestart)
 	}
-	if got := string(mustReadFile(t, currentPath)); got != "new-binary" {
+	if got := string(mustReadFile(t, currentPath)); got != string(systemTestELFHeader()) {
 		t.Fatalf("current binary = %q, want new-binary", got)
 	}
 	if got := string(mustReadFile(t, currentPath+".backup")); got != "old-binary" {
@@ -360,21 +372,22 @@ func TestSystemUpdaterPerformUpdateRejectsChecksumMismatch(t *testing.T) {
 		t.Fatalf("write current binary: %v", err)
 	}
 
-	archive := buildSystemUpdateTarball(t, "codex2api", []byte("new-binary"))
-	archiveURL := "https://github.com/james-6-23/codex2api/releases/download/v2.4.4/codex2api_2.4.4_linux_amd64.tar.gz"
+	archive := buildSystemUpdateTarball(t, "codex2api", systemTestELFHeader())
+	archiveURL := "https://github.com/Egdon/codex2api-inject/releases/download/patched-v2.4.4/codex2api_patched-v2.4.4_linux_amd64.tar.gz"
 	client := &fakeSystemReleaseClient{
 		release: &systemGitHubRelease{
-			TagName: "v2.4.4",
+			TagName: "patched-v2.4.4",
 			Assets: []systemGitHubAsset{{
-				Name:               "codex2api_2.4.4_linux_amd64.tar.gz",
+				Name:               "codex2api_patched-v2.4.4_linux_amd64.tar.gz",
 				BrowserDownloadURL: archiveURL,
+				Size:               int64(len(archive)),
 				Digest:             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 			}},
 		},
 		files: map[string][]byte{archiveURL: archive},
 	}
 	updater := &systemUpdater{
-		currentVersion: "v2.4.3",
+		currentVersion: "patched-v2.4.3",
 		client:         client,
 		goos:           "linux",
 		goarch:         "amd64",
@@ -382,8 +395,12 @@ func TestSystemUpdaterPerformUpdateRejectsChecksumMismatch(t *testing.T) {
 		restartProcess: func(string) error { t.Fatal("restart should not be called"); return nil },
 	}
 
-	_, err := updater.PerformUpdate(context.Background())
-	if err == nil {
+	info, err := updater.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = updater.PerformPlannedUpdate(context.Background(), systemUpdateRequest{Source: "patched", TargetTag: info.TargetTag, PlanToken: info.PlanToken})
+	if err == nil || !strings.Contains(err.Error(), "校验和不匹配") {
 		t.Fatal("PerformUpdate() expected checksum error")
 	}
 	if got := string(mustReadFile(t, currentPath)); got != "old-binary" {
@@ -433,4 +450,15 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return data
+}
+
+func systemTestELFHeader() []byte {
+	h := make([]byte, 64)
+	copy(h, "\x7fELF")
+	h[4] = byte(elf.ELFCLASS64)
+	h[5] = byte(elf.ELFDATA2LSB)
+	h[6] = 1
+	binary.LittleEndian.PutUint16(h[16:], uint16(elf.ET_EXEC))
+	binary.LittleEndian.PutUint16(h[18:], uint16(elf.EM_X86_64))
+	return h
 }
