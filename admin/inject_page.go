@@ -6,6 +6,8 @@ var injectPageHTML = []byte(`<!DOCTYPE html>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Turn State Inject</title>
+<link id="siteFavicon" rel="icon" href="/favicon.png"/>
+<link id="siteTouchIcon" rel="apple-touch-icon" href="/favicon.png"/>
 <style>
 :root {
   --bg: hsl(220 24% 96%); --fg: hsl(222 40% 11%); --card: #fff;
@@ -21,6 +23,8 @@ var injectPageHTML = []byte(`<!DOCTYPE html>
 body { margin: 0; font-family: Inter, "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--fg); font-size: 14px; }
 header.page { max-width: 1880px; margin: 0 auto; padding: 20px 24px 4px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
+.brand-title { display: flex; align-items: center; gap: 10px; }
+.site-logo { width: 34px; height: 34px; flex: none; object-fit: contain; border-radius: 9px; }
 h2 { font-size: 13px; margin: 0 0 12px; color: var(--muted); font-weight: 600; letter-spacing: .4px; text-transform: uppercase; }
 .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
 main { max-width: 1880px; margin: 0 auto; padding: 14px 24px 40px; display: grid; gap: 14px; }
@@ -162,7 +166,7 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
 </head>
 <body>
 <div id="login" class="card login">
-  <h1>Turn State Inject</h1>
+  <div class="brand-title"><img class="site-logo" src="/favicon.png" alt=""/><h1>Turn State Inject</h1></div>
   <p class="sub">使用管理后台同一把 Admin Key</p>
   <label>Admin Key <input id="key" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter'){event.preventDefault();saveKey();}"/></label>
   <button type="button" onclick="saveKey()" style="width:100%">进入</button>
@@ -171,7 +175,7 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
 <div id="app" style="display:none">
   <header class="page">
     <div>
-      <h1>Turn State Inject</h1>
+      <div class="brand-title"><img class="site-logo" src="/favicon.png" alt=""/><h1>Turn State Inject</h1></div>
       <div class="sub">探测走 ZooProxy 随机 sid；业务代理池不动。票据按本地 60 分钟规则计时。</div>
     </div>
     <div class="headline-actions">
@@ -206,6 +210,11 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
           <button type="button" class="ghost" onclick="recommendedConcurrency()">推荐：4 / 2</button>
           <label>冷却（分钟） <input id="cooldown_minutes" type="number" min="1" max="1440"/></label>
           <label>提前续期（分钟） <input id="skip_ttl_minutes" type="number" min="0" max="55"/></label>
+          <label>自动探测 · Pro 权重 <input id="plan_weight_pro" type="number" min="1" max="10" value="3" required/></label>
+          <label>Pro Lite 权重 <input id="plan_weight_prolite" type="number" min="1" max="10" value="2" required/></label>
+          <label>Plus 权重 <input id="plan_weight_plus" type="number" min="1" max="10" value="1" required/></label>
+          <button type="button" class="ghost" onclick="resetPlanWeights()">恢复 3 / 2 / 1</button>
+          <span class="sub">同等紧急程度内按账号加权；其他套餐权重 1。全设为 1 恢复同权。手动探测不加权，不改变业务请求调度或并发上限。</span>
           <label style="flex:1">模型列表 <input id="models" type="text" style="min-width:220px;width:100%"/></label>
         </div>
       </section>
@@ -270,6 +279,7 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
       <div class="pool-tools">
         <label>搜索账号 <input id="accountSearch" type="text" placeholder="邮箱或账号 ID" oninput="applyFilters()"/></label>
         <label>状态筛选 <select id="accountFilter" onchange="applyFilters()"><option value="all">全部</option><option value="missing">缺有效票据</option><option value="expiring">即将过期（≤5分钟）</option><option value="active">排队 / 探测中</option><option value="demoted">自动降级</option><option value="error">策略错误</option></select></label>
+        <label>套餐筛选 <select id="accountPlanFilter" onchange="applyFilters()"><option value="all">全部套餐</option><option value="pro">Pro</option><option value="prolite">Pro Lite</option><option value="plus">Plus</option><option value="other">其他 / 未知</option></select></label>
         <span id="filterCount" class="hint"></span>
         <span class="hint">下方批量操作包含全部已选账号（含筛选隐藏项）。</span>
       </div>
@@ -317,9 +327,15 @@ const COLUMNS_KEY = 'inject_account_columns';
 const selectedAccounts = new Set();
 const accountViews = new Map();
 let visibleAccountIDs = new Set();
+function harvestPlanClass(value) {
+  const plan=typeof value==='string'?value.trim().toLowerCase():'';
+  if(['prolite','pro_lite','pro-lite'].includes(plan))return 'prolite';
+  return plan==='pro'||plan==='plus'?plan:'other';
+}
 function applyFilters() {
   if(!data)return;
   const now=serverNow(), query=$('accountSearch').value.trim().toLowerCase(), mode=$('accountFilter').value;
+  const planFilter=$('accountPlanFilter').value;
   const activeIDs=new Set(activeJob(data.job)?(data.job.cells||[]).filter(c=>['queued','running','confirming','retrying'].includes(c.phase)).map(c=>c.account_id):[]);
   const visible=new Set();
   (data.accounts||[]).forEach(a=> {
@@ -327,7 +343,7 @@ function applyFilters() {
     const missing=(data.config?.models||[]).some(model=>!tickets.some(t=>t.model.toLowerCase()===model.toLowerCase()&&t.length===292&&t.token&&remaining(t,now)>0));
     const expiring=tickets.some(t=>t.length===292&&t.token&&remaining(t,now)>0&&remaining(t,now)<=300);
     const state=mode==='all'||mode==='missing'&&missing||mode==='expiring'&&expiring||mode==='active'&&activeIDs.has(a.id)||mode==='demoted'&&a.astra_policy?.demoted||mode==='error'&&!!a.astra_policy?.error;
-    const match=(!query||(a.email||'').toLowerCase().includes(query)||String(a.id).includes(query))&&state;
+    const match=(!query||(a.email||'').toLowerCase().includes(query)||String(a.id).includes(query))&&state&&(planFilter==='all'||harvestPlanClass(a.plan_type)===planFilter);
     if(match)visible.add(a.id);
     const view=accountViews.get(a.id);if(view)view.node.hidden=!match;
   });
@@ -514,7 +530,7 @@ function toggleBtn(el) {
 function updateInjectHint() {
   text($('inject_hint'),$('inject_enabled').dataset.on === '1' ? '有可用票据时自动附带 turn-state' : '关闭代理额外注入，不影响客户端自带状态');
 }
-const configInputs=['max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','models','zoo_host','zoo_user_prefix','zoo_password','zoo_region','zoo_region_mode','zoo_sticky_minutes','astra_failure_group_id','astra_recovery_group_id','astra_recheck_minutes'];
+const configInputs=['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','models','zoo_host','zoo_user_prefix','zoo_password','zoo_region','zoo_region_mode','zoo_sticky_minutes','astra_failure_group_id','astra_recovery_group_id','astra_recheck_minutes'];
 function fillCfg(c) {
   setSwitch('inject_enabled',c.inject_enabled); setSwitch('auto_harvest',c.auto_harvest);
   setSwitch('astra_policy_enabled',c.astra_policy_enabled);
@@ -525,12 +541,18 @@ function fillCfg(c) {
     if (c[id] != null) $(id).value=c[id];
   });
   $('zoo_region_mode').value=c.zoo_region_mode==='rotation'?'rotation':'fixed';
+  $('plan_weight_pro').value=c.plan_weight_pro||3;
+  $('plan_weight_prolite').value=c.plan_weight_prolite||2;
+  $('plan_weight_plus').value=c.plan_weight_plus||1;
   if (!c.account_concurrency) $('account_concurrency').value=1;
   $('models').value=(c.models||[]).join(', ');
   $('zoo_password').placeholder=c.zoo_password_set?'已保存，留空不改':'必填才能探测';
 }
 function markCfgDirty() { cfgEditRevision++; cfgDirty=true; $('saveBtn').classList.add('unsaved'); text($('cfgMsg'),'有未保存修改'); }
 function recommendedConcurrency() { $('concurrency').value=4; $('account_concurrency').value=2; markCfgDirty(); }
+function resetPlanWeights() {
+  $('plan_weight_pro').value=3; $('plan_weight_prolite').value=2; $('plan_weight_plus').value=1; markCfgDirty();
+}
 function saveCfg() {
   const body={
     inject_enabled:$('inject_enabled').dataset.on==='1', auto_harvest:$('auto_harvest').dataset.on==='1',
@@ -545,7 +567,7 @@ function saveCfg() {
     if(!fail || !recovery || fail===recovery) {notice('请选择两个不同的失败/恢复目标分组。',true);return;}
     if(!body.models.some(m=>m.toLowerCase()==='gpt-6-astra')) {notice('启用 Astra 策略需要在模型列表中包含 gpt-6-astra。',true);return;}
   }
-  for (const id of ['max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','zoo_sticky_minutes','astra_recheck_minutes']) {
+  for (const id of ['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','zoo_sticky_minutes','astra_recheck_minutes']) {
     if (!$(id).reportValidity()) return;
     body[id]=Number($(id).value);
   }
@@ -753,7 +775,34 @@ function render() {
   $('emptyTip').style.display=accounts.length?'none':'block';
   applyFilters();renderJob();tick();
 }
+function sanitizeSiteLogo(value) {
+  if(typeof value!=='string')return '';
+  const logo=value.trim(), lower=logo.toLowerCase();
+  if(lower.startsWith('data:image/') && lower.includes(';base64,'))return logo;
+  if(lower.startsWith('https://') || lower.startsWith('http://'))return logo;
+  if(logo.startsWith('/') && !logo.startsWith('//'))return logo;
+  return '';
+}
+function applySiteLogo(logo) {
+  for(const id of ['siteFavicon','siteTouchIcon'])$(id).href=logo;
+  document.querySelectorAll('.site-logo').forEach(img=> {
+    img.onerror=logo==='/favicon.png'?null:()=>applySiteLogo('/favicon.png');
+    img.src=logo;
+  });
+}
+async function loadSiteBranding() {
+  try {
+    const response=await fetch('/api/branding',{credentials:'same-origin',signal:AbortSignal.timeout(5000)});
+    if(!response.ok)return;
+    const branding=await response.json();
+    const name=typeof branding.site_name==='string'?branding.site_name.trim():'';
+    document.title=(name||'CodexProxy')+' · Turn State Inject';
+    const logo=sanitizeSiteLogo(branding.site_logo)||'/favicon.png';
+    applySiteLogo(logo);
+  } catch(e) { /* Keep the same built-in logo if branding cannot be loaded. */ }
+}
 if(window.matchMedia?.('(prefers-color-scheme: dark)').matches)document.documentElement.classList.add('dark');
+void loadSiteBranding();
 setColumns(columnsChoice);
 configInputs.forEach(id=>{$(id).addEventListener('input',markCfgDirty);$(id).addEventListener('change',markCfgDirty);});
 if(localStorage.getItem(KEY))load({fillCfg:true,initial:true});

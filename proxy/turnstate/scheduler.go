@@ -31,6 +31,26 @@ type harvestScheduler struct {
 	cursor          int
 	manualBurst     int
 	priority        func(*scheduledCell, time.Time) int
+	// weight only reads cached runtime plan data; nil preserves legacy RR fixtures.
+	weight         func(int64, Config) (string, int)
+	credits        map[int64]accountCredit
+	creditTier     int
+	weightConfig   [3]int
+	autoDispatches int
+	overdueCursor  int
+}
+
+type accountCredit struct {
+	plan   string
+	weight int
+	value  int
+}
+
+type harvestCandidate struct {
+	accountIndex int
+	cellIndex    int
+	tier         int
+	cell         *scheduledCell
 }
 
 type scheduledCell struct {
@@ -237,6 +257,7 @@ func (h *Harvester) submit(ctx context.Context, accountID int64, ids []int64, mo
 		child, cancel := context.WithCancel(parent)
 		s = &harvestScheduler{ctx: child, cancel: cancel, done: make(chan struct{}), wake: make(chan struct{}, 1), cells: make(map[string]*scheduledCell), byAccount: make(map[int64][]*scheduledCell), activeByAccount: make(map[int64]int)}
 		s.priority = h.cellPriority
+		s.weight = h.accountPlanWeight
 		kind := "auto"
 		if manual {
 			kind = "manual"
@@ -309,63 +330,180 @@ func retryDelay(attempt int) time.Duration {
 	return time.Second * time.Duration(1<<min(max(attempt-1, 0), 5))
 }
 
-// Round-robin account selection is independent of model count. Three manual
-// quanta at most can pass a runnable automatic cell; sleeping retries never
-// consume slots or prevent other accounts from progressing.
-func (s *harvestScheduler) pick(now time.Time, accountLimit int) *scheduledCell {
-	pickClass := func(manual bool) *scheduledCell {
-		selectedAccount, selectedCell, selectedTier := -1, -1, 0
-		for n := 0; n < len(s.accounts); n++ {
-			i := (s.cursor + n) % len(s.accounts)
-			id := s.accounts[i]
-			if s.activeByAccount[id] >= accountLimit {
+// Each class keeps the existing account/model RR tie order. Automatic work
+// adds smooth WRR only within the best effective urgency tier.
+func (s *harvestScheduler) candidates(now time.Time, accountLimit int, manual bool) ([]harvestCandidate, int) {
+	var candidates []harvestCandidate
+	bestTier := -1
+	for n := 0; n < len(s.accounts); n++ {
+		i := (s.cursor + n) % len(s.accounts)
+		id := s.accounts[i]
+		if s.activeByAccount[id] >= accountLimit {
+			continue
+		}
+		best, tier := -1, 0
+		for j, c := range s.byAccount[id] {
+			if c.terminal || c.active || c.manual != manual || c.ready.After(now) {
 				continue
 			}
-			best, tier := -1, 0
-			for j, c := range s.byAccount[id] {
-				if c.terminal || c.active || c.manual != manual || c.ready.After(now) {
-					continue
-				}
-				priority := 0
-				if s.priority != nil {
-					priority = s.priority(c, now)
-				}
-				if !c.waitingSince.IsZero() && now.Sub(c.waitingSince) >= 2*time.Minute {
-					priority = 0
-				}
-				if best < 0 || priority < tier || priority == tier && c.waitingSince.Before(s.byAccount[id][best].waitingSince) {
-					best, tier = j, priority
-				}
+			priority := 0
+			if s.priority != nil {
+				priority = s.priority(c, now)
 			}
-			if best >= 0 && (selectedAccount < 0 || tier < selectedTier) {
-				selectedAccount, selectedCell, selectedTier = i, best, tier
+			if cellOverdue(c, now) {
+				priority = 0
+			}
+			if best < 0 || priority < tier || priority == tier && c.waitingSince.Before(s.byAccount[id][best].waitingSince) {
+				best, tier = j, priority
 			}
 		}
-		if selectedAccount >= 0 {
-			list := s.byAccount[s.accounts[selectedAccount]]
-			c := list[selectedCell]
-			copy(list[selectedCell:], list[selectedCell+1:])
-			list[len(list)-1] = c
-			s.cursor = (selectedAccount + 1) % len(s.accounts)
-			return c
+		if best >= 0 {
+			candidates = append(candidates, harvestCandidate{i, best, tier, s.byAccount[id][best]})
+			if bestTier < 0 || tier < bestTier {
+				bestTier = tier
+			}
 		}
+	}
+	return candidates, bestTier
+}
+
+func cellOverdue(c *scheduledCell, now time.Time) bool {
+	return !c.waitingSince.IsZero() && now.Sub(c.waitingSince) >= 2*time.Minute
+}
+
+// Sync on every pick, including manual picks, without accruing credit. Only
+// runnable accounts in the selected tier retain state, bounded by queue size.
+func (s *harvestScheduler) syncCredits(candidates []harvestCandidate, tier int) {
+	cfg := GetConfig()
+	weights := [3]int{cfg.PlanWeightPro, cfg.PlanWeightProlite, cfg.PlanWeightPlus}
+	if s.credits == nil || s.creditTier != tier || s.weightConfig != weights {
+		s.credits = make(map[int64]accountCredit)
+	}
+	s.creditTier, s.weightConfig = tier, weights
+	eligible := make(map[int64]bool, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.tier != tier {
+			continue
+		}
+		id := candidate.cell.accountID
+		plan, weight := s.weight(id, cfg)
+		weight = clampInt(weight, 1, 10)
+		credit := s.credits[id]
+		if credit.plan != plan || credit.weight != weight {
+			credit = accountCredit{plan: plan, weight: weight}
+		}
+		s.credits[id] = credit
+		eligible[id] = true
+	}
+	for id := range s.credits {
+		if !eligible[id] {
+			delete(s.credits, id)
+		}
+	}
+	bound := 10 * len(s.credits)
+	for id, credit := range s.credits {
+		credit.value = clampInt(credit.value, -bound, bound)
+		s.credits[id] = credit
+	}
+}
+
+func (s *harvestScheduler) dispatchCandidate(candidate harvestCandidate) *scheduledCell {
+	list := s.byAccount[candidate.cell.accountID]
+	copy(list[candidate.cellIndex:], list[candidate.cellIndex+1:])
+	list[len(list)-1] = candidate.cell
+	s.cursor = (candidate.accountIndex + 1) % len(s.accounts)
+	return candidate.cell
+}
+
+func (s *harvestScheduler) pickAutomatic(candidates []harvestCandidate, tier int, now time.Time) *scheduledCell {
+	if len(candidates) == 0 {
 		return nil
 	}
+	selected := -1
+	if s.weight != nil {
+		// Every fourth automatic dispatch reserves an unweighted overdue RR
+		// quantum. Manual traffic cannot advance this counter or cursor.
+		s.autoDispatches = (s.autoDispatches + 1) % 4
+		if s.autoDispatches == 0 {
+			distance := len(s.accounts)
+			for i, candidate := range candidates {
+				if candidate.tier != tier || !cellOverdue(candidate.cell, now) {
+					continue
+				}
+				d := (candidate.accountIndex - s.overdueCursor + len(s.accounts)) % len(s.accounts)
+				if d < distance {
+					selected, distance = i, d
+				}
+			}
+			if selected >= 0 {
+				s.overdueCursor = (candidates[selected].accountIndex + 1) % len(s.accounts)
+				return s.dispatchCandidate(candidates[selected])
+			}
+		}
+		total, highest := 0, 0
+		bound := 10 * len(s.credits)
+		for i, candidate := range candidates {
+			if candidate.tier != tier {
+				continue
+			}
+			id := candidate.cell.accountID
+			credit := s.credits[id]
+			credit.value = clampInt(credit.value+credit.weight, -bound, bound)
+			s.credits[id] = credit
+			total += credit.weight
+			if selected < 0 || credit.value > highest {
+				selected, highest = i, credit.value
+			}
+		}
+		id := candidates[selected].cell.accountID
+		credit := s.credits[id]
+		credit.value = clampInt(credit.value-total, -bound, bound)
+		s.credits[id] = credit
+	} else {
+		for i, candidate := range candidates {
+			if candidate.tier == tier {
+				selected = i
+				break
+			}
+		}
+	}
+	return s.dispatchCandidate(candidates[selected])
+}
+
+// Three manual quanta at most can pass runnable automatic work. Nil-weight
+// fixtures retain the original RR picker, including its ageing behavior.
+func (s *harvestScheduler) pick(now time.Time, accountLimit int) *scheduledCell {
+	automatic, autoTier := s.candidates(now, accountLimit, false)
+	if s.weight != nil {
+		s.syncCredits(automatic, autoTier)
+	}
 	if s.manualBurst >= manualBurstLimit {
-		if c := pickClass(false); c != nil {
+		if c := s.pickAutomatic(automatic, autoTier, now); c != nil {
 			s.manualBurst = 0
 			return c
 		}
 	}
-	if c := pickClass(true); c != nil {
-		s.manualBurst = min(s.manualBurst+1, manualBurstLimit)
-		return c
+	manual, manualTier := s.candidates(now, accountLimit, true)
+	for _, candidate := range manual {
+		if candidate.tier == manualTier {
+			s.manualBurst = min(s.manualBurst+1, manualBurstLimit)
+			return s.dispatchCandidate(candidate)
+		}
 	}
-	if c := pickClass(false); c != nil {
+	if c := s.pickAutomatic(automatic, autoTier, now); c != nil {
 		s.manualBurst = 0
 		return c
 	}
 	return nil
+}
+
+// FindByID and GetPlanType read runtime caches, never policy/database state.
+func (h *Harvester) accountPlanWeight(id int64, cfg Config) (string, int) {
+	plan := ""
+	if acc := h.store.FindByID(id); acc != nil {
+		plan = normalizeHarvestPlan(acc.GetPlanType())
+	}
+	return plan, harvestPlanWeight(cfg, plan)
 }
 
 // Priority chooses the best tier across accounts within a manual/auto class;
@@ -425,6 +563,9 @@ func (h *Harvester) schedule(s *harvestScheduler) {
 				c.active = true
 				s.active++
 				s.activeByAccount[c.accountID]++
+				if s.activeByAccount[c.accountID] >= clampInt(cfg.AccountConcurrency, 1, 4) {
+					delete(s.credits, c.accountID)
+				}
 				cell := &h.job.Cells[c.index]
 				cell.Phase, cell.Status, cell.Active = "running", "探测", true
 				task := *c     // Workers must never read mutable admission/promotion fields.
@@ -488,19 +629,25 @@ func (h *Harvester) terminalLocked(s *harvestScheduler, c *scheduledCell, phase,
 	if len(list) == 0 {
 		delete(s.byAccount, c.accountID)
 		delete(s.activeByAccount, c.accountID)
+		delete(s.credits, c.accountID)
 		for i, id := range s.accounts {
 			if id == c.accountID {
 				s.accounts = append(s.accounts[:i], s.accounts[i+1:]...)
 				if s.cursor > i {
 					s.cursor--
 				}
+				if s.overdueCursor > i {
+					s.overdueCursor--
+				}
 				break
 			}
 		}
 		if len(s.accounts) > 0 {
 			s.cursor %= len(s.accounts)
+			s.overdueCursor %= len(s.accounts)
 		} else {
 			s.cursor = 0
+			s.overdueCursor = 0
 		}
 	} else {
 		s.byAccount[c.accountID] = list

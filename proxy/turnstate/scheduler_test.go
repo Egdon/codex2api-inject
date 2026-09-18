@@ -13,6 +13,250 @@ import (
 	"github.com/codex2api/database"
 )
 
+func weightedSchedulerFixture(now time.Time, weights ...int) *harvestScheduler {
+	s := &harvestScheduler{byAccount: map[int64][]*scheduledCell{}, activeByAccount: map[int64]int{}}
+	for i := range weights {
+		id := int64(i + 1)
+		s.accounts = append(s.accounts, id)
+		s.byAccount[id] = []*scheduledCell{{accountID: id, model: "m1", waitingSince: now}}
+	}
+	s.weight = func(id int64, _ Config) (string, int) { return "fixture", weights[id-1] }
+	return s
+}
+
+func TestSchedulerSmoothWeightsAndEqualWeightRR(t *testing.T) {
+	now := time.Unix(1000, 0)
+	for _, weights := range [][]int{{3, 2, 1}, {1, 1, 1}, {10, 10, 10}} {
+		s := weightedSchedulerFixture(now, weights...)
+		counts := [3]int{}
+		for i := 0; i < 600; i++ {
+			got := s.pick(now, 1)
+			counts[got.accountID-1]++
+			if weights[0] == weights[1] && got.accountID != int64(i%3+1) {
+				t.Fatalf("equal weights lost RR at %d: %d", i, got.accountID)
+			}
+		}
+		total := weights[0] + weights[1] + weights[2]
+		for i, count := range counts {
+			if want := 600 * weights[i] / total; count != want {
+				t.Fatalf("weights %v counts %v: account %d want %d", weights, counts, i+1, want)
+			}
+		}
+	}
+}
+
+func TestSchedulerWeightsIndependentOfModelCount(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := weightedSchedulerFixture(now, 3, 2, 1)
+	for i := 0; i < 20; i++ {
+		s.byAccount[3] = append(s.byAccount[3], &scheduledCell{accountID: 3, model: fmt.Sprintf("extra-%d", i), waitingSince: now})
+	}
+	counts := [3]int{}
+	for i := 0; i < 600; i++ {
+		counts[s.pick(now, 1).accountID-1]++
+	}
+	if counts != [3]int{300, 200, 100} {
+		t.Fatalf("model count changed shares: %v", counts)
+	}
+}
+
+func TestSchedulerWeightsRespectUrgencyAndModelOrder(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := weightedSchedulerFixture(now, 10, 1)
+	s.priority = func(c *scheduledCell, _ time.Time) int {
+		if c.accountID == 1 {
+			return 2
+		}
+		return 0
+	}
+	for i := 0; i < 12; i++ {
+		if got := s.pick(now, 1); got.accountID != 2 {
+			t.Fatal("weight bypassed urgency")
+		}
+	}
+	// Ageing still promotes a recovery cell to tier zero.
+	s.byAccount[1][0].waitingSince = now.Add(-2 * time.Minute)
+	if got := s.pick(now, 1); got.accountID != 1 {
+		t.Fatal("ageing did not promote recovery")
+	}
+	s = weightedSchedulerFixture(now, 3)
+	a := s.byAccount[1][0]
+	b := &scheduledCell{accountID: 1, model: "m2", waitingSince: now}
+	s.byAccount[1] = append(s.byAccount[1], b)
+	for i, want := range []*scheduledCell{a, b, a, b} {
+		if got := s.pick(now, 1); got != want {
+			t.Fatalf("model RR changed at %d", i)
+		}
+	}
+	b.waitingSince = now.Add(-time.Second)
+	if s.pick(now, 1) != b {
+		t.Fatal("oldest model not selected")
+	}
+}
+
+func TestSchedulerWeightsLeaveManualRRAndBurstUnchanged(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := weightedSchedulerFixture(now, 10, 1, 1)
+	s.byAccount[1][0].manual, s.byAccount[2][0].manual = true, true
+	for i, want := range []int64{1, 2, 1, 3, 1, 2, 1, 3} {
+		if got := s.pick(now, 1); got.accountID != want {
+			t.Fatalf("dispatch %d got %d want %d", i, got.accountID, want)
+		}
+	}
+	if s.autoDispatches != 2 {
+		t.Fatal("manual dispatch advanced overdue quota")
+	}
+	if len(s.credits) != 1 {
+		t.Fatal("manual accounts accrued credit")
+	}
+}
+
+func TestSchedulerOverdueQuotaUsesIndependentUnweightedRR(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := weightedSchedulerFixture(now, 10, 1, 1, 1)
+	for _, id := range []int64{2, 3, 4} {
+		s.byAccount[id][0].waitingSince = now.Add(-2 * time.Minute)
+	}
+	// Account four is overdue but sleeping, so it cannot take quota slots.
+	s.byAccount[4][0].ready = now.Add(time.Hour)
+	for i := 1; i <= 24; i++ {
+		got := s.pick(now, 1)
+		if got.accountID == 4 {
+			t.Fatal("sleeping overdue cell was dispatched")
+		}
+		if i%4 == 0 {
+			want := int64(2 + (i/4-1)%2)
+			if got.accountID != want {
+				t.Fatalf("overdue slot %d got %d want %d", i, got.accountID, want)
+			}
+		}
+	}
+	// Once runnable, the next RR quota goes to account four, regardless of weight.
+	s.byAccount[4][0].ready = time.Time{}
+	for i := 0; i < 3; i++ {
+		s.pick(now, 1)
+	}
+	before := make(map[int64]int)
+	for id, credit := range s.credits {
+		before[id] = credit.value
+	}
+	if got := s.pick(now, 1); got.accountID != 4 {
+		t.Fatal("newly runnable overdue account missed quota")
+	}
+	for id, credit := range s.credits {
+		if credit.value != before[id] {
+			t.Fatal("quota slot changed weighted credit")
+		}
+	}
+}
+
+func TestSchedulerCreditResetsAndBounds(t *testing.T) {
+	now := time.Unix(1000, 0)
+	for _, mode := range []string{"active", "limit", "backoff", "terminal", "manual", "removed", "tier"} {
+		t.Run(mode, func(t *testing.T) {
+			s := weightedSchedulerFixture(now, 3, 2, 1)
+			s.pick(now, 1)
+			c := s.byAccount[1][0]
+			switch mode {
+			case "active":
+				c.active = true
+			case "limit":
+				s.activeByAccount[1] = 1
+			case "backoff":
+				c.ready = now.Add(time.Second)
+			case "terminal":
+				c.terminal = true
+			case "manual":
+				c.manual = true
+			case "removed":
+				s.accounts = s.accounts[1:]
+				delete(s.byAccount, 1)
+			case "tier":
+				s.priority = func(c *scheduledCell, _ time.Time) int {
+					if c.accountID == 1 {
+						return 1
+					}
+					return 0
+				}
+			}
+			s.pick(now, 1)
+			if _, ok := s.credits[1]; ok {
+				t.Fatal("ineligible account retained credit")
+			}
+			if len(s.credits) > len(s.accounts) {
+				t.Fatal("credit state grew beyond accounts")
+			}
+		})
+	}
+	s := weightedSchedulerFixture(now, 3, 2, 1)
+	s.pick(now, 1)
+	s.priority = func(*scheduledCell, time.Time) int { return 1 }
+	candidates, tier := s.candidates(now, 1, false)
+	s.syncCredits(candidates, tier)
+	for _, credit := range s.credits {
+		if credit.value != 0 {
+			t.Fatal("tier change retained credit")
+		}
+	}
+	for id, credit := range s.credits {
+		credit.value = 1 << 30
+		s.credits[id] = credit
+	}
+	s.syncCredits(candidates, tier)
+	for _, credit := range s.credits {
+		if credit.value != 30 {
+			t.Fatal("credit not bounded")
+		}
+	}
+}
+
+func TestSchedulerCreditResetsOnPlanAndWeightConfigChanges(t *testing.T) {
+	now := time.Unix(1000, 0)
+	old := GetConfig()
+	t.Cleanup(func() { SetConfig(old) })
+	cfg := DefaultConfig()
+	SetConfig(cfg)
+	acc := testAccount(1)
+	acc.PlanType = "pro"
+	h := NewHarvester(nil, stubStore{accounts: []*auth.Account{acc}}, NewCache())
+	s := weightedSchedulerFixture(now, 3)
+	s.weight = h.accountPlanWeight
+	s.pick(now, 1)
+	credit := s.credits[1]
+	credit.value = 7
+	s.credits[1] = credit
+	acc.PlanType = "pro-lite"
+	candidates, tier := s.candidates(now, 1, false)
+	s.syncCredits(candidates, tier)
+	if got := s.credits[1]; got.plan != "prolite" || got.weight != 2 || got.value != 0 {
+		t.Fatalf("plan change retained stale credit: %+v", got)
+	}
+	credit = s.credits[1]
+	credit.value = 7
+	s.credits[1] = credit
+	// Even changing an unused plan's weight invalidates the weight config epoch.
+	cfg.PlanWeightPlus = 4
+	SetConfig(cfg)
+	s.syncCredits(candidates, tier)
+	if s.credits[1].value != 0 {
+		t.Fatal("config change retained credit")
+	}
+	// A plan identity change also resets credit when both weights are equal.
+	credit = s.credits[1]
+	credit.value = 7
+	s.credits[1] = credit
+	acc.PlanType = "enterprise"
+	s.syncCredits(candidates, tier)
+	credit = s.credits[1]
+	credit.value = 7
+	s.credits[1] = credit
+	acc.PlanType = "unknown"
+	s.syncCredits(candidates, tier)
+	if got := s.credits[1]; got.weight != 1 || got.value != 0 {
+		t.Fatal("equal-weight plan change retained credit")
+	}
+}
+
 func schedulerConfig(t *testing.T) Config {
 	t.Helper()
 	old := GetConfig()

@@ -9,7 +9,7 @@ const source = fs.readFileSync(new URL('./inject_page.go', import.meta.url), 'ut
 const script = source.split('<script>')[1].split('</script>')[0];
 const definitions = script.slice(0, script.indexOf("if(window.matchMedia"));
 function element() {
-  return {textContent:'',className:'',hidden:false,disabled:false,style:{},attributes:{},
+  return {value:'',dataset:{},textContent:'',className:'',hidden:false,disabled:false,style:{},attributes:{},
     classList:{toggle(){},add(){},remove(){}},
     setAttribute(key,value){this.attributes[key]=value;}};
 }
@@ -29,6 +29,61 @@ test('visible select-all preserves hidden selected accounts',()=> {
   f.run('toggleAllAccounts(false)');
   assert.equal(f.run('selectedAccounts.size'),1);
   assert.equal(f.run('selectedAccounts.has(3)'),true);
+});
+
+test('plan aliases stay distinct from Pro',()=> {
+  const f=fixture();
+  for(const alias of ['prolite',' PRO_LITE ','pro-lite']) {
+    f.context.alias=alias;
+    assert.equal(f.run('harvestPlanClass(alias)'),'prolite');
+  }
+  assert.equal(f.run("harvestPlanClass('Pro')"),'pro');
+  assert.equal(f.run("harvestPlanClass('plus')"),'plus');
+  assert.equal(f.run("harvestPlanClass('team')"),'other');
+});
+
+test('plan, state and search intersect without network or dirty configuration',()=> {
+  const f=fixture();
+  f.context.fetch=()=>{throw new Error('filter must not fetch');};
+  f.run(`
+    data={config:{models:['astra']},accounts:[
+      {id:1,email:'alpha@example.com',plan_type:'pro',tickets:[]},
+      {id:2,email:'alpha-lite@example.com',plan_type:'pro_lite',tickets:[]},
+      {id:3,email:'other@example.com',plan_type:'pro-lite',tickets:[]}
+    ]};
+    $('accountSearch').value='alpha'; $('accountFilter').value='missing';
+    $('accountPlanFilter').value='prolite'; selectedAccounts.add(1); applyFilters();
+  `);
+  assert.equal(f.run('JSON.stringify([...visibleAccountIDs])'),'[2]');
+  assert.equal(f.run('cfgDirty'),false);
+  f.run('toggleAllAccounts(true)');
+  assert.equal(f.run('JSON.stringify([...selectedAccounts])'),'[1,2]');
+  assert.equal(f.elements.get('selectionCount').textContent,'已选择 2 个（隐藏 1 个）');
+  f.run("$('accountSearch').value='not-found'; applyFilters()");
+  assert.equal(f.run('visibleAccountIDs.size'),0);
+  assert.equal(f.elements.get('selectAll').disabled,true);
+});
+
+test('default weight controls mark changes as unsaved',()=> {
+  const f=fixture(); f.run('resetPlanWeights()');
+  assert.equal(f.elements.get('plan_weight_pro').value,3);
+  assert.equal(f.elements.get('plan_weight_prolite').value,2);
+  assert.equal(f.elements.get('plan_weight_plus').value,1);
+  assert.equal(f.run('cfgDirty'),true);
+});
+
+test('branding rejects script URLs and broken images restore all icons',()=> {
+  const f=fixture();
+  assert.equal(f.run("sanitizeSiteLogo('javascript:alert(1)')"),'');
+  assert.equal(f.run("sanitizeSiteLogo('//example.com/icon.png')"),'');
+  assert.equal(f.run("sanitizeSiteLogo('/favicon.png')"),'/favicon.png');
+  const images=[{},{}]; f.context.document.querySelectorAll=()=>images;
+  f.run("applySiteLogo('https://example.com/logo.png')");
+  assert.equal(f.elements.get('siteFavicon').href,'https://example.com/logo.png');
+  images[0].onerror();
+  assert.equal(f.elements.get('siteFavicon').href,'/favicon.png');
+  assert.equal(f.elements.get('siteTouchIcon').href,'/favicon.png');
+  assert.ok(images.every(img=>img.src==='/favicon.png' && img.onerror===null));
 });
 
 test('remaining time uses server anchor, not stale remaining_sec',()=> {
