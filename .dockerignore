@@ -16,9 +16,52 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 
-# Env
-.env
-.env.local
+# Env (only reviewed examples may enter the context)
+**/.env
+**/.env.*
+**/*.env
+!**/.env.example
+!**/.env.example.*
+
+# Runtime state, secrets, local projects and diagnostics
+logs/
+data/
+artifacts/
+.deploy/
+.zcode/
+.agents/
+.claude/
+.pi/
+.gstack/
+.superpowers/
+grok-build-main/
+CLIProxyAPI/
+CLIProxyAPI-Pro/
+sub2api/
+new-api/
+CPA-Manager-Plus/
+grok2api/
+grokcli2api-go/
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite3
+**/*.sqlite-*
+**/*.sqlite3-*
+**/*.log
+**/*.pem
+**/*.key
+**/*.zcode-session
+**/*.bak
+**/*.bak.*
+**/credentials.json
+**/auth.json
+**/accounts.json
+**/accounts.csv
+codex2api_local
+server.log
+AGENTS.md
+CLAUDE.md
 
 # Local credentials and account-test fixtures must never enter a build context.
 .private-account-fixtures/
