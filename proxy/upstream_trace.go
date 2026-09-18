@@ -85,6 +85,12 @@ func attachUpstreamTrace(c *gin.Context, store *auth.Store) {
 	c.Header("X-Codex2API-Request-ID", a.requestID)
 }
 
+// AttachUpstreamTraceForAdmin exposes attachUpstreamTrace for admin probes
+// (test-connection / quality-test) that skip the /v1 auth middleware.
+func AttachUpstreamTraceForAdmin(c *gin.Context, store *auth.Store) {
+	attachUpstreamTrace(c, store)
+}
+
 func resetUpstreamRequestTrace(c *gin.Context) {
 	if c == nil || c.Request == nil {
 		return
@@ -169,6 +175,13 @@ func doTracedUpstreamRequest(client *http.Client, req *http.Request, account *au
 	resp, err := client.Do(req)
 	record(resp)
 	return resp, err
+}
+
+// PopulateUpstreamTrace copies the in-flight Codex turn-state audit onto a
+// usage log. Test-connection writes its own log and would otherwise leave
+// TURN-STATE blank even when ExecuteRequest injected a ticket.
+func PopulateUpstreamTrace(c *gin.Context, input *database.UsageLogInput) {
+	populateUpstreamTrace(c, input)
 }
 
 func populateUpstreamTrace(c *gin.Context, input *database.UsageLogInput) {

@@ -26,6 +26,7 @@ import (
 	"github.com/codex2api/internal/imagestore"
 	"github.com/codex2api/internal/version"
 	"github.com/codex2api/proxy"
+	"github.com/codex2api/proxy/turnstate"
 	"github.com/codex2api/proxy/wsrelay"
 	"github.com/codex2api/security"
 	"github.com/codex2api/security/promptfilter"
@@ -360,6 +361,14 @@ func main() {
 	defer store.Stop()
 	backgroundCtx, cancelBackground := context.WithCancel(context.Background())
 	adminHandler.StartQualityTests(backgroundCtx)
+	turnStateHarvest := turnstate.NewHarvester(db, store, turnstate.Global())
+	loadTurnCtx, loadTurnCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := turnStateHarvest.LoadFromDB(loadTurnCtx); err != nil {
+		log.Printf("加载 turn-state 配置失败: %v", err)
+	}
+	loadTurnCancel()
+	adminHandler.SetTurnStateHarvest(turnStateHarvest)
+	turnStateHarvest.Start(backgroundCtx)
 	defer cancelBackground()
 	if !proxy.StartResponseCacheSettingsPoller(backgroundCtx, db) {
 		log.Fatalf("启动响应缓存设置同步失败")

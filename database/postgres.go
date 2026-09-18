@@ -487,6 +487,9 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	if err := db.ensureProxyRiskScoringTables(ctx); err != nil {
 		return nil, fmt.Errorf("创建代理风险评分表失败: %w", err)
 	}
+	if err := db.ensureTurnStateSchema(ctx); err != nil {
+		return nil, fmt.Errorf("初始化 turn-state 票表失败: %w", err)
+	}
 
 	if err := db.ensureAPIKeyAuthCacheSchema(ctx); err != nil {
 		backgroundTaskCancel()
@@ -1303,8 +1306,9 @@ func (db *DB) migrate(ctx context.Context) error {
 				invite_guide_config TEXT DEFAULT '{}',
 				visible_channels_config TEXT DEFAULT '{}',
 				channel_test_config TEXT DEFAULT '{}',
-				antigravity_config TEXT DEFAULT '{}',
-				max_concurrency    INT DEFAULT 2,
+					antigravity_config TEXT DEFAULT '{}',
+					turn_state_config TEXT DEFAULT '{}',
+					max_concurrency    INT DEFAULT 2,
 			global_rpm         INT DEFAULT 0,
 			test_model         VARCHAR(100) DEFAULT 'gpt-5.5',
 			test_content       TEXT DEFAULT 'hi',
@@ -1373,7 +1377,8 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS invite_guide_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS visible_channels_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS channel_test_config TEXT DEFAULT '{}';
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS antigravity_config TEXT DEFAULT '{}';
+		ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS antigravity_config TEXT DEFAULT '{}';
+		ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS turn_state_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS test_content TEXT DEFAULT 'hi';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS redis_pool_size INT DEFAULT 30;
@@ -7206,6 +7211,9 @@ func (db *DB) UpdateAccountSchedulerMetadata(ctx context.Context, id int64, scor
 			}
 		}
 		if groupIDs.Set {
+			if err := db.markManualPolicyGroups(ctx, tx, []int64{id}); err != nil {
+				return err
+			}
 			ph := "$1"
 			insertQ := "INSERT INTO account_group_members (account_id, group_id) VALUES ($1, $2)"
 			if db.isSQLite() {
@@ -7412,6 +7420,9 @@ func (db *DB) batchUpdateAccountCredentials(ctx context.Context, tx *sql.Tx, cur
 }
 
 func (db *DB) batchReplaceAccountGroups(ctx context.Context, tx *sql.Tx, accountIDs []int64, groupIDs []int64) error {
+	if err := db.markManualPolicyGroups(ctx, tx, accountIDs); err != nil {
+		return err
+	}
 	placeholders := dbPlaceholders(db.isSQLite(), 1, len(accountIDs))
 	args := argsFromInt64s(accountIDs)
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM account_group_members WHERE account_id IN (%s)", strings.Join(placeholders, ",")), args...); err != nil {

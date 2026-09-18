@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/proxy/turnstate"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -69,11 +70,19 @@ func CodexTurnStateInjectionFromContext(ctx context.Context) string {
 // prepareCodexTurnStateInjection 决定并落定注入：返回携带决策的 ctx、（可能克隆的）
 // 下游头与（WS 时改写了帧体的）请求体。未配置或名单未命中时全部原样返回。
 func prepareCodexTurnStateInjection(ctx context.Context, account *auth.Account, requestBody []byte, headers http.Header, websocket bool) (context.Context, []byte, http.Header) {
-	if account == nil {
+	if account == nil || !turnstate.GetConfig().InjectEnabled {
 		return ctx, requestBody, headers
 	}
 	upstreamModel := strings.TrimSpace(gjson.GetBytes(requestBody, "model").String())
-	injected := account.CodexTurnStateInjection(codexClientModelFromContext(ctx), upstreamModel)
+	clientModel := codexClientModelFromContext(ctx)
+	injected := ""
+	if token := turnstate.Global().LookupInjectibleNow(account.ID(), firstNonEmptyModel(upstreamModel, clientModel)); token != "" {
+		injected = token
+	} else if token := turnstate.Global().LookupInjectibleNow(account.ID(), clientModel); token != "" {
+		injected = token
+	} else if token := turnstate.Global().LookupInjectibleNow(account.ID(), upstreamModel); token != "" {
+		injected = token
+	}
 	if injected == "" {
 		return ctx, requestBody, headers
 	}
@@ -181,4 +190,13 @@ func ObserveCodexTurnStateFrame(ctx context.Context, payload []byte) {
 	if state := codexTurnStateFromFrame(payload); state != "" {
 		noteUpstreamTurnState(ctx, state)
 	}
+}
+
+func firstNonEmptyModel(models ...string) string {
+	for _, model := range models {
+		if model = strings.TrimSpace(model); model != "" {
+			return model
+		}
+	}
+	return ""
 }
