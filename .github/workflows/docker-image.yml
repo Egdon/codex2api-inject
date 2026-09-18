@@ -1,69 +1,134 @@
-name: Build Docker Image
+name: Publish patched Docker image
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'patched-v*'
   workflow_dispatch:
     inputs:
       build_version:
-        description: 'Version label shown in the admin UI, e.g. 2.0.6'
+        description: 'Optional display version (letters, numbers, dots, underscores, hyphens only)'
         required: false
         type: string
 
 permissions:
   contents: read
-  packages: write
 
+# Serialize the entire publication, including retries and different tags.
 concurrency:
-  group: docker-image-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  group: patched-ghcr-publish
+  cancel-in-progress: false
 
 jobs:
-  docker:
+  candidate:
+    if: github.repository != 'james-6-23/codex2api' && github.event.repository.default_branch == 'main' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/patched-v')))
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v5
         with:
-          registry: ${{ env.REGISTRY }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve and validate exact candidate
+        id: resolve
+        env:
+          BUILD_VERSION: ${{ inputs.build_version }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse 'HEAD^{commit}')
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          git merge-base --is-ancestor "$sha" refs/remotes/origin/main
+          if [[ "$EVENT_REF" == refs/tags/* ]]; then
+            [[ "$EVENT_REF" =~ ^refs/tags/patched-v[0-9][A-Za-z0-9._-]*$ ]]
+          else
+            [[ "$EVENT_REF" == refs/heads/main ]]
+          fi
+          version=${BUILD_VERSION:-${EVENT_REF##*/}}
+          [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+          printf 'sha=%s\nversion=%s\n' "$sha" "$version" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: candidate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pr-check.yml
+    with:
+      candidate_sha: ${{ needs.candidate.outputs.sha }}
+
+  publish:
+    needs: [candidate, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Configure required reviewers and restrict deployment refs before enabling.
+    environment: patched-publish
+    permissions:
+      contents: read
+      packages: write
+    env:
+      CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
+      BUILD_VERSION: ${{ needs.candidate.outputs.version }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Revalidate candidate after environment approval
+        run: |
+          set -euo pipefail
+          [[ $(git rev-parse HEAD) == "$CANDIDATE_SHA" ]]
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          git merge-base --is-ancestor "$CANDIDATE_SHA" refs/remotes/origin/main
+          printf 'IMAGE=ghcr.io/%s\n' "${REPOSITORY,,}" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ inputs.build_version || github.ref_name }},enable=${{ inputs.build_version != '' || startsWith(github.ref, 'refs/tags/v') }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.build_version || github.ref_name }},enable=${{ inputs.build_version != '' || startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest
-
-      - name: Build and push Docker image
+      - name: Reuse immutable full-SHA image if already published
+        id: immutable
+        run: |
+          set -euo pipefail
+          if digest=$(docker buildx imagetools inspect "$IMAGE:sha-$CANDIDATE_SHA" --format '{{.Manifest.Digest}}' 2>"$RUNNER_TEMP/inspect-error"); then
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          elif grep -Eqi 'manifest unknown|not found' "$RUNNER_TEMP/inspect-error"; then
+            printf 'Image does not exist yet; building once.\n'
+          else
+            printf 'Registry inspection failed; refusing to overwrite an unknown tag.\n' >&2
+            exit 1
+          fi
+      - name: Build and push immutable image
+        id: build
+        if: steps.immutable.outputs.digest == ''
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.IMAGE }}:sha-${{ needs.candidate.outputs.sha }}
           build-args: |
-            BUILD_VERSION=${{ inputs.build_version || github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            BUILD_VERSION=${{ needs.candidate.outputs.version }}
           provenance: false
+      - name: Promote the same digest only while candidate is main HEAD
+        env:
+          DIGEST: ${{ steps.immutable.outputs.digest || steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          # Last remote operation before promotion: an older queued run cannot
+          # replace stable after main has advanced. No rebuild and no latest tag.
+          main_sha=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+          if [[ "$main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'Main moved; immutable image kept, patched-stable not changed.\n'
+            exit 0
+          fi
+          docker buildx imagetools create --tag "$IMAGE:patched-stable" "$IMAGE@$DIGEST"
+          promoted=$(docker buildx imagetools inspect "$IMAGE:patched-stable" --format '{{.Manifest.Digest}}')
+          [[ "$promoted" == "$DIGEST" ]]
