@@ -226,11 +226,13 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
         <div class="switchline full-width"><button id="astra_policy_enabled" class="switch" type="button" aria-label="自动分组策略开关" onclick="toggleBtn(this)"></button><div>自动迁组<div class="hint">默认关闭，只以 Astra 判定</div></div></div>
         <label>失败迁入分组 <select id="astra_failure_group_id"><option value="0">请选择 Codex 分组</option></select></label>
         <label>恢复迁入分组 <select id="astra_recovery_group_id"><option value="0">请选择 Codex 分组</option></select></label>
+        <label>普通未命中占比阈值（%） <input id="astra_miss_threshold_percent" type="number" min="1" max="100" step="1" value="80" required/></label>
         <label>降级复查间隔（分钟） <input id="astra_recheck_minutes" type="number" min="1" max="1440" value="30" required/></label>
         <button type="button" class="ghost" onclick="loadGroups(true)">刷新分组列表</button>
       </div>
       <p id="groupLoadMsg" class="sub" role="status"></p>
-      <p class="sub">Astra 连续 2 个完整 batch 正常未命中 292 才迁组；网络、401、限流、取消不计。迁组后 Astra 获得新 292 且确认成功才恢复。</p>
+      <p class="sub">仅耗尽全部尝试的完整 Astra batch，正常有效且非 292 的响应占尝试上限比例达到阈值（默认 ≥80%），才符合失败条件；连续 2 个符合条件的 batch 才迁组。网络异常、限流不算普通未命中；取消或 401 的 batch 不计失败。迁组后 Astra 获得新 292 且确认成功才恢复。</p>
+      <p class="sub">阈值在 batch 开始时固定，修改仅影响新 batch。下方仅展示最近一次已记录批次的计数与判定（取消可能不更新记录）；实际连续失败次数以策略状态为准。</p>
       <p class="sub">迁组会替换账号全部分组。关闭策略不自动搬回账号；人工改组后不强行恢复。自动复查需同时开启自动探测并参与探测。</p>
     </section>
     <section class="card" aria-label="ZooProxy 出口">
@@ -530,12 +532,13 @@ function toggleBtn(el) {
 function updateInjectHint() {
   text($('inject_hint'),$('inject_enabled').dataset.on === '1' ? '有可用票据时自动附带 turn-state' : '关闭代理额外注入，不影响客户端自带状态');
 }
-const configInputs=['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','models','zoo_host','zoo_user_prefix','zoo_password','zoo_region','zoo_region_mode','zoo_sticky_minutes','astra_failure_group_id','astra_recovery_group_id','astra_recheck_minutes'];
+const configInputs=['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','models','zoo_host','zoo_user_prefix','zoo_password','zoo_region','zoo_region_mode','zoo_sticky_minutes','astra_failure_group_id','astra_recovery_group_id','astra_recheck_minutes','astra_miss_threshold_percent'];
 function fillCfg(c) {
   setSwitch('inject_enabled',c.inject_enabled); setSwitch('auto_harvest',c.auto_harvest);
   setSwitch('astra_policy_enabled',c.astra_policy_enabled);
   for(const id of ['astra_failure_group_id','astra_recovery_group_id'])setGroupOptions(id,c[id]);
   $('astra_recheck_minutes').value=c.astra_recheck_minutes||30;
+  $('astra_miss_threshold_percent').value=c.astra_miss_threshold_percent??80;
   updateInjectHint();
   configInputs.filter(id=>!['models','zoo_password'].includes(id)).forEach(id=> {
     if (c[id] != null) $(id).value=c[id];
@@ -567,7 +570,7 @@ function saveCfg() {
     if(!fail || !recovery || fail===recovery) {notice('请选择两个不同的失败/恢复目标分组。',true);return;}
     if(!body.models.some(m=>m.toLowerCase()==='gpt-6-astra')) {notice('启用 Astra 策略需要在模型列表中包含 gpt-6-astra。',true);return;}
   }
-  for (const id of ['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','zoo_sticky_minutes','astra_recheck_minutes']) {
+  for (const id of ['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','zoo_sticky_minutes','astra_recheck_minutes','astra_miss_threshold_percent']) {
     if (!$(id).reportValidity()) return;
     body[id]=Number($(id).value);
   }
@@ -646,20 +649,31 @@ function makeCard(a) {
 }
 function renderPolicy(view) {
   const p=view.account.astra_policy;
-  view.policy.hidden=!p || (!p.enabled && !p.demoted && !p.consecutive_failures && !p.error && !p.last_outcome);
+  view.policy.hidden=!p || (!p.enabled && !p.demoted && !p.consecutive_failures && !p.error && !p.last_outcome && !p.latest_batch);
   if(!p)return;
-  const outcomes={ordinary_miss:'完整 batch 未命中292',new_292:'获得新292',inconclusive:'本批未计失败（异常或中断）',miss_batch:'正常未命中 batch',confirmed_292:'292 确认成功',success:'获得292',demoted:'已自动迁组',recovered:'已自动恢复',manual_override:'人工调整分组'};
+  const outcomes={ordinary_miss:'本批符合普通未命中失败条件',new_292:'获得新292',inconclusive:'本批未计失败（异常或中断）',miss_batch:'正常未命中 batch',confirmed_292:'292 确认成功',success:'获得292',demoted:'已自动迁组',recovered:'已自动恢复',manual_override:'人工调整分组'};
   const parts=[p.enabled?'Astra 策略开启':'Astra 策略关闭', '连续失败 '+(p.consecutive_failures||0)+'/2'];
+  if(p.error) {
+    const errors={manual_membership_changed:'人工分组已变更，自动恢复归属已解除；本批未计入连续失败',policy_state_unavailable:'策略状态暂不可用'};
+    parts.push(errors[p.error] || '策略错误：'+p.error);
+  }
   if(p.demoted) {
     const group=availableGroups.find(g=>g.id===p.failure_group_id);
     parts.push('已迁入 '+(group?.name||'#'+p.failure_group_id));
     if(p.next_recovery_at)parts.push('下次复查 '+new Date(p.next_recovery_at*1000).toLocaleString());
   }
-  if(p.last_outcome)parts.push(outcomes[p.last_outcome]||p.last_outcome);
-  if(p.error) {
-    const errors={manual_membership_changed:'人工分组已变更，自动恢复归属已解除',policy_state_unavailable:'策略状态暂不可用'};
-    parts.push(errors[p.error] || '策略错误：'+p.error);
+  const batch=p.latest_batch;
+  if(batch) {
+    const reasons={qualified_miss:'符合普通未命中失败条件',insufficient_misses:'普通未命中占比不足，不计失败',success:'获得292，不计失败',confirmation_warning:'292 确认警告，不计失败',interrupted:'异常或中断，不计失败',not_exhausted:'未耗尽全部尝试，不计失败'};
+    parts.push('最近一批：尝试 '+(batch.attempts??'—')+'/'+(batch.max_attempts??'—')+'，普通未命中 '+(batch.ordinary_misses??'—')+'，批次阈值 '+(batch.threshold_percent??'—')+'%，'+(batch.exhausted?'已耗尽':'未耗尽'));
+    parts.push('批次判定：'+(reasons[batch.reason]||'未知'));
+    if(batch.reason==='qualified_miss')parts.push('符合条件不代表已计数，实际连续失败以上方状态为准');
+  } else if(p.last_outcome) {
+    parts.push('最近一批计数不可用（旧版状态），是否符合当前阈值未知');
   }
+  // A membership guard rejection takes precedence over the stored outcome.
+  // Batch evidence describes qualification, never whether the streak advanced.
+  if(p.last_outcome && !p.error && (batch || !['ordinary_miss','miss_batch'].includes(p.last_outcome)))parts.push(outcomes[p.last_outcome]||p.last_outcome);
   text(view.policy,parts.join(' · '));view.policy.title=parts.join('\n');
 }
 function makeCell(id,model) {
