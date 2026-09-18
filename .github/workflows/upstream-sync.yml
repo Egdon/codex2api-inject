@@ -2,7 +2,8 @@ name: Sync stable upstream release
 
 on:
   schedule:
-    - cron: '23 6 * * *'
+    # 03:23 Asia/Shanghai (UTC+8), on the following local calendar day.
+    - cron: '23 19 * * *'
   workflow_dispatch:
 
 permissions:

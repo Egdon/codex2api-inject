@@ -50,7 +50,8 @@ For separately approved local Go work, the Go executable is under
 
 ## Upstream release sync
 
-`upstream-sync.yml` runs daily at 06:23 UTC or manually on main. The script uses
+`upstream-sync.yml` runs daily at 19:23 UTC (03:23 the following day in
+Asia/Shanghai, UTC+8), or manually on main. GitHub schedules may be delayed. The script uses
 fixed upstream/base values, validates release tag syntax, fetches full history,
 and performs `git merge --no-ff` with a common-ancestor requirement. It never
 allows unrelated histories, rebases main, force-pushes, or resets patches.
