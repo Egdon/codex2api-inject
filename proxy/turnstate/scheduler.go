@@ -54,28 +54,29 @@ type harvestCandidate struct {
 }
 
 type scheduledCell struct {
-	batchSequence  int64
-	batchID        string
-	policyEpoch    int64
-	expectedGroups database.AstraPolicyExpectation
-	ordinaryOnly   bool
-	key            string
-	accountID      int64
-	model          string
-	index          int
-	manual         bool
-	force          bool
-	active         bool
-	terminal       bool
-	attempt        int
-	max            int
-	ready          time.Time
-	generation     *cellGeneration
-	version        uint64
-	breakerLease   uint64
-	waitingSince   time.Time
-	policyRecovery bool
-	regionPlan     [4]string
+	batchSequence        int64
+	batchID              string
+	policyEpoch          int64
+	expectedGroups       database.AstraPolicyExpectation
+	ordinaryMisses       int
+	missThresholdPercent int
+	key                  string
+	accountID            int64
+	model                string
+	index                int
+	manual               bool
+	force                bool
+	active               bool
+	terminal             bool
+	attempt              int
+	max                  int
+	ready                time.Time
+	generation           *cellGeneration
+	version              uint64
+	breakerLease         uint64
+	waitingSince         time.Time
+	policyRecovery       bool
+	regionPlan           [4]string
 }
 
 func cloneJob(job *Job) *Job {
@@ -695,7 +696,9 @@ func (h *Harvester) work(s *harvestScheduler, c *scheduledCell, task scheduledCe
 	if s.ctx.Err() != nil {
 		result = cancelledResult()
 	}
-	c.ordinaryOnly = c.ordinaryOnly && result.ordinaryMiss
+	if result.ordinaryMiss {
+		c.ordinaryMisses++
+	}
 	if result.phase == "retrying" {
 		now := time.Now()
 		c.ready = now.Add(result.delay(c.attempt))

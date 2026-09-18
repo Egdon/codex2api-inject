@@ -10,30 +10,31 @@ import (
 var DefaultModels = []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 
 type Config struct {
-	AstraPolicyEnabled   bool  `json:"astra_policy_enabled"`
-	AstraFailureGroupID  int64 `json:"astra_failure_group_id"`
-	AstraRecoveryGroupID int64 `json:"astra_recovery_group_id"`
-	AstraRecheckMinutes  int   `json:"astra_recheck_minutes"`
-	astraPolicyEpoch     int64
-	InjectEnabled        bool     `json:"inject_enabled"`
-	AutoHarvest          bool     `json:"auto_harvest"`
-	IntervalMinutes      int      `json:"interval_minutes"`
-	MaxAttempts          int      `json:"max_attempts"`
-	Models               []string `json:"models"`
-	Concurrency          int      `json:"concurrency"`
-	AccountConcurrency   int      `json:"account_concurrency"`
-	PlanWeightPro        int      `json:"plan_weight_pro"`
-	PlanWeightProlite    int      `json:"plan_weight_prolite"`
-	PlanWeightPlus       int      `json:"plan_weight_plus"`
-	CooldownMinutes      int      `json:"cooldown_minutes"`
-	SkipTTLMinutes       int      `json:"skip_ttl_minutes"`
-	ZooHost              string   `json:"zoo_host"`
-	ZooUserPrefix        string   `json:"zoo_user_prefix"`
-	ZooPassword          string   `json:"zoo_password,omitempty"`
-	ZooRegion            string   `json:"zoo_region"`
-	ZooRegionMode        string   `json:"zoo_region_mode"`
-	ZooStickyMinutes     int      `json:"zoo_sticky_minutes"`
-	DisabledAccountIDs   []int64  `json:"disabled_account_ids"`
+	AstraPolicyEnabled        bool  `json:"astra_policy_enabled"`
+	AstraFailureGroupID       int64 `json:"astra_failure_group_id"`
+	AstraRecoveryGroupID      int64 `json:"astra_recovery_group_id"`
+	AstraRecheckMinutes       int   `json:"astra_recheck_minutes"`
+	AstraMissThresholdPercent int   `json:"astra_miss_threshold_percent"`
+	astraPolicyEpoch          int64
+	InjectEnabled             bool     `json:"inject_enabled"`
+	AutoHarvest               bool     `json:"auto_harvest"`
+	IntervalMinutes           int      `json:"interval_minutes"`
+	MaxAttempts               int      `json:"max_attempts"`
+	Models                    []string `json:"models"`
+	Concurrency               int      `json:"concurrency"`
+	AccountConcurrency        int      `json:"account_concurrency"`
+	PlanWeightPro             int      `json:"plan_weight_pro"`
+	PlanWeightProlite         int      `json:"plan_weight_prolite"`
+	PlanWeightPlus            int      `json:"plan_weight_plus"`
+	CooldownMinutes           int      `json:"cooldown_minutes"`
+	SkipTTLMinutes            int      `json:"skip_ttl_minutes"`
+	ZooHost                   string   `json:"zoo_host"`
+	ZooUserPrefix             string   `json:"zoo_user_prefix"`
+	ZooPassword               string   `json:"zoo_password,omitempty"`
+	ZooRegion                 string   `json:"zoo_region"`
+	ZooRegionMode             string   `json:"zoo_region_mode"`
+	ZooStickyMinutes          int      `json:"zoo_sticky_minutes"`
+	DisabledAccountIDs        []int64  `json:"disabled_account_ids"`
 }
 
 type PublicConfig struct {
@@ -49,21 +50,22 @@ func init() {
 
 func DefaultConfig() Config {
 	return Config{
-		AstraRecheckMinutes: 30,
-		IntervalMinutes:     50,
-		MaxAttempts:         6,
-		Models:              append([]string(nil), DefaultModels...),
-		Concurrency:         2,
-		AccountConcurrency:  1,
-		PlanWeightPro:       3,
-		PlanWeightProlite:   2,
-		PlanWeightPlus:      1,
-		CooldownMinutes:     15,
-		SkipTTLMinutes:      15,
-		ZooHost:             "us-eu.zooproxy.com:5000",
-		ZooRegion:           "DE",
-		ZooRegionMode:       regionModeFixed,
-		ZooStickyMinutes:    120,
+		AstraMissThresholdPercent: 80,
+		AstraRecheckMinutes:       30,
+		IntervalMinutes:           50,
+		MaxAttempts:               6,
+		Models:                    append([]string(nil), DefaultModels...),
+		Concurrency:               2,
+		AccountConcurrency:        1,
+		PlanWeightPro:             3,
+		PlanWeightProlite:         2,
+		PlanWeightPlus:            1,
+		CooldownMinutes:           15,
+		SkipTTLMinutes:            15,
+		ZooHost:                   "us-eu.zooproxy.com:5000",
+		ZooRegion:                 "DE",
+		ZooRegionMode:             regionModeFixed,
+		ZooStickyMinutes:          120,
 	}
 }
 
@@ -81,6 +83,9 @@ func SetConfig(cfg Config) {
 func NormalizeConfig(cfg Config) Config {
 	out := DefaultConfig()
 	out.AstraPolicyEnabled = cfg.AstraPolicyEnabled
+	if cfg.AstraMissThresholdPercent != 0 {
+		out.AstraMissThresholdPercent = clampInt(cfg.AstraMissThresholdPercent, 1, 100)
+	}
 	out.AstraFailureGroupID, out.AstraRecoveryGroupID = cfg.AstraFailureGroupID, cfg.AstraRecoveryGroupID
 	out.astraPolicyEpoch = cfg.astraPolicyEpoch
 	if cfg.AstraRecheckMinutes > 0 {

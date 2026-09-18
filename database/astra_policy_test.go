@@ -3,9 +3,33 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestAstraPolicyLegacyEvidenceJSON(t *testing.T) {
+	var s AstraPolicyState
+	if err := decodeAstraState(`{"consecutive_failures":1,"last_outcome":"ordinary_miss","epoch":2}`, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.LatestBatch != nil || s.ConsecutiveFailures != 1 || s.Epoch != 2 {
+		t.Fatalf("legacy state changed: %+v", s)
+	}
+	raw, err := encodeAstraState(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "latest_batch") {
+		t.Fatalf("legacy evidence fabricated: %s", raw)
+	}
+	e := &AstraBatchEvidence{Attempts: 30, MaxAttempts: 30, OrdinaryMisses: 24, ThresholdPercent: 80, Exhausted: true, Reason: "qualified_miss"}
+	clone := e.Clone()
+	clone.Reason = "success"
+	if e.Reason != "qualified_miss" || (*AstraBatchEvidence)(nil).Clone() != nil {
+		t.Fatal("evidence clone aliases source")
+	}
+}
 
 func TestAstraPolicyBatchOwnershipEpochAndRecovery(t *testing.T) {
 	db := newGrokStateTestDB(t)
@@ -32,9 +56,25 @@ func TestAstraPolicyBatchOwnershipEpochAndRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 		o := AstraPolicyOutcome{AccountID: 901, BatchID: fmt.Sprint(expected.Sequence), BatchSequence: expected.Sequence, Epoch: 1, Expected: expected, Outcome: kind, Confirmed: confirmed, IssuedUnix: time.Now().Unix(), ObtainedAtNano: time.Now().UnixNano()}
+		reason := "interrupted"
+		if kind == "ordinary_miss" {
+			reason = "qualified_miss"
+		}
+		if kind == "new_292" {
+			reason = "confirmation_warning"
+			if confirmed {
+				reason = "success"
+			}
+		}
+		o.LatestBatch = &AstraBatchEvidence{Attempts: 30, MaxAttempts: 30, OrdinaryMisses: 24, ThresholdPercent: 80, Exhausted: kind == "ordinary_miss", Reason: reason}
 		if _, err = db.ApplyAstraPolicyOutcome(ctx, o); err != nil {
 			t.Fatal(err)
 		}
+		s, err := db.AstraPolicySnapshot(ctx, 901)
+		if err != nil || s.LatestBatch == nil || *s.LatestBatch != *o.LatestBatch {
+			t.Fatalf("evidence roundtrip: %+v %v", s, err)
+		}
+		o.LatestBatch.Reason = "caller mutation"
 		return o
 	}
 	snapshot := func() AstraPolicyState {
@@ -58,8 +98,8 @@ func TestAstraPolicyBatchOwnershipEpochAndRecovery(t *testing.T) {
 		t.Fatalf("demotion %+v", s)
 	}
 	apply("new_292", false)
-	if !snapshot().Demoted {
-		t.Fatal("unconfirmed recovery")
+	if s := snapshot(); !s.Demoted || s.ConsecutiveFailures != 0 || s.LatestBatch.Reason != "confirmation_warning" {
+		t.Fatal("warning must reset streak without recovery")
 	}
 	apply("new_292", true)
 	if snapshot().Demoted {
@@ -79,6 +119,9 @@ func TestAstraPolicyBatchOwnershipEpochAndRecovery(t *testing.T) {
 	groups, _ = db.GetAccountGroupIDs(ctx, 901)
 	if len(groups) != 1 || groups[0] != 902 {
 		t.Fatalf("manual assignment overwritten: %v", groups)
+	}
+	if s := snapshot(); s.Error != "manual_membership_changed" || s.LatestBatch.Reason != "success" {
+		t.Fatalf("manual override must coexist with latest evidence: %+v", s)
 	}
 	expected, _ := db.AstraPolicyExpectation(ctx, 901)
 	stale := AstraPolicyOutcome{AccountID: 901, BatchID: "stale", BatchSequence: expected.Sequence, Epoch: 1, Expected: expected, Outcome: "ordinary_miss"}

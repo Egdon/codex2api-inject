@@ -11,27 +11,46 @@ import (
 	"time"
 )
 
+// AstraBatchEvidence describes only the latest accepted batch, not a history.
+type AstraBatchEvidence struct {
+	Attempts         int    `json:"attempts"`
+	MaxAttempts      int    `json:"max_attempts"`
+	OrdinaryMisses   int    `json:"ordinary_misses"`
+	ThresholdPercent int    `json:"threshold_percent"`
+	Exhausted        bool   `json:"exhausted"`
+	Reason           string `json:"reason"`
+}
+
+func (e *AstraBatchEvidence) Clone() *AstraBatchEvidence {
+	if e == nil {
+		return nil
+	}
+	copy := *e
+	return &copy
+}
+
 // AstraPolicyState contains audit metadata only; never credentials or tickets.
 // Times exposed to callers are Unix seconds.
 type AstraPolicyState struct {
-	AccountID           int64   `json:"account_id"`
-	Enabled             bool    `json:"enabled"`
-	ConsecutiveFailures int     `json:"consecutive_failures"`
-	Demoted             bool    `json:"demoted"`
-	FailureGroupID      int64   `json:"failure_group_id"`
-	OriginalGroupIDs    []int64 `json:"original_group_ids"`
-	DemotedAt           int64   `json:"demoted_at"`
-	LastBatchID         string  `json:"last_batch_id"`
-	LastOutcome         string  `json:"last_outcome"`
-	LastOutcomeAt       int64   `json:"last_outcome_at"`
-	Last292At           int64   `json:"last_292_at"`
-	LastConfirmed292At  int64   `json:"last_confirmed_292_at"`
-	NextRecoveryAt      int64   `json:"next_recovery_at"`
-	Error               string  `json:"error"`
-	Epoch               int64   `json:"-"`
-	OwnedVersion        int64   `json:"-"`
-	LastBatchSequence   int64   `json:"-"`
-	DemotedAtNano       int64   `json:"-"`
+	LatestBatch         *AstraBatchEvidence `json:"latest_batch,omitempty"`
+	AccountID           int64               `json:"account_id"`
+	Enabled             bool                `json:"enabled"`
+	ConsecutiveFailures int                 `json:"consecutive_failures"`
+	Demoted             bool                `json:"demoted"`
+	FailureGroupID      int64               `json:"failure_group_id"`
+	OriginalGroupIDs    []int64             `json:"original_group_ids"`
+	DemotedAt           int64               `json:"demoted_at"`
+	LastBatchID         string              `json:"last_batch_id"`
+	LastOutcome         string              `json:"last_outcome"`
+	LastOutcomeAt       int64               `json:"last_outcome_at"`
+	Last292At           int64               `json:"last_292_at"`
+	LastConfirmed292At  int64               `json:"last_confirmed_292_at"`
+	NextRecoveryAt      int64               `json:"next_recovery_at"`
+	Error               string              `json:"error"`
+	Epoch               int64               `json:"-"`
+	OwnedVersion        int64               `json:"-"`
+	LastBatchSequence   int64               `json:"-"`
+	DemotedAtNano       int64               `json:"-"`
 }
 
 type astraPolicyStored struct {
@@ -203,6 +222,7 @@ func (db *DB) ValidateAstraPolicyGroups(ctx context.Context, failure, recovery i
 }
 
 type AstraPolicyOutcome struct {
+	LatestBatch    *AstraBatchEvidence
 	AccountID      int64
 	BatchSequence  int64
 	BatchID        string
@@ -272,6 +292,7 @@ func (db *DB) ApplyAstraPolicyOutcome(ctx context.Context, o AstraPolicyOutcome)
 			s.Epoch = o.Epoch
 		}
 		s.LastBatchID, s.LastOutcome, s.LastOutcomeAt, s.Error = o.BatchID, o.Outcome, stamp, ""
+		s.LatestBatch = o.LatestBatch.Clone()
 		owned := s.Demoted && membership.Version == s.OwnedVersion && slices.Equal(membership.GroupIDs, []int64{s.FailureGroupID})
 		expected := membership.Version == o.Expected.Version && slices.Equal(membership.GroupIDs, o.Expected.GroupIDs)
 		if s.Demoted && !owned {

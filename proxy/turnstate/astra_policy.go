@@ -49,6 +49,7 @@ func (h *Harvester) PolicySnapshot(accountID int64) database.AstraPolicyState {
 		s.Error = message
 	}
 	s.OriginalGroupIDs = append([]int64{}, s.OriginalGroupIDs...)
+	s.LatestBatch = s.LatestBatch.Clone()
 	return s
 }
 
@@ -68,7 +69,8 @@ func (h *Harvester) automaticPolicyAllowed(id int64, model string, cfg Config) b
 
 func (h *Harvester) preparePolicyBatch(ctx context.Context, c *scheduledCell, cfg Config) {
 	c.batchID = randomSID() + randomSID()
-	c.ordinaryOnly = true
+	c.ordinaryMisses = 0
+	c.missThresholdPercent = NormalizeConfig(cfg).AstraMissThresholdPercent
 	if h.db == nil || !cfg.AstraPolicyEnabled || !strings.EqualFold(c.model, astraModel) {
 		return
 	}
@@ -79,6 +81,33 @@ func (h *Harvester) preparePolicyBatch(ctx context.Context, c *scheduledCell, cf
 	c.policyEpoch = cfg.astraPolicyEpoch
 	c.expectedGroups = expected
 	c.batchSequence = expected.Sequence
+}
+
+func classifyPolicyBatch(c *scheduledCell, r attemptResult) (string, *database.AstraBatchEvidence) {
+	e := &database.AstraBatchEvidence{
+		Attempts: c.attempt, MaxAttempts: c.max, OrdinaryMisses: c.ordinaryMisses,
+		ThresholdPercent: c.missThresholdPercent, Exhausted: r.phase == "exhausted",
+		Reason: "not_exhausted",
+	}
+	if r.new292 {
+		e.Reason = "success"
+		if !r.confirmed {
+			e.Reason = "confirmation_warning"
+		}
+		return "new_292", e
+	}
+	if r.phase == "cancelled" || r.phase == "skipped" {
+		e.Reason = "interrupted"
+	} else if e.Exhausted && c.attempt == c.max && c.max > 0 {
+		e.Reason = "insufficient_misses"
+		if c.missThresholdPercent >= 1 && c.missThresholdPercent <= 100 &&
+			c.ordinaryMisses >= 0 && c.ordinaryMisses <= c.attempt &&
+			c.ordinaryMisses*100 >= c.max*c.missThresholdPercent {
+			e.Reason = "qualified_miss"
+			return "ordinary_miss", e
+		}
+	}
+	return "inconclusive", e
 }
 
 // Called under h.mu, before retiring the generation. SaveConfig uses the same
@@ -92,14 +121,10 @@ func (h *Harvester) finishPolicyBatch(ctx context.Context, c *scheduledCell, r a
 	if h.generations[c.key] != c.generation || c.generation.version != c.version {
 		return
 	}
-	outcome := "inconclusive"
-	if r.new292 {
-		outcome = "new_292"
-	} else if r.phase == "exhausted" && c.ordinaryOnly && c.attempt == c.max {
-		outcome = "ordinary_miss"
-	}
+	outcome, evidence := classifyPolicyBatch(c, r)
 	changed, err := h.db.ApplyAstraPolicyOutcome(ctx, database.AstraPolicyOutcome{
-		AccountID: c.accountID, BatchID: c.batchID, BatchSequence: c.batchSequence, Epoch: c.policyEpoch, Expected: c.expectedGroups,
+		LatestBatch: evidence,
+		AccountID:   c.accountID, BatchID: c.batchID, BatchSequence: c.batchSequence, Epoch: c.policyEpoch, Expected: c.expectedGroups,
 		Outcome: outcome, Confirmed: r.confirmed, ObtainedAtNano: r.obtainedAtNano, IssuedUnix: r.issuedUnix,
 	})
 	h.policyMu.Lock()
