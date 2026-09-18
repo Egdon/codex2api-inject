@@ -6,6 +6,9 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"debug/elf"
+	"debug/macho"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,7 +31,7 @@ import (
 )
 
 const (
-	systemUpdateRepo             = "james-6-23/codex2api"
+	systemUpdateRepo             = "Egdon/codex2api-inject"
 	systemUpdateUserAgent        = "Codex2API-Updater"
 	systemUpdateMaxDownloadBytes = 200 * 1024 * 1024
 	systemUpdateRestartDelay     = 900 * time.Millisecond
@@ -42,6 +45,7 @@ var (
 )
 
 type systemUpdater struct {
+	currentSource      string
 	currentVersion     string
 	client             systemReleaseClient
 	goos               string
@@ -51,6 +55,8 @@ type systemUpdater struct {
 	restartDelay       time.Duration
 	runningInContainer func() bool
 
+	sourceCaches          map[string]systemSourceCache
+	plans                 map[string]systemUpdatePlan
 	mu                    sync.Mutex
 	releaseCacheMu        sync.Mutex
 	releaseCache          *systemGitHubRelease
@@ -64,18 +70,27 @@ type systemReleaseClient interface {
 }
 
 type systemUpdateInfo struct {
-	CurrentVersion    string `json:"current_version"`
-	LatestVersion     string `json:"latest_version"`
-	HasUpdate         bool   `json:"has_update"`
-	Supported         bool   `json:"supported"`
-	UnsupportedReason string `json:"unsupported_reason,omitempty"`
-	RuntimeOS         string `json:"runtime_os"`
-	RuntimeArch       string `json:"runtime_arch"`
-	Mode              string `json:"mode"`
-	ReleaseURL        string `json:"release_url,omitempty"`
-	AssetName         string `json:"asset_name,omitempty"`
-	PublishedAt       string `json:"published_at,omitempty"`
-	Warning           string `json:"warning,omitempty"`
+	Source                        string `json:"source"`
+	CurrentSource                 string `json:"current_source"`
+	CurrentLocal                  bool   `json:"current_local"`
+	Status                        string `json:"status"`
+	TargetTag                     string `json:"target_tag,omitempty"`
+	PlanToken                     string `json:"plan_token,omitempty"`
+	PlanExpiresAt                 string `json:"plan_expires_at,omitempty"`
+	RequiresOfficialConfirmation  bool   `json:"requires_official_confirmation"`
+	RequiresMigrationConfirmation bool   `json:"requires_migration_confirmation"`
+	CurrentVersion                string `json:"current_version"`
+	LatestVersion                 string `json:"latest_version"`
+	HasUpdate                     bool   `json:"has_update"`
+	Supported                     bool   `json:"supported"`
+	UnsupportedReason             string `json:"unsupported_reason,omitempty"`
+	RuntimeOS                     string `json:"runtime_os"`
+	RuntimeArch                   string `json:"runtime_arch"`
+	Mode                          string `json:"mode"`
+	ReleaseURL                    string `json:"release_url,omitempty"`
+	AssetName                     string `json:"asset_name,omitempty"`
+	PublishedAt                   string `json:"published_at,omitempty"`
+	Warning                       string `json:"warning,omitempty"`
 }
 
 type systemUpdateResult struct {
@@ -95,6 +110,9 @@ type systemUpdateInspection struct {
 }
 
 type systemGitHubRelease struct {
+	ID          int64               `json:"id"`
+	Draft       bool                `json:"draft"`
+	Prerelease  bool                `json:"prerelease"`
 	TagName     string              `json:"tag_name"`
 	Name        string              `json:"name"`
 	Body        string              `json:"body"`
@@ -104,6 +122,8 @@ type systemGitHubRelease struct {
 }
 
 type systemGitHubAsset struct {
+	ID                 int64  `json:"id"`
+	UpdatedAt          string `json:"updated_at"`
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
@@ -119,6 +139,7 @@ func newSystemUpdater() *systemUpdater {
 	client := newDefaultSystemReleaseClient()
 	return &systemUpdater{
 		currentVersion:     version.Current(),
+		currentSource:      version.Source,
 		client:             client,
 		goos:               runtime.GOOS,
 		goarch:             runtime.GOARCH,
@@ -147,8 +168,20 @@ func detectRunningInContainer() bool {
 }
 
 func newDefaultSystemReleaseClient() *defaultSystemReleaseClient {
-	redirectPolicy := func(req *http.Request, _ []*http.Request) error {
-		return validateSystemUpdateURL(req.URL.String())
+	redirectPolicy := func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("too many redirects")
+		}
+		if err := validateSystemUpdateURL(req.URL.String()); err != nil {
+			return err
+		}
+		if len(via) > 0 && via[0].URL.Hostname() == "api.github.com" {
+			return fmt.Errorf("API redirects are not allowed")
+		}
+		if req.URL.Hostname() != "objects.githubusercontent.com" && req.URL.Hostname() != "release-assets.githubusercontent.com" {
+			return fmt.Errorf("unexpected release redirect")
+		}
+		return nil
 	}
 	// GitHub 专用代理（issue #522）：配置了则优先，否则维持原行为（环境变量代理）。
 	// 每请求动态解析，设置热更新即时生效。
@@ -175,56 +208,45 @@ func newDefaultSystemReleaseClient() *defaultSystemReleaseClient {
 }
 
 func (h *Handler) GetSystemUpdate(c *gin.Context) {
-	updater := h.systemUpdater()
-	info, err := updater.Check(c.Request.Context())
-	if err != nil {
-		log.Printf("检查系统更新失败，已静默降级: %v", err)
-		c.JSON(http.StatusOK, updater.unavailableInfo())
+	source := c.DefaultQuery("source", "patched")
+	if _, ok := systemUpdateSources[source]; !ok {
+		writeError(c, http.StatusBadRequest, "invalid source")
 		return
+	}
+	c.Header("Cache-Control", "no-store")
+	updater := h.systemUpdater()
+	info, err := updater.CheckSource(c.Request.Context(), source)
+	if err != nil {
+		info = updater.unavailableSourceInfo(source)
+		log.Printf("检查系统更新失败 (%s): %v", source, err)
 	}
 	c.JSON(http.StatusOK, info)
 }
 
 func (u *systemUpdater) unavailableInfo() *systemUpdateInfo {
-	current := normalizeSystemVersion(u.currentVersion)
-	info := &systemUpdateInfo{
-		CurrentVersion: current,
-		LatestVersion:  current,
-		RuntimeOS:      u.goos,
-		RuntimeArch:    u.goarch,
-		Mode:           "binary",
-		Supported:      true,
-		Warning:        "更新源暂时不可用，已跳过本次自动检查",
-	}
-	if current == "" || current == "dev" {
-		info.Supported = false
-		info.UnsupportedReason = "开发构建未注入版本号，无法安全判断升级目标"
-	} else if _, ok := parseSystemVersion(current); !ok {
-		info.Supported = false
-		info.UnsupportedReason = "当前构建版本不是语义版本，无法安全判断升级目标"
-	}
-	if u.goos == "windows" {
-		info.Supported = false
-		info.UnsupportedReason = "Windows 运行时暂不支持在线替换正在运行的可执行文件"
-	}
-	return info
+	return u.unavailableSourceInfo("patched")
 }
 
 func (h *Handler) PerformSystemUpdate(c *gin.Context) {
-	result, err := h.systemUpdater().PerformUpdate(c.Request.Context())
+	var request systemUpdateRequest
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid update request")
+		return
+	}
+	result, err := h.systemUpdater().PerformPlannedUpdate(c.Request.Context(), request)
 	if err == nil {
 		c.JSON(http.StatusOK, result)
 		return
 	}
 	switch {
-	case errors.Is(err, errSystemUpdateBusy):
-		writeError(c, http.StatusConflict, err.Error())
-	case errors.Is(err, errSystemUpdateLatest):
+	case errors.Is(err, errSystemUpdateBusy), errors.Is(err, errSystemUpdateLatest), errors.Is(err, errSystemUpdatePlan):
 		writeError(c, http.StatusConflict, err.Error())
 	case errors.Is(err, errSystemUpdateUnsupported):
 		writeError(c, http.StatusBadRequest, err.Error())
 	default:
-		writeError(c, http.StatusInternalServerError, "在线更新失败: "+err.Error())
+		log.Printf("在线更新失败: %v", err)
+		writeError(c, http.StatusInternalServerError, "在线更新失败，请重新检查更新或查看服务日志")
 	}
 }
 
@@ -237,130 +259,22 @@ func (h *Handler) systemUpdater() *systemUpdater {
 	return h.systemUpdate
 }
 
+// Legacy method names remain for package test compilation; updates require an explicit plan.
 func (u *systemUpdater) Check(ctx context.Context) (*systemUpdateInfo, error) {
-	inspection, err := u.inspect(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return inspection.info, nil
+	return u.CheckSource(ctx, "patched")
 }
-
 func (u *systemUpdater) PerformUpdate(ctx context.Context) (*systemUpdateResult, error) {
 	if !u.mu.TryLock() {
 		return nil, errSystemUpdateBusy
 	}
-	defer u.mu.Unlock()
-
-	inspection, err := u.inspect(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !inspection.info.Supported {
-		if inspection.info.UnsupportedReason != "" {
-			return nil, fmt.Errorf("%w: %s", errSystemUpdateUnsupported, inspection.info.UnsupportedReason)
-		}
-		return nil, errSystemUpdateUnsupported
-	}
-	if !inspection.info.HasUpdate {
-		return nil, errSystemUpdateLatest
-	}
-	if inspection.asset == nil {
-		return nil, fmt.Errorf("%w: 未找到适配 %s/%s 的发布资产", errSystemUpdateUnsupported, u.goos, u.goarch)
-	}
-
-	exePath, backupPath, err := u.applyBinaryUpdate(ctx, inspection)
-	if err != nil {
-		return nil, err
-	}
-
-	u.scheduleRestart(exePath)
-	return &systemUpdateResult{
-		Message:        "更新已应用，服务正在重启",
-		CurrentVersion: inspection.info.CurrentVersion,
-		LatestVersion:  inspection.info.LatestVersion,
-		NeedRestart:    true,
-		Restarting:     true,
-		Mode:           inspection.info.Mode,
-		BackupPath:     backupPath,
-	}, nil
+	u.mu.Unlock()
+	return nil, errSystemUpdatePlan
 }
-
 func (u *systemUpdater) inspect(ctx context.Context) (*systemUpdateInspection, error) {
-	current := normalizeSystemVersion(u.currentVersion)
-	info := &systemUpdateInfo{
-		CurrentVersion: current,
-		LatestVersion:  current,
-		RuntimeOS:      u.goos,
-		RuntimeArch:    u.goarch,
-		Mode:           "binary",
-		Supported:      true,
-	}
-
-	if current == "" || current == "dev" {
-		info.Supported = false
-		info.UnsupportedReason = "开发构建未注入版本号，无法安全判断升级目标"
-	} else if _, ok := parseSystemVersion(current); !ok {
-		info.Supported = false
-		info.UnsupportedReason = "当前构建版本不是语义版本，无法安全判断升级目标"
-	}
-	if u.goos == "windows" {
-		info.Supported = false
-		info.UnsupportedReason = "Windows 运行时暂不支持在线替换正在运行的可执行文件"
-	}
-	if u.runningInContainer != nil && u.runningInContainer() {
-		info.Warning = "检测到容器环境:在线更新只替换当前容器内的二进制,容器重建后会恢复为镜像自带版本,建议改用拉取新镜像的方式升级"
-	}
-
-	release, err := u.fetchLatestRelease(ctx)
-	if err != nil {
-		return nil, err
-	}
-	latest := normalizeSystemVersion(release.TagName)
-	if latest == "" {
-		return nil, fmt.Errorf("最新 release 缺少有效版本号")
-	}
-	info.LatestVersion = latest
-	info.ReleaseURL = release.HTMLURL
-	info.PublishedAt = release.PublishedAt
-	info.HasUpdate = compareSystemVersions(current, latest) < 0
-
-	asset := findSystemUpdateAsset(release, latest, u.goos, u.goarch)
-	checksum := findSystemChecksumAsset(release)
-	if asset != nil {
-		info.AssetName = asset.Name
-	} else if info.Supported {
-		info.Supported = false
-		info.UnsupportedReason = fmt.Sprintf("未找到适配 %s/%s 的发布资产", u.goos, u.goarch)
-	}
-
-	return &systemUpdateInspection{
-		info:          info,
-		asset:         asset,
-		checksumAsset: checksum,
-	}, nil
+	return u.inspectSource(ctx, "patched", false)
 }
-
 func (u *systemUpdater) fetchLatestRelease(ctx context.Context) (*systemGitHubRelease, error) {
-	now := time.Now()
-	u.releaseCacheMu.Lock()
-	defer u.releaseCacheMu.Unlock()
-
-	if u.releaseCache != nil && now.Before(u.releaseCacheExpiresAt) {
-		return cloneSystemGitHubRelease(u.releaseCache), nil
-	}
-
-	release, err := u.client.FetchLatestRelease(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if release == nil {
-		return nil, fmt.Errorf("GitHub release 响应为空")
-	}
-
-	u.releaseCache = cloneSystemGitHubRelease(release)
-	u.releaseCacheExpiresAt = now.Add(systemUpdateReleaseCacheTTL)
-
-	return cloneSystemGitHubRelease(release), nil
+	return u.fetchSourceRelease(ctx, "patched", false)
 }
 
 func cloneSystemGitHubRelease(release *systemGitHubRelease) *systemGitHubRelease {
@@ -377,11 +291,11 @@ func (u *systemUpdater) applyBinaryUpdate(ctx context.Context, inspection *syste
 	if asset == nil {
 		return "", "", fmt.Errorf("更新资产为空")
 	}
-	if err := validateSystemUpdateURL(asset.BrowserDownloadURL); err != nil {
+	if err := validateSystemAssetURL(asset, inspection.info.Source, inspection.info.TargetTag); err != nil {
 		return "", "", fmt.Errorf("发布资产 URL 不可信: %w", err)
 	}
 	if inspection.checksumAsset != nil {
-		if err := validateSystemUpdateURL(inspection.checksumAsset.BrowserDownloadURL); err != nil {
+		if err := validateSystemAssetURL(inspection.checksumAsset, inspection.info.Source, inspection.info.TargetTag); err != nil {
 			return "", "", fmt.Errorf("校验和 URL 不可信: %w", err)
 		}
 	}
@@ -405,6 +319,9 @@ func (u *systemUpdater) applyBinaryUpdate(ctx context.Context, inspection *syste
 	if err := u.client.DownloadFile(ctx, asset.BrowserDownloadURL, archivePath, systemUpdateMaxDownloadBytes); err != nil {
 		return "", "", fmt.Errorf("下载更新包失败: %w", err)
 	}
+	if stat, err := os.Stat(archivePath); err != nil || stat.Size() != asset.Size {
+		return "", "", fmt.Errorf("downloaded asset size differs from release metadata")
+	}
 	if err := verifySystemUpdateChecksum(ctx, u.client, archivePath, asset, inspection.checksumAsset); err != nil {
 		return "", "", err
 	}
@@ -412,6 +329,9 @@ func (u *systemUpdater) applyBinaryUpdate(ctx context.Context, inspection *syste
 	newBinaryPath := filepath.Join(tempDir, systemBinaryName(u.goos))
 	if err := extractSystemUpdateBinary(archivePath, newBinaryPath); err != nil {
 		return "", "", fmt.Errorf("解压更新包失败: %w", err)
+	}
+	if err := validateSystemBinaryPlatform(newBinaryPath, u.goos, u.goarch); err != nil {
+		return "", "", err
 	}
 	if err := os.Chmod(newBinaryPath, 0755); err != nil {
 		return "", "", fmt.Errorf("设置新程序执行权限失败: %w", err)
@@ -442,7 +362,27 @@ func (u *systemUpdater) scheduleRestart(exePath string) {
 }
 
 func (c *defaultSystemReleaseClient) FetchLatestRelease(ctx context.Context) (*systemGitHubRelease, error) {
-	apiURL := "https://api.github.com/repos/" + systemUpdateRepo + "/releases/latest"
+	return c.FetchLatestReleaseForSource(ctx, "patched")
+}
+
+func (c *defaultSystemReleaseClient) FetchLatestReleaseForSource(ctx context.Context, source string) (*systemGitHubRelease, error) {
+	repo, ok := systemUpdateSources[source]
+	if !ok {
+		return nil, fmt.Errorf("invalid source")
+	}
+	apiURL := "https://api.github.com/repos/" + repo + "/releases/latest"
+	return c.fetchReleaseURL(ctx, apiURL)
+}
+
+func (c *defaultSystemReleaseClient) FetchReleaseByTag(ctx context.Context, source, tag string) (*systemGitHubRelease, error) {
+	repo, ok := systemUpdateSources[source]
+	if _, canonical := canonicalSystemTag(source, tag); !ok || !canonical {
+		return nil, errSystemUpdatePlan
+	}
+	return c.fetchReleaseURL(ctx, "https://api.github.com/repos/"+repo+"/releases/tags/"+tag)
+}
+
+func (c *defaultSystemReleaseClient) fetchReleaseURL(ctx context.Context, apiURL string) (*systemGitHubRelease, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
@@ -461,7 +401,7 @@ func (c *defaultSystemReleaseClient) FetchLatestRelease(ctx context.Context) (*s
 	}
 
 	var release systemGitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&release); err != nil {
 		return nil, err
 	}
 	return &release, nil
@@ -544,7 +484,7 @@ func validateSystemUpdateURL(rawURL string) error {
 	if err != nil {
 		return err
 	}
-	if parsed.Scheme != "https" {
+	if parsed.Scheme != "https" || parsed.User != nil || parsed.Port() != "" || parsed.Fragment != "" || parsed.Host != parsed.Hostname() {
 		return fmt.Errorf("仅允许 HTTPS")
 	}
 	host := strings.ToLower(parsed.Hostname())
@@ -552,9 +492,6 @@ func validateSystemUpdateURL(rawURL string) error {
 	case "github.com", "api.github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com":
 		return nil
 	default:
-		if strings.HasSuffix(host, ".githubusercontent.com") {
-			return nil
-		}
 		return fmt.Errorf("不允许的下载域名: %s", host)
 	}
 }
@@ -640,33 +577,71 @@ func sha256File(path string) (string, error) {
 
 func checksumForFile(data []byte, name string) (string, bool) {
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	found := ""
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) < 2 {
+		if len(fields) != 2 || strings.TrimPrefix(fields[1], "*") != name {
 			continue
 		}
-		if fields[1] == name {
-			return strings.ToLower(fields[0]), true
+		digest, err := hex.DecodeString(fields[0])
+		if err != nil || len(digest) != 32 || found != "" {
+			return "", false
 		}
+		found = strings.ToLower(fields[0])
 	}
-	return "", false
+	return found, scanner.Err() == nil && found != ""
 }
 
-func extractSystemUpdateBinary(archivePath, destPath string) error {
+// Read fixed-size headers rather than parsing attacker-controlled section tables.
+func validateSystemBinaryPlatform(path, goos, goarch string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var header [64]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		return fmt.Errorf("invalid executable header: %w", err)
+	}
+	valid := false
+	if goos == "linux" {
+		machine := elf.Machine(binary.LittleEndian.Uint16(header[18:20]))
+		kind := elf.Type(binary.LittleEndian.Uint16(header[16:18]))
+		valid = string(header[:4]) == "\x7fELF" && header[4] == byte(elf.ELFCLASS64) && header[5] == byte(elf.ELFDATA2LSB) && header[6] == 1 && (kind == elf.ET_EXEC || kind == elf.ET_DYN) && ((goarch == "amd64" && machine == elf.EM_X86_64) || (goarch == "arm64" && machine == elf.EM_AARCH64))
+	} else if goos == "darwin" {
+		cpu := macho.Cpu(binary.LittleEndian.Uint32(header[4:8]))
+		valid = binary.LittleEndian.Uint32(header[:4]) == macho.Magic64 && macho.Type(binary.LittleEndian.Uint32(header[12:16])) == macho.TypeExec && ((goarch == "amd64" && cpu == macho.CpuAmd64) || (goarch == "arm64" && cpu == macho.CpuArm64))
+	}
+	if !valid {
+		return fmt.Errorf("executable does not match %s/%s", goos, goarch)
+	}
+	return nil
+}
+
+func extractSystemUpdateBinary(archivePath, destPath string) (resultErr error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-
+	defer f.Close()
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = gzr.Close() }()
-
-	tr := tar.NewReader(gzr)
-	for {
+	defer gzr.Close()
+	// Bound all expanded data, including ignored files and trailing gzip data.
+	limited := &io.LimitedReader{R: gzr, N: 2*systemUpdateMaxDownloadBytes + 1}
+	tr := tar.NewReader(limited)
+	found := false
+	defer func() {
+		if resultErr != nil {
+			_ = os.Remove(destPath)
+		}
+	}()
+	for entries := 0; ; entries++ {
+		if entries > 10000 {
+			return fmt.Errorf("too many archive entries")
+		}
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
@@ -674,35 +649,48 @@ func extractSystemUpdateBinary(archivePath, destPath string) error {
 		if err != nil {
 			return err
 		}
-		if hdr.Typeflag != tar.TypeReg {
-			continue
+		if strings.Contains(hdr.Name, "..") || strings.Contains(hdr.Name, "\\") || filepath.IsAbs(hdr.Name) {
+			return fmt.Errorf("unsafe archive path")
 		}
-		if strings.Contains(hdr.Name, "..") || filepath.IsAbs(hdr.Name) {
-			return fmt.Errorf("更新包包含不安全路径: %s", hdr.Name)
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeDir {
+			return fmt.Errorf("unsupported archive entry type")
 		}
 		if filepath.Base(hdr.Name) != "codex2api" {
 			continue
 		}
-		if hdr.Size > systemUpdateMaxDownloadBytes {
-			return fmt.Errorf("更新包内程序过大: %d bytes", hdr.Size)
+		if hdr.Typeflag != tar.TypeReg || found {
+			return fmt.Errorf("duplicate or invalid executable entry")
 		}
-		out, err := os.Create(destPath)
+		if hdr.Size <= 0 || hdr.Size > systemUpdateMaxDownloadBytes {
+			return fmt.Errorf("invalid executable size")
+		}
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
 			return err
 		}
-		_, copyErr := io.Copy(out, io.LimitReader(tr, systemUpdateMaxDownloadBytes+1))
+		written, copyErr := io.Copy(out, tr)
 		closeErr := out.Close()
 		if copyErr != nil {
-			_ = os.Remove(destPath)
 			return copyErr
 		}
 		if closeErr != nil {
-			_ = os.Remove(destPath)
 			return closeErr
 		}
-		return nil
+		if written != hdr.Size {
+			return fmt.Errorf("incomplete executable")
+		}
+		found = true
 	}
-	return fmt.Errorf("更新包内未找到 codex2api 程序")
+	if _, err := io.Copy(io.Discard, limited); err != nil {
+		return err
+	}
+	if limited.N == 0 {
+		return fmt.Errorf("expanded archive exceeds limit")
+	}
+	if !found {
+		return fmt.Errorf("更新包内未找到 codex2api 程序")
+	}
+	return nil
 }
 
 func replaceExecutable(currentPath, newPath, backupPath string) error {

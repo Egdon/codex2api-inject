@@ -1,26 +1,26 @@
-import { type CSSProperties, type PropsWithChildren, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, type PropsWithChildren, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, Activity, Settings, Server, Languages, Globe, BookOpen, KeyRound, Image as ImageIcon, ShieldAlert, ExternalLink, ChevronLeft, Palette, Sun, Moon, LogOut, Download, Loader2, RefreshCw, Menu, X, CircleDollarSign, Braces, FlaskConical } from 'lucide-react'
+	import { LayoutDashboard, Users, Activity, Settings, Server, Languages, Globe, BookOpen, KeyRound, Image as ImageIcon, ShieldAlert, ChevronLeft, Palette, Sun, Moon, LogOut, Menu, X, CircleDollarSign, Braces, FlaskConical, Ticket } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { api, resetAdminAuthState } from '../api'
+import { resetAdminAuthState } from '../api'
 import { DEFAULT_SITE_LOGO, isBrandingVideo, useBranding } from '../branding'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { buildVersionLabel } from '../lib/buildVersion'
 import { useTheme } from '../hooks/useTheme'
-import { useToast } from '../hooks/useToast'
-import { getErrorMessage } from '../utils/error'
+import SystemUpdateModal from './SystemUpdateModal'
 import SecurityBanner from './SecurityBanner'
 import { cn } from '@/lib/utils'
 import { CinematicThemeSwitcher } from '@/components/ui/cinematic-theme-switcher'
 
-type NavDef = {
-  to: string
-  labelKey: string
-  icon: ReactNode
-  end?: boolean
-  activePrefix?: string
-}
+	type NavDef = {
+	  to: string
+	  labelKey: string
+	  icon: ReactNode
+	  end?: boolean
+	  activePrefix?: string
+	  external?: boolean
+	}
 
 const navDefs: NavDef[] = [
   { to: '/', labelKey: 'nav.dashboard', icon: <LayoutDashboard className="size-[18px]" />, end: true },
@@ -33,8 +33,9 @@ const navDefs: NavDef[] = [
   { to: '/ops/overview', labelKey: 'nav.ops', icon: <Server className="size-[18px]" />, activePrefix: '/ops' },
   { to: '/usage', labelKey: 'nav.usage', icon: <Activity className="size-[18px]" /> },
   { to: '/model-pricing', labelKey: 'nav.modelPricing', icon: <CircleDollarSign className="size-[18px]" /> },
-  { to: '/payload-rules/editor', labelKey: 'nav.payloadRules', icon: <Braces className="size-[18px]" />, activePrefix: '/payload-rules' },
-  { to: '/theme', labelKey: 'nav.theme', icon: <Palette className="size-[18px]" /> },
+	  { to: '/payload-rules/editor', labelKey: 'nav.payloadRules', icon: <Braces className="size-[18px]" />, activePrefix: '/payload-rules' },
+	  { to: '/inject', labelKey: 'nav.turnStateInject', icon: <Ticket className="size-[18px]" />, external: true },
+	  { to: '/theme', labelKey: 'nav.theme', icon: <Palette className="size-[18px]" /> },
   { to: '/settings', labelKey: 'nav.settings', icon: <Settings className="size-[18px]" /> },
   { to: '/docs', labelKey: 'nav2.docs', icon: <BookOpen className="size-[18px]" /> },
 ]
@@ -50,17 +51,12 @@ const mobileMoreNav = navDefs.filter((item) => !mobilePrimaryPathSet.has(item.to
 export default function Layout({ children }: PropsWithChildren) {
   const location = useLocation()
   const { t, i18n } = useTranslation()
-  const { hasUpdate, latestVersion, updateInfo, refreshVersion } = useVersionCheck(location.pathname)
+  const { hasUpdate, latestVersion } = useVersionCheck(location.pathname)
   const { siteName, siteLogo, backgroundImage, backgroundOpacity, backgroundBlur, backgroundGlassOpacity, backgroundGlassBlur } = useBranding()
   const { theme, toggle } = useTheme()
-  const { showToast } = useToast()
   const [spinning, setSpinning] = useState(false)
   const logoSrc = siteLogo || DEFAULT_SITE_LOGO
   const [showVersionPopover, setShowVersionPopover] = useState(false)
-  const [updatingVersion, setUpdatingVersion] = useState(false)
-  const [restartingAfterUpdate, setRestartingAfterUpdate] = useState(false)
-  const restartPollRef = useRef<number | null>(null)
-  const restartPollActiveRef = useRef(false)
   // 侧栏折叠状态。lg+ 屏才生效;collapsed=true 时只显示 icon,列宽从 264 → 64。
   // localStorage 持久化跨刷新保留选择。
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -83,118 +79,6 @@ export default function Layout({ children }: PropsWithChildren) {
       return next
     })
   }
-  const versionPopoverRef = useRef<HTMLDivElement | null>(null)
-  const versionButtonRef = useRef<HTMLButtonElement | null>(null)
-  const [versionPopoverPos, setVersionPopoverPos] = useState<{ top: number; left: number } | null>(null)
-  const releaseURL = updateInfo?.release_url || (latestVersion
-    ? `https://github.com/james-6-23/codex2api/releases/tag/${encodeURIComponent(latestVersion)}`
-    : undefined)
-  const canApplyUpdate = hasUpdate && Boolean(updateInfo) && updateInfo?.supported !== false
-  const updateUnavailableReason = updateInfo?.unsupported_reason
-
-  const stopRestartPolling = useCallback(() => {
-    restartPollActiveRef.current = false
-    if (restartPollRef.current !== null) {
-      window.clearTimeout(restartPollRef.current)
-      restartPollRef.current = null
-    }
-  }, [])
-
-  const pollForUpdatedVersion = useCallback((targetVersion: string) => {
-    stopRestartPolling()
-    const normalizedTarget = targetVersion.replace(/^v/i, '')
-    let attempts = 0
-    restartPollActiveRef.current = true
-
-    const scheduleNext = (delayMs: number) => {
-      restartPollRef.current = window.setTimeout(async () => {
-        if (!restartPollActiveRef.current) return
-        attempts += 1
-        try {
-          const info = await api.getSystemUpdate()
-          if (info.current_version.replace(/^v/i, '') === normalizedTarget) {
-            stopRestartPolling()
-            window.location.reload()
-            return
-          }
-        } catch {
-          // service may be restarting
-        }
-        if (!restartPollActiveRef.current) return
-        if (attempts >= 60) {
-          stopRestartPolling()
-          setRestartingAfterUpdate(false)
-          // 90s 内未观察到版本切换:服务可能仍在重启(容器/守护进程拉起较慢),
-          // 提示用户稍后手动刷新,而不是静默恢复按钮让人以为“没反应”。
-          showToast(t('common.restartTimeout'), 'error')
-          return
-        }
-        scheduleNext(1500)
-      }, delayMs)
-    }
-
-    scheduleNext(2500)
-  }, [stopRestartPolling, showToast, t])
-
-  const handleApplyUpdate = async () => {
-    if (!canApplyUpdate || updatingVersion || restartingAfterUpdate) return
-    setUpdatingVersion(true)
-    try {
-      const result = await api.performSystemUpdate()
-      showToast(result.message || t('common.updateApplied'), 'success')
-      setRestartingAfterUpdate(Boolean(result.restarting))
-      if (result.restarting) {
-        pollForUpdatedVersion(result.latest_version)
-      } else {
-        void refreshVersion(true)
-      }
-    } catch (error) {
-      showToast(getErrorMessage(error, t('common.updateFailed')), 'error')
-    } finally {
-      setUpdatingVersion(false)
-    }
-  }
-
-  useEffect(() => {
-    if (showVersionPopover && hasUpdate && !updateInfo) {
-      void refreshVersion(true)
-    }
-  }, [showVersionPopover, hasUpdate, updateInfo, refreshVersion])
-
-  useEffect(() => {
-    if (!showVersionPopover) return
-
-    const updatePosition = () => {
-      const rect = versionButtonRef.current?.getBoundingClientRect()
-      if (!rect) return
-      setVersionPopoverPos({ top: rect.bottom + 8, left: rect.left })
-    }
-    updatePosition()
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target instanceof Node ? event.target : null
-      if (target && versionPopoverRef.current?.contains(target)) return
-      if (target && versionButtonRef.current?.contains(target)) return
-      setShowVersionPopover(false)
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setShowVersionPopover(false)
-    }
-
-    document.addEventListener('pointerdown', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
-    }
-  }, [showVersionPopover])
-
-  useEffect(() => stopRestartPolling, [stopRestartPolling])
-
   // Close mobile more sheet on route change.
   useEffect(() => {
     setMobileMoreOpen(false)
@@ -374,9 +258,8 @@ export default function Layout({ children }: PropsWithChildren) {
                     <h1 className="max-w-[160px] truncate text-[20px] leading-tight font-bold text-foreground" title={siteName}>
                       {siteName}
                     </h1>
-                    <div ref={versionPopoverRef} className="relative w-fit">
+                    <div className="relative w-fit">
                       <button
-                        ref={versionButtonRef}
                         type="button"
                         className="relative inline-flex cursor-pointer items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary ring-1 ring-primary/10 transition-colors hover:bg-primary/15"
                         title={hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
@@ -388,74 +271,7 @@ export default function Layout({ children }: PropsWithChildren) {
                           <span className="absolute -top-1.5 left-1/2 size-2.5 -translate-x-1/2 rounded-full bg-red-500 shadow-sm ring-2 ring-[hsl(var(--sidebar-background))] animate-pulse" />
                         )}
                       </button>
-                      {showVersionPopover && versionPopoverPos && createPortal(
-                        <div
-                          ref={versionPopoverRef}
-                          style={{ position: 'fixed', top: versionPopoverPos.top, left: versionPopoverPos.left }}
-                          className="z-[100] w-[240px] rounded-lg border border-border bg-popover p-3 text-left shadow-xl"
-                        >
-                          <div className="text-[13px] font-semibold text-foreground">
-                            {latestVersion
-                              ? hasUpdate
-                                ? t('common.newVersionAvailable', { version: latestVersion })
-                                : t('common.versionLatest')
-                              : t('common.versionChecking')}
-                          </div>
-                          <div className="mt-1 text-[11px] text-muted-foreground">
-                            {t('common.currentVersion', { version: __APP_VERSION__ })}
-                          </div>
-                          {latestVersion && (
-                            <div className="mt-1 text-[11px] text-muted-foreground">
-                              {t('common.latestVersion', { version: latestVersion })}
-                            </div>
-                          )}
-                          {hasUpdate && updateUnavailableReason && (
-                            <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11px] font-medium leading-relaxed text-amber-700 dark:text-amber-300">
-                              {updateUnavailableReason}
-                            </div>
-                          )}
-                          {hasUpdate && updateInfo?.warning && (
-                            <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11px] font-medium leading-relaxed text-amber-700 dark:text-amber-300">
-                              {updateInfo.warning}
-                            </div>
-                          )}
-                          {hasUpdate && (
-                            <button
-                              type="button"
-                              className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                              disabled={!canApplyUpdate || updatingVersion || restartingAfterUpdate}
-                              title={!canApplyUpdate ? updateUnavailableReason : undefined}
-                              onClick={handleApplyUpdate}
-                            >
-                              {restartingAfterUpdate ? (
-                                <RefreshCw className="size-3.5 animate-spin" />
-                              ) : updatingVersion ? (
-                                <Loader2 className="size-3.5 animate-spin" />
-                              ) : (
-                                <Download className="size-3.5" />
-                              )}
-                              {restartingAfterUpdate
-                                ? t('common.restarting')
-                                : updatingVersion
-                                  ? t('common.updating')
-                                  : t('common.updateNow')}
-                            </button>
-                          )}
-                          {releaseURL && (
-                            <a
-                              href={releaseURL}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/20 bg-primary/10 px-2.5 py-1.5 text-[12px] font-semibold text-primary transition-colors hover:bg-primary/15"
-                              onClick={() => setShowVersionPopover(false)}
-                            >
-                              {t('common.viewReleaseNotes')}
-                              <ExternalLink className="size-3.5" />
-                            </a>
-                          )}
-                        </div>,
-                        document.body,
-                      )}
+
                     </div>
                   </div>
                 </div>
@@ -496,41 +312,54 @@ export default function Layout({ children }: PropsWithChildren) {
               >
                 {t('nav.console')}
               </span>
-              {navDefs.map((item) => {
-                const active = isNavActive(item)
-                const label = t(item.labelKey)
-                return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.end}
-                    title={sidebarCollapsed ? label : undefined}
-                    className={cn(
-                      'relative flex min-h-10 items-center rounded-xl border text-[14px] font-semibold transition-[background-color,color,border-color,padding,gap]',
-                      containerEase,
-                      sidebarCollapsed ? 'justify-center px-2 py-2' : 'gap-2.5 px-3 py-2',
-                      active
-                        ? 'border-primary/20 bg-primary/10 text-primary'
-                        : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                    )}
-                  >
-                    {active ? (
-                      <span
-                        aria-hidden
-                        className={cn(
-                          'absolute top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-primary',
-                          sidebarCollapsed ? 'left-1' : 'left-1.5',
-                        )}
-                      />
-                    ) : null}
-                    {item.icon}
-                    <span
-                      className={`overflow-hidden whitespace-nowrap transition-[max-width,opacity] ${textEase} ${textRevealDelay} ${
-                        sidebarCollapsed ? 'max-w-0 opacity-0' : 'max-w-[160px] opacity-100'
-                      }`}
-                    >
-                      {label}
-                    </span>
+	              {navDefs.map((item) => {
+	                const active = isNavActive(item)
+	                const label = t(item.labelKey)
+	                const className = cn(
+	                  'relative flex min-h-10 items-center rounded-xl border text-[14px] font-semibold transition-[background-color,color,border-color,padding,gap]',
+	                  containerEase,
+	                  sidebarCollapsed ? 'justify-center px-2 py-2' : 'gap-2.5 px-3 py-2',
+	                  active
+	                    ? 'border-primary/20 bg-primary/10 text-primary'
+	                    : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+	                )
+	                const inner = (
+	                  <>
+	                    {active ? (
+	                      <span
+	                        aria-hidden
+	                        className={cn(
+	                          'absolute top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-primary',
+	                          sidebarCollapsed ? 'left-1' : 'left-1.5',
+	                        )}
+	                      />
+	                    ) : null}
+	                    {item.icon}
+	                    <span
+	                      className={`overflow-hidden whitespace-nowrap transition-[max-width,opacity] ${textEase} ${textRevealDelay} ${
+	                        sidebarCollapsed ? 'max-w-0 opacity-0' : 'max-w-[160px] opacity-100'
+	                      }`}
+	                    >
+	                      {label}
+	                    </span>
+	                  </>
+	                )
+	                if (item.external) {
+	                  return (
+	                    <a key={item.to} href={item.to} title={sidebarCollapsed ? label : undefined} className={className}>
+	                      {inner}
+	                    </a>
+	                  )
+	                }
+	                return (
+	                  <NavLink
+	                    key={item.to}
+	                    to={item.to}
+	                    end={item.end}
+	                    title={sidebarCollapsed ? label : undefined}
+	                    className={className}
+	                  >
+                    {inner}
                   </NavLink>
                 )
               })}
@@ -715,6 +544,7 @@ export default function Layout({ children }: PropsWithChildren) {
         </nav>
 
         {/* Mobile more sheet */}
+        <SystemUpdateModal show={showVersionPopover} onClose={() => setShowVersionPopover(false)} />
         {mobileMoreOpen && createPortal(
           <div className="fixed inset-0 z-[60] max-lg:block lg:hidden" role="dialog" aria-modal="true" aria-label={t('common.moreMenu')}>
             <button
@@ -743,23 +573,36 @@ export default function Layout({ children }: PropsWithChildren) {
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {mobileMoreNav.map((item) => {
                     const active = isNavActive(item)
+                    const className = cn(
+                      'flex min-h-[72px] flex-col items-start justify-center gap-2 rounded-xl border px-3.5 py-3 text-left transition-colors',
+                      active
+                        ? 'border-primary/25 bg-primary/10 text-primary'
+                        : 'border-border/80 bg-background/60 text-foreground hover:bg-muted/50',
+                    )
+                    const inner = (
+                      <>
+                        <span className={cn('flex size-9 items-center justify-center rounded-lg', active ? 'bg-primary/15' : 'bg-muted/70 text-muted-foreground')}>
+                          {item.icon}
+                        </span>
+                        <span className="text-[13px] font-semibold leading-tight">{t(item.labelKey)}</span>
+                      </>
+                    )
+                    if (item.external) {
+                      return (
+                        <a key={item.to} href={item.to} className={className} onClick={() => setMobileMoreOpen(false)}>
+                          {inner}
+                        </a>
+                      )
+                    }
                     return (
                       <NavLink
                         key={item.to}
                         to={item.to}
                         end={item.end}
                         onClick={() => setMobileMoreOpen(false)}
-                        className={cn(
-                          'flex min-h-[72px] flex-col items-start justify-center gap-2 rounded-xl border px-3.5 py-3 text-left transition-colors',
-                          active
-                            ? 'border-primary/25 bg-primary/10 text-primary'
-                            : 'border-border/80 bg-background/60 text-foreground hover:bg-muted/50',
-                        )}
+                        className={className}
                       >
-                        <span className={cn('flex size-9 items-center justify-center rounded-lg', active ? 'bg-primary/15' : 'bg-muted/70 text-muted-foreground')}>
-                          {item.icon}
-                        </span>
-                        <span className="text-[13px] font-semibold leading-tight">{t(item.labelKey)}</span>
+                        {inner}
                       </NavLink>
                     )
                   })}

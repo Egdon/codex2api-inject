@@ -23,6 +23,9 @@ FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS go-builder
 
 ARG TARGETARCH
 ARG BUILD_VERSION=dev
+ARG BUILD_SOURCE=patched
+ARG BUILD_UPSTREAM_BASE=unknown
+ARG BUILD_REVISION=unknown
 
 # 国内构建走 goproxy.cn，避免直连 proxy.golang.org 断流（unexpected EOF）
 ENV GOPROXY=https://goproxy.cn,direct
@@ -37,7 +40,7 @@ COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w -X github.com/codex2api/internal/version.Version=${BUILD_VERSION}" -o /codex2api .
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w -X github.com/codex2api/internal/version.Version=${BUILD_VERSION} -X github.com/codex2api/internal/version.Source=${BUILD_SOURCE} -X github.com/codex2api/internal/version.UpstreamBase=${BUILD_UPSTREAM_BASE} -X github.com/codex2api/internal/version.Revision=${BUILD_REVISION}" -o /codex2api .
 
 # ============================================================
 # Stage 3: 最终运行镜像

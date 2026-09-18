@@ -191,6 +191,10 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 	start := time.Now()
 	var resp *http.Response
 	var reqErr error
+	if !isClaudeAccount && !isAntigravityAccount && !isOpenAIResponsesAccount {
+		proxy.AttachUpstreamTraceForAdmin(c, h.store)
+		c.Request = c.Request.WithContext(proxy.WithCodexClientModel(c.Request.Context(), testModel))
+	}
 	if isClaudeAccount {
 		resp, reqErr = proxy.ExecuteClaudeMessagesRequest(c.Request.Context(), account, payload, h.store.ResolveProxyForAccount(account), c.Request.Header.Clone(), claudeFingerprintMode, claudeSecurityCfg)
 	} else if isAntigravityAccount {

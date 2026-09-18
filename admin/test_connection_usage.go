@@ -7,6 +7,7 @@ import (
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
+	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -228,6 +229,7 @@ func (h *Handler) logConnectionTestUsage(c *gin.Context, account *auth.Account, 
 		if c.Request != nil {
 			input.ClientUserAgent = strings.TrimSpace(c.Request.UserAgent())
 		}
+		proxy.PopulateUpstreamTrace(c, input)
 	}
 	_ = h.db.InsertUsageLog(context.Background(), input)
 }

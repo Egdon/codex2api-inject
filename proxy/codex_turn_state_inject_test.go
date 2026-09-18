@@ -2,40 +2,59 @@ package proxy
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/proxy/turnstate"
 	"github.com/tidwall/gjson"
 )
+
+func fakeHarvestToken(issued int64) string {
+	raw := make([]byte, 1+8+16+160+32)
+	raw[0] = 0x80
+	binary.BigEndian.PutUint64(raw[1:9], uint64(issued))
+	return base64.URLEncoding.EncodeToString(raw)
+}
 
 func turnStateTraceContext() (context.Context, *upstreamTraceAudit) {
 	audit := &upstreamTraceAudit{requestID: "req-1"}
 	return context.WithValue(context.Background(), upstreamTraceContextKey{}, audit), audit
 }
 
-// 凭据级注入是强制覆盖：写在客户端回带值与账号自定义头之后，还要挺过 HTTP 最后一跳
-// 的头装配；同时出站头与追踪（用量日志）对"注入了没有"必须给出同一个答案。
-func TestExecuteRequestInjectsCredentialTurnState(t *testing.T) {
-	const injected = "gAAAAABcredential-turn-state"
+func TestExecuteRequestInjectsHarvestTurnState(t *testing.T) {
+	turnstate.SetConfig(turnstate.Config{InjectEnabled: true})
+	t.Cleanup(func() {
+		turnstate.SetConfig(turnstate.DefaultConfig())
+		turnstate.Global().ReplaceAll(nil)
+	})
+	now := time.Now().Unix()
+	injected := fakeHarvestToken(now)
 	for _, tc := range []struct {
 		name         string
-		scope        string
-		clientModel  string
+		id           int64
+		putTicket    bool
 		customHeader string
 		wantHeader   string
 		wantInjected string
 	}{
-		{name: "override beats client header and custom header", customHeader: "custom-header-state", wantHeader: injected, wantInjected: injected},
-		{name: "scope hit on upstream model", scope: "gpt-5*", wantHeader: injected, wantInjected: injected},
-		{name: "scope hit on client model after mapping", scope: "my-alias", clientModel: "my-alias", wantHeader: injected, wantInjected: injected},
-		{name: "scope miss keeps client echo", scope: "claude-*", wantHeader: "client-state"},
-		{name: "scope miss lets custom header win as before", scope: "claude-*", customHeader: "custom-header-state", wantHeader: "custom-header-state"},
+		{name: "harvest ticket beats client header and custom header", id: 4242, putTicket: true, customHeader: "custom-header-state", wantHeader: injected, wantInjected: injected},
+		{name: "no harvest ticket keeps client echo", id: 4243, wantHeader: "client-state"},
+		{name: "no harvest ticket lets custom header win", id: 4244, customHeader: "custom-header-state", wantHeader: "custom-header-state"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			account := &auth.Account{DBID: 4242, AccessToken: "token-1", CodexTurnState: injected, CodexTurnStateModels: tc.scope}
+			if tc.putTicket {
+				turnstate.Global().Put(turnstate.CachedTicket{
+					AccountID: tc.id, Model: "gpt-5.5", Token: injected,
+					IssuedUnix: now, Length: 292, Blocks: 10,
+				})
+			}
+			account := &auth.Account{DBID: tc.id, AccessToken: "token-1"}
 			if tc.customHeader != "" {
 				account.CustomHeaders = map[string]string{"X-Codex-Turn-State": tc.customHeader}
 			}
@@ -54,7 +73,7 @@ func TestExecuteRequestInjectsCredentialTurnState(t *testing.T) {
 			clientPool.Delete(fmt.Sprintf("resin|%d", account.ID()))
 
 			ctx, _ := turnStateTraceContext()
-			ctx = WithCodexClientModel(ctx, tc.clientModel)
+			ctx = WithCodexClientModel(ctx, "gpt-5.5")
 			downstream := http.Header{}
 			downstream.Set("X-Codex-Turn-State", "client-state")
 			resp, err := ExecuteRequest(ctx, account, []byte(`{"model":"gpt-5.5","input":"hi"}`), "", "", "api-key-1", nil, downstream, false)
@@ -79,25 +98,33 @@ func TestExecuteRequestInjectsCredentialTurnState(t *testing.T) {
 	}
 }
 
-// WS 路径：握手头逐连接冻结，复用连接只认帧体，所以帧体 client_metadata 必须写。
 func TestPrepareCodexTurnStateInjectionWebsocketBody(t *testing.T) {
-	account := &auth.Account{DBID: 7, CodexTurnState: "ws-state"}
+	turnstate.SetConfig(turnstate.Config{InjectEnabled: true})
+	t.Cleanup(func() {
+		turnstate.SetConfig(turnstate.DefaultConfig())
+		turnstate.Global().ReplaceAll(nil)
+	})
+	now := time.Now().Unix()
+	wsState := fakeHarvestToken(now)
+	turnstate.Global().Put(turnstate.CachedTicket{
+		AccountID: 7, Model: "gpt-5.5", Token: wsState,
+		IssuedUnix: now, Length: 292, Blocks: 10,
+	})
+	account := &auth.Account{DBID: 7}
 	ctx, body, headers := prepareCodexTurnStateInjection(context.Background(), account, []byte(`{"model":"gpt-5.5"}`), nil, true)
-	if got := gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String(); got != "ws-state" {
-		t.Fatalf("frame client_metadata = %q, want ws-state", got)
+	if got := gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String(); got != wsState {
+		t.Fatalf("frame client_metadata = %q, want harvest token", got)
 	}
-	if got := headers.Get("X-Codex-Turn-State"); got != "ws-state" {
-		t.Fatalf("handshake header = %q, want ws-state", got)
+	if got := headers.Get("X-Codex-Turn-State"); got != wsState {
+		t.Fatalf("handshake header = %q, want harvest token", got)
 	}
-	if got := CodexTurnStateInjectionFromContext(ctx); got != "ws-state" {
-		t.Fatalf("ctx injection = %q, want ws-state", got)
+	if got := CodexTurnStateInjectionFromContext(ctx); got != wsState {
+		t.Fatalf("ctx injection = %q, want harvest token", got)
 	}
-	// HTTP 路径不动帧体。
 	_, httpBody, _ := prepareCodexTurnStateInjection(context.Background(), account, []byte(`{"model":"gpt-5.5"}`), nil, false)
 	if gjson.GetBytes(httpBody, "client_metadata").Exists() {
 		t.Fatal("HTTP path must not fabricate client_metadata")
 	}
-	// 未配置：全部原样。
 	plain := &auth.Account{DBID: 8}
 	ctx, body, headers = prepareCodexTurnStateInjection(context.Background(), plain, []byte(`{"model":"gpt-5.5"}`), nil, true)
 	if headers != nil || gjson.GetBytes(body, "client_metadata").Exists() || CodexTurnStateInjectionFromContext(ctx) != "" {
@@ -122,5 +149,50 @@ func TestObserveCodexTurnStateFrame(t *testing.T) {
 	}
 	if got := codexTurnStateFromFrame([]byte(`{"headers":{"x-codex-turn-state":"bad\nvalue"}}`)); got != "" {
 		t.Fatalf("control characters must be rejected: %q", got)
+	}
+}
+
+func TestPrepareCodexTurnStateInjectionOffIsNoop(t *testing.T) {
+	turnstate.SetConfig(turnstate.DefaultConfig())
+	account := &auth.Account{DBID: 9, CodexTurnState: "should-not-inject"}
+	ctx, body, headers := prepareCodexTurnStateInjection(context.Background(), account, []byte(`{"model":"gpt-6-astra"}`), http.Header{"X-Codex-Turn-State": {"client"}}, true)
+	if CodexTurnStateInjectionFromContext(ctx) != "" {
+		t.Fatal("inject switch off must not inject")
+	}
+	if headers.Get("X-Codex-Turn-State") != "client" {
+		t.Fatalf("client header mutated: %q", headers.Get("X-Codex-Turn-State"))
+	}
+	if gjson.GetBytes(body, "client_metadata.x-codex-turn-state").Exists() {
+		t.Fatal("WS metadata must stay untouched when inject is off")
+	}
+}
+
+func TestPrepareCodexTurnStateInjectionHarvestCacheByModel(t *testing.T) {
+	turnstate.SetConfig(turnstate.Config{InjectEnabled: true})
+	t.Cleanup(func() {
+		turnstate.SetConfig(turnstate.DefaultConfig())
+		turnstate.Global().ReplaceAll(nil)
+	})
+	now := time.Now().Unix()
+	astra := fakeHarvestToken(now)
+	turnstate.Global().Put(turnstate.CachedTicket{
+		AccountID: 11, Model: "gpt-6-astra", Token: astra,
+		IssuedUnix: now, Length: 292, Blocks: 10,
+	})
+	turnstate.Global().Put(turnstate.CachedTicket{
+		AccountID: 11, Model: "gpt-5.6-sol", Token: "sol-expired",
+		IssuedUnix: now - 4000, Length: 292, Blocks: 10,
+	})
+	account := &auth.Account{DBID: 11, CodexTurnState: "credential-fallback"}
+	_, body, headers := prepareCodexTurnStateInjection(context.Background(), account, []byte(`{"model":"gpt-6-astra"}`), nil, true)
+	if headers.Get("X-Codex-Turn-State") != astra {
+		t.Fatalf("astra harvest ticket not used: %q", headers.Get("X-Codex-Turn-State"))
+	}
+	if gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String() != astra {
+		t.Fatal("WS frame must carry harvest ticket")
+	}
+	_, _, solHeaders := prepareCodexTurnStateInjection(context.Background(), account, []byte(`{"model":"gpt-5.6-sol"}`), nil, true)
+	if solHeaders != nil && solHeaders.Get("X-Codex-Turn-State") != "" {
+		t.Fatalf("expired sol ticket must not inject, got %q", solHeaders.Get("X-Codex-Turn-State"))
 	}
 }
