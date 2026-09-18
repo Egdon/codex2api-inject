@@ -279,6 +279,6 @@ func (h *Handler) ServeInjectPage(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	// Independent page with inline JS/CSS. Override the global admin CSP that
 	// only allows the SPA theme-restore hash; otherwise the login button is a no-op.
-	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 	c.Data(http.StatusOK, "text/html; charset=utf-8", injectPageHTML)
 }
