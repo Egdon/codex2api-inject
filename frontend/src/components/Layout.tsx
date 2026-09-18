@@ -1,7 +1,7 @@
 import { type CSSProperties, type PropsWithChildren, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, Activity, Settings, Server, Languages, Globe, BookOpen, KeyRound, Image as ImageIcon, ShieldAlert, ExternalLink, ChevronLeft, Palette, Sun, Moon, LogOut, Download, Loader2, RefreshCw, Menu, X, CircleDollarSign, Braces, FlaskConical } from 'lucide-react'
+	import { LayoutDashboard, Users, Activity, Settings, Server, Languages, Globe, BookOpen, KeyRound, Image as ImageIcon, ShieldAlert, ExternalLink, ChevronLeft, Palette, Sun, Moon, LogOut, Download, Loader2, RefreshCw, Menu, X, CircleDollarSign, Braces, FlaskConical, Ticket } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { api, resetAdminAuthState } from '../api'
 import { DEFAULT_SITE_LOGO, isBrandingVideo, useBranding } from '../branding'
@@ -14,13 +14,14 @@ import SecurityBanner from './SecurityBanner'
 import { cn } from '@/lib/utils'
 import { CinematicThemeSwitcher } from '@/components/ui/cinematic-theme-switcher'
 
-type NavDef = {
-  to: string
-  labelKey: string
-  icon: ReactNode
-  end?: boolean
-  activePrefix?: string
-}
+	type NavDef = {
+	  to: string
+	  labelKey: string
+	  icon: ReactNode
+	  end?: boolean
+	  activePrefix?: string
+	  external?: boolean
+	}
 
 const navDefs: NavDef[] = [
   { to: '/', labelKey: 'nav.dashboard', icon: <LayoutDashboard className="size-[18px]" />, end: true },
@@ -33,8 +34,9 @@ const navDefs: NavDef[] = [
   { to: '/ops/overview', labelKey: 'nav.ops', icon: <Server className="size-[18px]" />, activePrefix: '/ops' },
   { to: '/usage', labelKey: 'nav.usage', icon: <Activity className="size-[18px]" /> },
   { to: '/model-pricing', labelKey: 'nav.modelPricing', icon: <CircleDollarSign className="size-[18px]" /> },
-  { to: '/payload-rules/editor', labelKey: 'nav.payloadRules', icon: <Braces className="size-[18px]" />, activePrefix: '/payload-rules' },
-  { to: '/theme', labelKey: 'nav.theme', icon: <Palette className="size-[18px]" /> },
+	  { to: '/payload-rules/editor', labelKey: 'nav.payloadRules', icon: <Braces className="size-[18px]" />, activePrefix: '/payload-rules' },
+	  { to: '/inject', labelKey: 'nav.turnStateInject', icon: <Ticket className="size-[18px]" />, external: true },
+	  { to: '/theme', labelKey: 'nav.theme', icon: <Palette className="size-[18px]" /> },
   { to: '/settings', labelKey: 'nav.settings', icon: <Settings className="size-[18px]" /> },
   { to: '/docs', labelKey: 'nav2.docs', icon: <BookOpen className="size-[18px]" /> },
 ]
@@ -496,41 +498,54 @@ export default function Layout({ children }: PropsWithChildren) {
               >
                 {t('nav.console')}
               </span>
-              {navDefs.map((item) => {
-                const active = isNavActive(item)
-                const label = t(item.labelKey)
-                return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.end}
-                    title={sidebarCollapsed ? label : undefined}
-                    className={cn(
-                      'relative flex min-h-10 items-center rounded-xl border text-[14px] font-semibold transition-[background-color,color,border-color,padding,gap]',
-                      containerEase,
-                      sidebarCollapsed ? 'justify-center px-2 py-2' : 'gap-2.5 px-3 py-2',
-                      active
-                        ? 'border-primary/20 bg-primary/10 text-primary'
-                        : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                    )}
-                  >
-                    {active ? (
-                      <span
-                        aria-hidden
-                        className={cn(
-                          'absolute top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-primary',
-                          sidebarCollapsed ? 'left-1' : 'left-1.5',
-                        )}
-                      />
-                    ) : null}
-                    {item.icon}
-                    <span
-                      className={`overflow-hidden whitespace-nowrap transition-[max-width,opacity] ${textEase} ${textRevealDelay} ${
-                        sidebarCollapsed ? 'max-w-0 opacity-0' : 'max-w-[160px] opacity-100'
-                      }`}
-                    >
-                      {label}
-                    </span>
+	              {navDefs.map((item) => {
+	                const active = isNavActive(item)
+	                const label = t(item.labelKey)
+	                const className = cn(
+	                  'relative flex min-h-10 items-center rounded-xl border text-[14px] font-semibold transition-[background-color,color,border-color,padding,gap]',
+	                  containerEase,
+	                  sidebarCollapsed ? 'justify-center px-2 py-2' : 'gap-2.5 px-3 py-2',
+	                  active
+	                    ? 'border-primary/20 bg-primary/10 text-primary'
+	                    : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+	                )
+	                const inner = (
+	                  <>
+	                    {active ? (
+	                      <span
+	                        aria-hidden
+	                        className={cn(
+	                          'absolute top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-primary',
+	                          sidebarCollapsed ? 'left-1' : 'left-1.5',
+	                        )}
+	                      />
+	                    ) : null}
+	                    {item.icon}
+	                    <span
+	                      className={`overflow-hidden whitespace-nowrap transition-[max-width,opacity] ${textEase} ${textRevealDelay} ${
+	                        sidebarCollapsed ? 'max-w-0 opacity-0' : 'max-w-[160px] opacity-100'
+	                      }`}
+	                    >
+	                      {label}
+	                    </span>
+	                  </>
+	                )
+	                if (item.external) {
+	                  return (
+	                    <a key={item.to} href={item.to} title={sidebarCollapsed ? label : undefined} className={className}>
+	                      {inner}
+	                    </a>
+	                  )
+	                }
+	                return (
+	                  <NavLink
+	                    key={item.to}
+	                    to={item.to}
+	                    end={item.end}
+	                    title={sidebarCollapsed ? label : undefined}
+	                    className={className}
+	                  >
+                    {inner}
                   </NavLink>
                 )
               })}
@@ -743,23 +758,36 @@ export default function Layout({ children }: PropsWithChildren) {
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {mobileMoreNav.map((item) => {
                     const active = isNavActive(item)
+                    const className = cn(
+                      'flex min-h-[72px] flex-col items-start justify-center gap-2 rounded-xl border px-3.5 py-3 text-left transition-colors',
+                      active
+                        ? 'border-primary/25 bg-primary/10 text-primary'
+                        : 'border-border/80 bg-background/60 text-foreground hover:bg-muted/50',
+                    )
+                    const inner = (
+                      <>
+                        <span className={cn('flex size-9 items-center justify-center rounded-lg', active ? 'bg-primary/15' : 'bg-muted/70 text-muted-foreground')}>
+                          {item.icon}
+                        </span>
+                        <span className="text-[13px] font-semibold leading-tight">{t(item.labelKey)}</span>
+                      </>
+                    )
+                    if (item.external) {
+                      return (
+                        <a key={item.to} href={item.to} className={className} onClick={() => setMobileMoreOpen(false)}>
+                          {inner}
+                        </a>
+                      )
+                    }
                     return (
                       <NavLink
                         key={item.to}
                         to={item.to}
                         end={item.end}
                         onClick={() => setMobileMoreOpen(false)}
-                        className={cn(
-                          'flex min-h-[72px] flex-col items-start justify-center gap-2 rounded-xl border px-3.5 py-3 text-left transition-colors',
-                          active
-                            ? 'border-primary/25 bg-primary/10 text-primary'
-                            : 'border-border/80 bg-background/60 text-foreground hover:bg-muted/50',
-                        )}
+                        className={className}
                       >
-                        <span className={cn('flex size-9 items-center justify-center rounded-lg', active ? 'bg-primary/15' : 'bg-muted/70 text-muted-foreground')}>
-                          {item.icon}
-                        </span>
-                        <span className="text-[13px] font-semibold leading-tight">{t(item.labelKey)}</span>
+                        {inner}
                       </NavLink>
                     )
                   })}

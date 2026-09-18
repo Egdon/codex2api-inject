@@ -1335,27 +1335,28 @@ function EmptyPanel({ accent, icon, text }: { accent: PanelAccentKey; icon: Reac
   )
 }
 
-type UsageTableColumn = 'status' | 'error' | 'model' | 'account' | 'apiKey' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
+	type UsageTableColumn = 'status' | 'error' | 'turnState' | 'model' | 'account' | 'apiKey' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
 
-const USAGE_COLUMN_DEFINITIONS: Array<{ key: UsageTableColumn; labelKey: string }> = [
-  { key: 'status', labelKey: 'usage.tableStatus' },
-  { key: 'model', labelKey: 'usage.tableModel' },
-  { key: 'account', labelKey: 'usage.tableAccount' },
-  { key: 'apiKey', labelKey: 'usage.tableApiKey' },
-  { key: 'clientIp', labelKey: 'usage.tableClientIP' },
-  { key: 'userAgent', labelKey: 'usage.tableUserAgent' },
-  { key: 'endpoint', labelKey: 'usage.tableEndpoint' },
-  { key: 'type', labelKey: 'usage.tableType' },
-  { key: 'token', labelKey: 'usage.tableToken' },
-  { key: 'cached', labelKey: 'usage.tableCached' },
-  { key: 'wsAcquire', labelKey: 'usage.tableWsAcquire' },
-  { key: 'timing', labelKey: 'usage.tableTiming' },
-  { key: 'tokensPerSec', labelKey: 'usage.tableTokensPerSec' },
-  { key: 'cost', labelKey: 'usage.tableCost' },
-  // 错误摘要宽度随内容波动，放倒数第二列避免撑开中段（issue #522）
-  { key: 'error', labelKey: 'usage.tableError' },
-  { key: 'time', labelKey: 'usage.tableTime' },
-]
+	const USAGE_COLUMN_DEFINITIONS: Array<{ key: UsageTableColumn; labelKey: string }> = [
+	  { key: 'status', labelKey: 'usage.tableStatus' },
+	  { key: 'model', labelKey: 'usage.tableModel' },
+	  { key: 'account', labelKey: 'usage.tableAccount' },
+	  { key: 'apiKey', labelKey: 'usage.tableApiKey' },
+	  { key: 'clientIp', labelKey: 'usage.tableClientIP' },
+	  { key: 'userAgent', labelKey: 'usage.tableUserAgent' },
+	  { key: 'endpoint', labelKey: 'usage.tableEndpoint' },
+	  { key: 'type', labelKey: 'usage.tableType' },
+	  { key: 'token', labelKey: 'usage.tableToken' },
+	  { key: 'cached', labelKey: 'usage.tableCached' },
+	  { key: 'wsAcquire', labelKey: 'usage.tableWsAcquire' },
+	  { key: 'timing', labelKey: 'usage.tableTiming' },
+	  { key: 'tokensPerSec', labelKey: 'usage.tableTokensPerSec' },
+	  { key: 'cost', labelKey: 'usage.tableCost' },
+	  // 错误摘要宽度随内容波动，放倒数第二列避免撑开中段（issue #522）
+	  { key: 'error', labelKey: 'usage.tableError' },
+	  { key: 'turnState', labelKey: 'usage.tableTurnState' },
+	  { key: 'time', labelKey: 'usage.tableTime' },
+	]
 
 // 列设置菜单按这个顺序列出可选列，与表头顺序一致。
 const USAGE_TABLE_COLUMN_ORDER: readonly UsageTableColumn[] = USAGE_COLUMN_DEFINITIONS.map((column) => column.key)
@@ -1377,10 +1378,11 @@ const DEFAULT_USAGE_VISIBLE_COLUMNS: Record<UsageTableColumn, boolean> = {
   // 取得连接耗时属于深挖排障信息，默认隐藏，需在列设置中手动开启
   wsAcquire: false,
   tokensPerSec: true,
-  // 首字 + 总耗时聚合为「用时」一列
-  timing: true,
-  time: true,
-}
+	  // 首字 + 总耗时聚合为「用时」一列
+	  timing: true,
+	  turnState: true,
+	  time: true,
+	}
 
 /**
  * Output tokens/sec from existing log fields — no backend change needed.
@@ -1418,7 +1420,35 @@ function tokensPerSecClassName(value: number): string {
   return 'text-red-500 dark:text-red-400'
 }
 
-function TokensPerSecCell({ log }: { log: UsageLog }) {
+	const FULL_BLOOD_TURN_STATE_CHARS = 292
+
+	function turnStateLengthForLog(log: UsageLog): { length: number; source: 'injected' | 'upstream' } | null {
+	  const injected = (log.injected_turn_state ?? '').trim()
+	  if (injected) return { length: injected.length, source: 'injected' }
+	  const upstream = (log.upstream_turn_state ?? '').trim()
+	  if (upstream) return { length: upstream.length, source: 'upstream' }
+	  return null
+	}
+
+	function TurnStateLengthCell({ log, mobile = false }: { log: UsageLog; mobile?: boolean }) {
+	  const { t } = useTranslation()
+	  const info = turnStateLengthForLog(log)
+	  if (!info) {
+	    return <span className={`${usageTableMonoClass} text-muted-foreground/50`}>-</span>
+	  }
+	  const full = info.length === FULL_BLOOD_TURN_STATE_CHARS
+	  const sourceLabel = info.source === 'injected' ? t('usage.injectedTurnState') : t('usage.upstreamTurnState')
+	  return (
+	    <span
+	      className={`${usageTableMonoClass} font-semibold ${full ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'} ${mobile ? '' : 'whitespace-nowrap'}`}
+	      title={`${sourceLabel}: ${info.length}`}
+	    >
+	      {info.length}({t(full ? 'usage.turnStateFull' : 'usage.turnStateDegraded')})
+	    </span>
+	  )
+	}
+
+	function TokensPerSecCell({ log }: { log: UsageLog }) {
   const value = computeOutputTokensPerSec(log)
   if (value == null) {
     return <span className={`${usageTableMonoClass} text-muted-foreground/50`}>-</span>
@@ -2540,6 +2570,12 @@ export default function Usage() {
                       </div>
 
                       {visibleColumns.error && <UsageErrorSummaryCell log={log} mobile />}
+                      {visibleColumns.turnState && (
+                        <div className="mt-2.5">
+                          <span className="text-[11px] font-semibold text-muted-foreground">{t('usage.tableTurnState')}: </span>
+                          <TurnStateLengthCell log={log} mobile />
+                        </div>
+                      )}
 
                       {hasDetails && (
                         <div className="mt-2.5 space-y-1 text-xs text-muted-foreground">
@@ -2691,6 +2727,7 @@ export default function Usage() {
                       )}
                       {visibleColumns.cost && <TableHead className={`${usageTableHeadClass} text-right`}>{t('usage.tableCost')}</TableHead>}
                       {visibleColumns.error && <TableHead className={usageTableHeadClass}>{t('usage.tableError')}</TableHead>}
+                      {visibleColumns.turnState && <TableHead className={usageTableHeadClass}>{t('usage.tableTurnState')}</TableHead>}
                       {visibleColumns.time && <TableHead className={`${usageTableHeadClass} text-right`}>{t('usage.tableTime')}</TableHead>}
                     </TableRow>
                   </TableHeader>
@@ -2861,6 +2898,9 @@ export default function Usage() {
                         </TableCell>}
                         {visibleColumns.error && <TableCell>
                           <UsageErrorSummaryCell log={log} />
+                        </TableCell>}
+                        {visibleColumns.turnState && <TableCell>
+                          <TurnStateLengthCell log={log} />
                         </TableCell>}
                         {visibleColumns.time && <TableCell className={`${usageTableMonoClass} text-right whitespace-nowrap`}>
                           <UsageTimeCell value={log.created_at} />

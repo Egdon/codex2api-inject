@@ -197,7 +197,8 @@
     "images": "Images",
     "promptFilter": "Prompt Filter",
     "modelPricing": "Model Pricing",
-    "payloadRules": "Payload Rules"
+    "payloadRules": "Payload Rules",
+    "turnStateInject": "Turn State"
   },
   "antigravity": {
     "pageTitle": "Antigravity Accounts",
@@ -2474,6 +2475,7 @@
     "emptyFilteredDesc": "No request logs match the current filters. Clear filters and try again.",
     "tableStatus": "Status",
     "tableError": "Error Summary",
+    "tableTurnState": "TURN-STATE",
     "tableModel": "Model",
     "tableAccount": "Account",
     "tableApiKey": "API Key",
@@ -2488,6 +2490,8 @@
     "userAgentWebSocketHint": "For WebSocket requests, the upstream value is the User-Agent sent when the actual reused or new connection was established.",
     "injectedTurnState": "Injected Turn State",
     "upstreamTurnState": "Upstream Turn State",
+    "turnStateFull": "Full",
+    "turnStateDegraded": "Degraded",
     "tableEndpoint": "Endpoint",
     "tableType": "Type",
     "tableToken": "Tokens",
