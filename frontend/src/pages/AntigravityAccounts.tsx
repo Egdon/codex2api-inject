@@ -1,4 +1,13 @@
 import { ANTIGRAVITY_DEFAULT_MODELS } from "../lib/antigravityModels";
+import {
+  antigravitySelectionSummary,
+  isAntigravitySelectionAccount,
+  reconcileAntigravitySelection,
+  setAntigravitySelection,
+  type AntigravitySelection,
+} from "../lib/antigravitySelection";
+import { AntigravityBatchActions } from "../components/AntigravityBatchActions";
+import { AntigravityCooldownDetails, AntigravityCooldownSummary } from "../components/AntigravityCooldownDetails";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -560,6 +569,34 @@ function AccountMetadataFields({
   );
 }
 
+function SelectionCheckbox({
+  checked,
+  indeterminate = false,
+  disabled,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  disabled: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <input
+      ref={(element) => { if (element) element.indeterminate = indeterminate; }}
+      type="checkbox"
+      className="size-4 shrink-0 cursor-pointer accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+      checked={checked}
+      aria-checked={indeterminate ? "mixed" : checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => onChange(event.target.checked)}
+    />
+  );
+}
+
 function CompactQuota({ account, onOpen }: { account: AccountRow; onOpen: () => void }) {
   const { t } = useTranslation();
   const entries = modelQuotaEntries(account.antigravity_quota);
@@ -583,7 +620,7 @@ function CompactQuota({ account, onOpen }: { account: AccountRow; onOpen: () => 
       type="button"
       onClick={onOpen}
       className="group min-w-[150px] text-left"
-      title={t("antigravity.viewDetails")}
+      title={t("antigravity.quotaMinimumHint")}
     >
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="font-semibold text-foreground">
@@ -945,6 +982,60 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [selectedAccountsById, setSelectedAccountsById] = useState<AntigravitySelection>(() => new Map());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const batchBusyRef = useRef(false);
+  const deletedSelectionIdsRef = useRef(new Set<number>());
+  const selectedAccounts = useMemo(() => Array.from(selectedAccountsById.values()), [selectedAccountsById]);
+  const selectionSummary = useMemo(
+    () => antigravitySelectionSummary(selectedAccountsById, accounts),
+    [selectedAccountsById, accounts],
+  );
+  const onBatchBusyChange = useCallback((nextBusy: boolean) => {
+    // The ref also fences clicks queued before React paints disabled controls.
+    batchBusyRef.current = nextBusy;
+    setBatchBusy(nextBusy);
+    if (!nextBusy && deletedSelectionIdsRef.current.size > 0) {
+      const deletedIds = deletedSelectionIdsRef.current;
+      deletedSelectionIdsRef.current = new Set();
+      setSelectedAccountsById((current) => {
+        const next = new Map(current);
+        for (const id of deletedIds) next.delete(id);
+        return next;
+      });
+    }
+  }, []);
+  const onBatchDeleted = useCallback((ids: number[]) => {
+    if (batchBusyRef.current) {
+      for (const id of ids) deletedSelectionIdsRef.current.add(id);
+      return;
+    }
+    setSelectedAccountsById((current) => {
+      const next = new Map(current);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => {
+    if (!batchBusyRef.current) setSelectedAccountsById(new Map());
+  }, []);
+  const setAccountSelected = useCallback((account: AccountRow, selected: boolean) => {
+    if (batchBusyRef.current) return;
+    setSelectedAccountsById((current) =>
+      setAntigravitySelection(current, [account], selected, batchBusyRef.current),
+    );
+  }, []);
+  const setVisibleSelected = useCallback((selected: boolean) => {
+    if (batchBusyRef.current) return;
+    setSelectedAccountsById((current) =>
+      setAntigravitySelection(current, accounts, selected, batchBusyRef.current),
+    );
+  }, [accounts]);
+  useEffect(() => {
+    setSelectedAccountsById((current) =>
+      reconcileAntigravitySelection(current, accounts, batchBusyRef.current),
+    );
+  }, [accounts, batchBusy]);
   const [allGroups, setAllGroups] = useState<AccountGroup[]>([]);
   const antigravityGroups = useMemo(
     () => allGroups.filter((group) => group.channel === "antigravity"),
@@ -1169,9 +1260,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
           controller.signal,
         );
         if (controller.signal.aborted) return;
-        const rows = (response.accounts ?? []).filter(
-          (account) => account.antigravity_api !== false,
-        );
+        const rows = (response.accounts ?? []).filter(isAntigravitySelectionAccount);
         setAccounts(rows);
         setTotalAccounts(response.total ?? 0);
         setServerSummary(response.summary ?? null);
@@ -1196,6 +1285,15 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
       showToast,
       statusFilter,
     ],
+  );
+
+  const latestReloadRef = useRef(reload);
+  useEffect(() => {
+    latestReloadRef.current = reload;
+  }, [reload]);
+  const onBatchChanged = useCallback(
+    () => latestReloadRef.current({ silent: true }),
+    [],
   );
 
   useEffect(() => {
@@ -1648,6 +1746,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
       operation: () => Promise<{ warning?: string }>,
       successMessage: string,
     ) => {
+      if (batchBusyRef.current) return;
       setBusy({ id: account.id, action });
       try {
         const result = await operation();
@@ -1667,6 +1766,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
 
   const handleDelete = useCallback(
     async (account: AccountRow) => {
+      if (batchBusyRef.current) return;
       const confirmed = await confirm({
         title: t("antigravity.deleteTitle"),
         description: t("antigravity.deleteDescription", {
@@ -1676,15 +1776,19 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
         tone: "destructive",
         confirmVariant: "destructive",
       });
-      if (!confirmed) return;
+      if (!confirmed || batchBusyRef.current) return;
       await runAccountAction(
         account,
         "delete",
-        () => api.deleteAccount(account.id),
+        async () => {
+          const result = await api.deleteAccount(account.id);
+          onBatchDeleted([account.id]);
+          return result;
+        },
         t("antigravity.deleteSuccess"),
       );
     },
-    [confirm, runAccountAction, t],
+    [confirm, onBatchDeleted, runAccountAction, t],
   );
 
   const filtersActive = Boolean(
@@ -1791,7 +1895,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
   };
 
   const renderActions = (account: AccountRow) => {
-    const accountBusy = busy?.id === account.id;
+    const accountBusy = batchBusy || busy?.id === account.id;
     const isAPIKey = account.antigravity_auth_kind === "api_key";
     return (
       <div className="flex items-center justify-end gap-0.5">
@@ -1980,7 +2084,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
         />
       </div>
 
-      <div className="mb-4 flex flex-col gap-2 rounded-lg border border-border bg-card p-3 sm:flex-row sm:items-center">
+      <div className="toolbar-surface mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -2034,6 +2138,46 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
         ) : null}
       </div>
 
+      <div className="toolbar-surface mb-3 flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+          <SelectionCheckbox
+            checked={selectionSummary.allVisibleSelected}
+            indeterminate={selectionSummary.someVisibleSelected}
+            disabled={batchBusy || loading || accounts.length === 0}
+            label={t("antigravity.selection.selectPage")}
+            onChange={setVisibleSelected}
+          />
+          {t("antigravity.selection.selectPage")}
+        </label>
+        <span className="text-xs text-muted-foreground" aria-live="polite">
+          {t("antigravity.selection.selectedCount", { count: selectedAccounts.length })}
+          {selectionSummary.hiddenSelectedCount > 0 ? (
+            <> · {t("antigravity.selection.hiddenCount", { count: selectionSummary.hiddenSelectedCount })}</>
+          ) : null}
+        </span>
+        {selectedAccounts.length > 0 ? (
+          <Button variant="ghost" size="sm" disabled={batchBusy} onClick={clearSelection}>
+            <X className="size-3.5" />
+            {t("antigravity.selection.clear")}
+          </Button>
+        ) : null}
+        {batchBusy ? (
+          <span className="text-xs text-muted-foreground" role="status">
+            {t("antigravity.selection.busy")}
+          </span>
+        ) : null}
+      </div>
+      <AntigravityBatchActions
+        selectedAccounts={selectedAccounts}
+        hiddenSelectedCount={selectionSummary.hiddenSelectedCount}
+        proxies={proxyPool}
+        groups={antigravityGroups}
+        onClearSelection={clearSelection}
+        onChanged={onBatchChanged}
+        onBusyChange={onBatchBusyChange}
+        onDeleted={onBatchDeleted}
+      />
+
       <StateShell
         variant="page"
         loading={loading && accounts.length === 0}
@@ -2072,6 +2216,15 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
           <Table className="[&_td]:px-2.5 [&_th]:px-2.5 [&_td]:py-3">
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <SelectionCheckbox
+                    checked={selectionSummary.allVisibleSelected}
+                    indeterminate={selectionSummary.someVisibleSelected}
+                    disabled={batchBusy || loading || accounts.length === 0}
+                    label={t("antigravity.selection.selectPage")}
+                    onChange={setVisibleSelected}
+                  />
+                </TableHead>
                 <TableHead className="text-[13px] font-semibold">{t("antigravity.columnAccount")}</TableHead>
                 {visibleColumns.project ? (
                   <TableHead className="text-[13px] font-semibold">{t("antigravity.columnProject")}</TableHead>
@@ -2100,6 +2253,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
               {accounts.map((account) => (
                 <TableRow
                   key={account.id}
+                  data-state={selectedAccountsById.has(account.id) ? "selected" : undefined}
                   className={cn("cursor-pointer", account.enabled === false && "opacity-65")}
                   onClick={(event) => {
                     // 整行可点开详情;命中按钮/链接/输入框/菜单时交给它们自己处理(与 Grok/Claude 页一致)
@@ -2108,6 +2262,14 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
                     openDetailAccount(account.id);
                   }}
                 >
+                  <TableCell onClick={(event) => event.stopPropagation()}>
+                    <SelectionCheckbox
+                      checked={selectedAccountsById.has(account.id)}
+                      disabled={batchBusy || loading}
+                      label={t("antigravity.selection.selectAccount", { account: accountLabel(account) })}
+                      onChange={(selected) => setAccountSelected(account, selected)}
+                    />
+                  </TableCell>
                   <TableCell className="min-w-[220px]">
                     <div className="flex min-w-0 items-center gap-2.5">
                       <AccountAvatar account={account} size={32} />
@@ -2189,6 +2351,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
                           status={account.enabled === false ? "paused" : account.status}
                           errorMessage={account.error_message}
                         />
+                        <AntigravityCooldownSummary account={account} />
                         {account.locked ? (
                           <Badge variant="outline" className="text-[10px]">
                             <KeyRound className="size-3" />
@@ -2218,10 +2381,17 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
               key={account.id}
               className={cn(
                 "rounded-lg border border-border bg-card p-3 shadow-sm",
+                selectedAccountsById.has(account.id) && "border-primary bg-accent/30",
                 account.enabled === false && "opacity-65",
               )}
             >
               <div className="flex items-start gap-3">
+                <SelectionCheckbox
+                  checked={selectedAccountsById.has(account.id)}
+                  disabled={batchBusy || loading}
+                  label={t("antigravity.selection.selectAccount", { account: accountLabel(account) })}
+                  onChange={(selected) => setAccountSelected(account, selected)}
+                />
                 <button
                   type="button"
                   className="flex min-w-0 flex-1 items-start gap-3 text-left"
@@ -2246,10 +2416,13 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
                     <GroupChips account={account} groups={allGroups} />
                   </span>
                 </button>
-                <StatusBadge
-                  status={account.enabled === false ? "paused" : account.status}
-                  errorMessage={account.error_message}
-                />
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <StatusBadge
+                    status={account.enabled === false ? "paused" : account.status}
+                    errorMessage={account.error_message}
+                  />
+                  <AntigravityCooldownSummary account={account} />
+                </div>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-3 border-t border-border pt-3 text-xs">
                 <div className="min-w-0">
@@ -2984,6 +3157,11 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
               action={managementAction}
               onSync={() => void handleStateSync()}
               onProbe={() => void handleCapabilityProbe()}
+            />
+            <AntigravityCooldownDetails
+              key={detailAccount.id}
+              accountId={detailAccount.id}
+              onChanged={onBatchChanged}
             />
             <QuotaDetail account={detailAccount} />
           </div>

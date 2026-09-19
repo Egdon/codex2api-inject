@@ -16,7 +16,7 @@ function element() {
 }
 function fixture() {
   const elements = new Map();
-  const document = {querySelectorAll(){return [];},getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);}};
+  const document = {documentElement:{dataset:{cfgLoaded:'1'}},querySelectorAll(){return [];},getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);}};
   const context = vm.createContext({document,Option:function(text,value){this.text=text;this.value=value;},localStorage:{getItem(){return null;}},sessionStorage:{getItem(){return null;},setItem(){}},performance:{now(){return 1000;}},Date,console,setTimeout,clearTimeout});
   vm.runInContext(definitions,context);
   return {context,elements,run:code=>vm.runInContext(code,context)};
@@ -178,6 +178,131 @@ test('Astra legacy outcomes have unavailable counts, never fabricated batch evid
   }
   assert.equal(policyFixture(undefined).context.view.policy.hidden,true);
   assert.equal(policyFixture({}).context.view.policy.hidden,true);
+});
+
+test('proxy selector exposes independent controls with safe legacy defaults',()=> {
+  const f=fixture(); f.run('fillCfg({})');
+  assert.equal(f.elements.get('harvest_proxy_provider').value,'zooproxy');
+  assert.equal(f.elements.get('zooproxy_panel').hidden,false);
+  assert.equal(f.elements.get('litport_panel').hidden,true);
+  assert.equal(f.elements.get('litport_host').value,'hub-us-10.litport.net:1337');
+  assert.equal(f.elements.get('litport_username').value,'');
+  assert.equal(f.elements.get('litport_region').value,'DE');
+  assert.equal(f.elements.get('litport_region_mode').value,'fixed');
+  assert.equal(f.elements.get('litport_session_seconds').value,600);
+  assert.match(source,/id="litport_session_seconds" type="number" min="1" max="86400" step="1" value="600" required/);
+  for(const field of ['harvest_proxy_provider','litport_host','litport_username','litport_password','litport_region','litport_region_mode','litport_session_seconds']) {
+    f.context.field=field;
+    assert.equal(f.run('configInputs.includes(field)'),true);
+  }
+  assert.doesNotMatch(source,/ZooProxy 出口/);
+});
+
+test('provider switching changes visibility only, preserving hidden edits and passwords',()=> {
+  const f=fixture();
+  f.run(`fillCfg({}); $('zoo_user_prefix').value='zoo-fixture'; $('zoo_password').value='zoo-test-secret';
+    $('litport_username').value='litport-fixture'; $('litport_password').value='litport-test-secret';
+    $('harvest_proxy_provider').value='litport'; updateProxyPanels(); markCfgDirty();`);
+  assert.equal(f.elements.get('zooproxy_panel').hidden,true);
+  assert.equal(f.elements.get('litport_panel').hidden,false);
+  f.run("$('harvest_proxy_provider').value='zooproxy'; updateProxyPanels(); markCfgDirty()");
+  assert.equal(f.elements.get('zoo_user_prefix').value,'zoo-fixture');
+  assert.equal(f.elements.get('zoo_password').value,'zoo-test-secret');
+  assert.equal(f.elements.get('litport_username').value,'litport-fixture');
+  assert.equal(f.elements.get('litport_password').value,'litport-test-secret');
+  assert.equal(f.run('cfgDirty'),true);
+  assert.equal(f.run('cfgEditRevision'),2);
+});
+
+test('fill never echoes either password, using only saved flags',()=> {
+  const f=fixture();
+  f.run(`fillCfg({zoo_password:'not-for-display',litport_password:'not-for-display',zoo_password_set:true,litport_password_set:true})`);
+  for(const id of ['zoo_password','litport_password']) {
+    assert.equal(f.elements.get(id).value,'');
+    assert.equal(f.elements.get(id).placeholder,'已保存，留空不改');
+  }
+});
+
+test('shared save sends both configurations and clears both passwords only on matching revision',async()=> {
+  const f=fixture();
+  f.run(`data={config:{}}; fillCfg({models:['gpt-6-astra']});
+    $('zoo_host').value='zoo.example:5000'; $('zoo_user_prefix').value='zoo-fixture';
+    $('zoo_password').value='zoo-test-secret'; $('litport_password').value='litport-test-secret';
+    $('litport_username').value='litport-fixture'; $('litport_region').value='FR';
+    $('litport_region_mode').value='rotation'; $('litport_session_seconds').value='900';
+    $('harvest_proxy_provider').value='litport'; updateProxyPanels(); markCfgDirty();
+    mutate=work=>work(); api=async(path,opts)=>{globalThis.savedBody=JSON.parse(opts.body);return {...savedBody,zoo_password_set:true,litport_password_set:true};};`);
+  await f.run('saveCfg()');
+  assert.equal(f.context.savedBody.harvest_proxy_provider,'litport');
+  assert.equal(f.context.savedBody.zoo_host,'zoo.example:5000');
+  assert.equal(f.context.savedBody.zoo_user_prefix,'zoo-fixture');
+  assert.equal(f.context.savedBody.litport_username,'litport-fixture');
+  assert.equal(f.context.savedBody.litport_region,'FR');
+  assert.equal(f.context.savedBody.litport_region_mode,'rotation');
+  assert.equal(f.context.savedBody.litport_session_seconds,900);
+  assert.equal(f.context.savedBody.zoo_password,'zoo-test-secret');
+  assert.equal(f.context.savedBody.litport_password,'litport-test-secret');
+  assert.equal(f.elements.get('zoo_password').value,'');
+  assert.equal(f.elements.get('litport_password').value,'');
+  assert.equal(f.run('cfgDirty'),false);
+
+  f.run(`api=(path,opts)=>{globalThis.savedBody=JSON.parse(opts.body);return new Promise(resolve=>{globalThis.finishSave=resolve;});}; markCfgDirty();`);
+  const saving=f.run('saveCfg()');
+  f.run(`$('litport_password').value='later-litport-secret'; $('zoo_password').value='later-zoo-secret';
+    $('harvest_proxy_provider').value='zooproxy'; updateProxyPanels(); markCfgDirty(); finishSave(savedBody);`);
+  await saving;
+  assert.equal(f.elements.get('litport_password').value,'later-litport-secret');
+  assert.equal(f.elements.get('zoo_password').value,'later-zoo-secret');
+  assert.equal(f.elements.get('harvest_proxy_provider').value,'zooproxy');
+  assert.equal(f.run('cfgDirty'),true);
+});
+
+test('poll and manual refresh preserve dirty provider and hidden fields, even when edits arrive in flight',async()=> {
+  const f=fixture();
+  f.run(`data={config:{}}; fillCfg({}); groupsAttempted=true; render=()=>{};
+    api=()=>new Promise(resolve=>{globalThis.finishLoad=resolve;});`);
+  const loading=f.run('load({fillCfg:true})');
+  f.run(`$('harvest_proxy_provider').value='litport'; updateProxyPanels();
+    $('litport_password').value='typed-litport-secret'; $('zoo_password').value='typed-zoo-secret';
+    $('zoo_host').value='edited.example:5000'; markCfgDirty();
+    finishLoad({config:{harvest_proxy_provider:'zooproxy',zoo_host:'stale.example:5000'},accounts:[]});`);
+  await loading;
+  assert.equal(f.elements.get('harvest_proxy_provider').value,'litport');
+  assert.equal(f.elements.get('zoo_host').value,'edited.example:5000');
+  assert.equal(f.elements.get('litport_password').value,'typed-litport-secret');
+  assert.equal(f.elements.get('zoo_password').value,'typed-zoo-secret');
+  f.run('api=async()=>({config:{},accounts:[]})');
+  await f.run('load({fillCfg:true})');
+  assert.equal(f.elements.get('harvest_proxy_provider').value,'litport');
+  assert.equal(f.elements.get('zoo_host').value,'edited.example:5000');
+  assert.equal(f.run('cfgDirty'),true);
+});
+
+test('invalid Litport TTL and unknown provider never submit a save',async()=> {
+  const f=fixture();
+  f.run(`data={config:{}}; fillCfg({}); mutate=()=>{throw new Error('must not submit');};`);
+  f.elements.get('litport_session_seconds').reportValidity=()=>false;
+  await f.run('saveCfg()');
+  assert.match(f.elements.get('actionMsg').textContent,/1–86400/);
+  f.elements.get('litport_session_seconds').reportValidity=()=>true;
+  f.run("$('harvest_proxy_provider').value='unknown'");
+  await f.run('saveCfg()');
+  assert.match(f.elements.get('actionMsg').textContent,/有效的采集代理/);
+});
+
+test('phase uses actual attempt provider, not selected config, without diagnostic secrets',()=> {
+  const f=fixture();
+  f.context.view={phase:element(),kind:element(),confirm:element(),copy:element(),error:element()};
+  f.run(`data={config:{harvest_proxy_provider:'zooproxy'},job:{status:'running'}};
+    updateTicket(view,{}, {phase:'confirming',provider:'litport',region:'FR',attempt:2,max:20,
+      status:'http://fixture:secret@example.test/session-123',detail:'session-123 fixture secret'});`);
+  assert.equal(f.context.view.phase.textContent,'确认 · 尝试 2/20 · Litport · 请求地区 FR');
+  assert.equal(f.context.view.phase.title,f.context.view.phase.textContent);
+  assert.doesNotMatch(f.context.view.phase.title,/http|secret|session/);
+  f.run(`updateTicket(view,{}, {phase:'running',provider:'zooproxy',region:'DE',attempt:3,max:20})`);
+  assert.match(f.context.view.phase.textContent,/ZooProxy · 请求地区 DE/);
+  f.run(`updateTicket(view,{}, {phase:'queued',provider:'http://secret',region:'session-secret',attempt:0,max:20})`);
+  assert.equal(f.context.view.phase.textContent,'排队 · 尝试 0/20');
 });
 
 test('remaining time uses server anchor, not stale remaining_sec',()=> {

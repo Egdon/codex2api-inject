@@ -176,7 +176,7 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
   <header class="page">
     <div>
       <div class="brand-title"><img class="site-logo" src="/favicon.png" alt=""/><h1>Turn State Inject</h1></div>
-      <div class="sub">探测走 ZooProxy 随机 sid；业务代理池不动。票据按本地 60 分钟规则计时。</div>
+      <div class="sub">探测仅使用所选采集代理，不混用、不自动切换；业务代理池不动。票据按本地 60 分钟规则计时。</div>
     </div>
     <div class="headline-actions">
       <button class="ghost" onclick="load({fillCfg:true})">刷新页面</button>
@@ -235,8 +235,13 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
       <p class="sub">阈值在 batch 开始时固定，修改仅影响新 batch。下方仅展示最近一次已记录批次的计数与判定（取消可能不更新记录）；实际连续失败次数以策略状态为准。</p>
       <p class="sub">迁组会替换账号全部分组。关闭策略不自动搬回账号；人工改组后不强行恢复。自动复查需同时开启自动探测并参与探测。</p>
     </section>
-    <section class="card" aria-label="ZooProxy 出口">
-      <h2>ZooProxy 出口</h2>
+    <section class="card" aria-label="采集代理">
+      <h2>采集代理</h2>
+      <div class="settings-form">
+        <label class="full-width">代理提供商 <select id="harvest_proxy_provider" onchange="updateProxyPanels()"><option value="zooproxy">ZooProxy</option><option value="litport">Litport</option></select></label>
+      </div>
+      <p class="sub">每次仅使用所选提供商；不会混用或失败后切换。两套配置独立保留，切换和修改后统一保存；在途取票与确认保持原配置，后续尝试使用新配置。</p>
+      <div id="zooproxy_panel">
       <div class="settings-form">
         <label class="full-width">地址 <input id="zoo_host" type="text"/></label>
         <label>用户前缀 <input id="zoo_user_prefix" type="text"/></label>
@@ -256,14 +261,30 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
         <label>粘性（分钟） <input id="zoo_sticky_minutes" type="number" min="1" max="120"/></label>
       </div>
       <p class="sub">轮换：每 batch 前三段使用互不重复的欧洲地区，末段随机 JP / KR / TW。欧洲池：DE / FR / GB / NL / SE / FI / CH / IE；首选不在欧洲池时随机选择欧洲首站。</p>
-      <p class="sub">每段基数为尝试上限 ÷ 4 向下取整（至少 1）；最后一段包含余数。20 次为 5/5/5/5，22 次为 5/5/5/7；不足 4 次不会到亚洲。取票与确认同地区、各自新 SID；修改仅影响新 batch。</p>
-      <p class="sub">地区代码为建议；实际可用性取决于 ZooProxy 账号与套餐。固定模式也可输入其他地区代码。</p>
+      <p class="sub">每段基数为尝试上限 ÷ 4 向下取整（至少 1）；最后一段包含余数。20 次为 5/5/5/5，22 次为 5/5/5/7；不足 4 次不会到亚洲。取票与确认同地区、各自新 SID；在途取票与确认保持原配置，后续尝试使用新配置。</p>
+      <p class="sub">地区代码为建议；实际可用性取决于 ZooProxy 账号与套餐。固定模式也可输入其他地区代码。ZooProxy 保持旧行为：取票与确认各自使用不同的新 SID。</p>
+      </div>
+      <div id="litport_panel" hidden>
+      <div class="settings-form">
+        <label class="full-width">地址 <input id="litport_host" type="text" value="hub-us-10.litport.net:1337" autocomplete="off"/></label>
+        <label>用户名 <input id="litport_username" type="text" autocomplete="off" placeholder="填写你的 Litport 用户名"/></label>
+        <label>密码 <input id="litport_password" type="password" autocomplete="new-password" placeholder="已保存则留空"/></label>
+        <label>地区策略 <select id="litport_region_mode"><option value="fixed">固定地区</option><option value="rotation">欧洲优先轮换</option></select></label>
+        <label>固定地区 / 轮换首选欧洲地区 <input id="litport_region" type="text" value="DE" list="litport_region_options" autocomplete="off"/>
+          <datalist id="litport_region_options"><option value="DE">德国（默认）</option><option value="FR">法国</option><option value="GB">英国</option><option value="NL">荷兰</option><option value="JP">日本</option></datalist>
+        </label>
+        <label>会话 TTL（秒） <input id="litport_session_seconds" type="number" min="1" max="86400" step="1" value="600" required/></label>
+      </div>
+      <p class="sub">Litport 每次尝试生成新的 12 位 SID，同一次尝试的取票与确认复用同一 SID；TTL 单位为秒（1–86400，默认 600），不是票据有效期。</p>
+      <p class="sub">固定模式默认 DE。轮换模式使用 DE / FR / GB / NL 欧洲池，末段 JP；首选欧洲地区优先，不在欧洲池时随机选择欧洲首站。ZooProxy 的轮换策略不变；切换提供商或地区设置后，后续尝试重建地区计划。</p>
+      </div>
+      <p class="sub">密码不会回显；两家密码留空均保留已保存值。未选中的提供商配置也会一起保存。</p>
     </section>
     </div>
     <section class="settings-actions" aria-label="保存全部设置">
       <div>
         <strong>统一保存设置</strong>
-        <p class="sub">保存注入开关、探测参数、Astra 分组策略和 ZooProxy 出口；卡片布局与筛选即时生效。</p>
+        <p class="sub">保存注入开关、探测参数、Astra 分组策略和两套采集代理配置；卡片布局与筛选即时生效。</p>
         <p id="cfgMsg" class="sub" role="status" aria-live="polite">修改后点击右侧按钮保存。</p>
       </div>
       <button id="saveBtn" type="button" class="savebtn" onclick="saveCfg()">保存全部设置</button>
@@ -532,7 +553,12 @@ function toggleBtn(el) {
 function updateInjectHint() {
   text($('inject_hint'),$('inject_enabled').dataset.on === '1' ? '有可用票据时自动附带 turn-state' : '关闭代理额外注入，不影响客户端自带状态');
 }
-const configInputs=['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','models','zoo_host','zoo_user_prefix','zoo_password','zoo_region','zoo_region_mode','zoo_sticky_minutes','astra_failure_group_id','astra_recovery_group_id','astra_recheck_minutes','astra_miss_threshold_percent'];
+const configInputs=['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','models','harvest_proxy_provider','zoo_host','zoo_user_prefix','zoo_password','zoo_region','zoo_region_mode','zoo_sticky_minutes','litport_host','litport_username','litport_password','litport_region','litport_region_mode','litport_session_seconds','astra_failure_group_id','astra_recovery_group_id','astra_recheck_minutes','astra_miss_threshold_percent'];
+function updateProxyPanels() {
+  const provider=$('harvest_proxy_provider').value;
+  $('zooproxy_panel').hidden=provider!=='zooproxy';
+  $('litport_panel').hidden=provider!=='litport';
+}
 function fillCfg(c) {
   setSwitch('inject_enabled',c.inject_enabled); setSwitch('auto_harvest',c.auto_harvest);
   setSwitch('astra_policy_enabled',c.astra_policy_enabled);
@@ -540,9 +566,16 @@ function fillCfg(c) {
   $('astra_recheck_minutes').value=c.astra_recheck_minutes||30;
   $('astra_miss_threshold_percent').value=c.astra_miss_threshold_percent??80;
   updateInjectHint();
-  configInputs.filter(id=>!['models','zoo_password'].includes(id)).forEach(id=> {
+  configInputs.filter(id=>!['models','zoo_password','litport_password'].includes(id)).forEach(id=> {
     if (c[id] != null) $(id).value=c[id];
   });
+  $('harvest_proxy_provider').value=c.harvest_proxy_provider || 'zooproxy';
+  $('litport_host').value=c.litport_host ?? 'hub-us-10.litport.net:1337';
+  $('litport_username').value=c.litport_username ?? '';
+  $('litport_region').value=c.litport_region ?? 'DE';
+  $('litport_region_mode').value=c.litport_region_mode==='rotation'?'rotation':'fixed';
+  $('litport_session_seconds').value=c.litport_session_seconds ?? 600;
+  updateProxyPanels();
   $('zoo_region_mode').value=c.zoo_region_mode==='rotation'?'rotation':'fixed';
   $('plan_weight_pro').value=c.plan_weight_pro||3;
   $('plan_weight_prolite').value=c.plan_weight_prolite||2;
@@ -550,6 +583,7 @@ function fillCfg(c) {
   if (!c.account_concurrency) $('account_concurrency').value=1;
   $('models').value=(c.models||[]).join(', ');
   $('zoo_password').placeholder=c.zoo_password_set?'已保存，留空不改':'必填才能探测';
+  $('litport_password').placeholder=c.litport_password_set?'已保存，留空不改':'必填才能探测';
 }
 function markCfgDirty() { cfgEditRevision++; cfgDirty=true; $('saveBtn').classList.add('unsaved'); text($('cfgMsg'),'有未保存修改'); }
 function recommendedConcurrency() { $('concurrency').value=4; $('account_concurrency').value=2; markCfgDirty(); }
@@ -570,12 +604,17 @@ function saveCfg() {
     if(!fail || !recovery || fail===recovery) {notice('请选择两个不同的失败/恢复目标分组。',true);return;}
     if(!body.models.some(m=>m.toLowerCase()==='gpt-6-astra')) {notice('启用 Astra 策略需要在模型列表中包含 gpt-6-astra。',true);return;}
   }
-  for (const id of ['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','zoo_sticky_minutes','astra_recheck_minutes','astra_miss_threshold_percent']) {
-    if (!$(id).reportValidity()) return;
+  for (const id of ['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','zoo_sticky_minutes','litport_session_seconds','astra_recheck_minutes','astra_miss_threshold_percent']) {
+    if (!$(id).reportValidity()) {
+      if(id==='litport_session_seconds')notice('Litport 会话 TTL 必须为 1–86400 的整数秒；请切换到 Litport 检查配置。',true);
+      return;
+    }
     body[id]=Number($(id).value);
   }
-  for (const id of ['zoo_host','zoo_user_prefix','zoo_region','zoo_region_mode']) body[id]=$(id).value.trim();
+  for (const id of ['harvest_proxy_provider','zoo_host','zoo_user_prefix','zoo_region','zoo_region_mode','litport_host','litport_username','litport_region','litport_region_mode']) body[id]=$(id).value.trim();
+  if(!['zooproxy','litport'].includes(body.harvest_proxy_provider)) {notice('请选择有效的采集代理提供商。',true);return;}
   body.zoo_password=$('zoo_password').value;
+  body.litport_password=$('litport_password').value;
   const savedRevision=cfgEditRevision;
   text($('cfgMsg'),'等待保存…');
   return mutate(async()=> {
@@ -584,7 +623,7 @@ function saveCfg() {
       const cfg=await api('/settings/turn-state',{method:'PUT',body:JSON.stringify(body)});
       data.config=cfg;
       if(savedRevision===cfgEditRevision) {
-        $('zoo_password').value=''; cfgDirty=false;
+        $('zoo_password').value=''; $('litport_password').value=''; cfgDirty=false;
         $('saveBtn').classList.remove('unsaved'); fillCfg(cfg); text($('cfgMsg'),'全部设置已保存');
       } else text($('cfgMsg'),'已保存提交的设置；后续修改仍待保存。');
     } catch(e) {
@@ -694,8 +733,13 @@ function updateTicket(view,t,live) {
   view.copy.disabled=!t.token;
   const running=activeJob(data.job) && live && ['queued','running','confirming','retrying'].includes(live.phase);
   view.phase.hidden=!running;
-  text(view.phase,running?(live.status||live.phase)+' · 尝试 '+live.attempt+'/'+live.max+(live.region?' · 请求地区 '+live.region:''):'');
-  view.phase.title=running?(live.detail||''):'';
+  const provider=live?.provider==='zooproxy'?'ZooProxy':live?.provider==='litport'?'Litport':'';
+  const region=typeof live?.region==='string' && /^[A-Za-z]{2}$/.test(live.region)?live.region.toUpperCase():'';
+  const phases={queued:'排队',running:'探测中',confirming:'确认',retrying:'等待重试'};
+  const phaseText=running?phases[live.phase]+' · 尝试 '+live.attempt+'/'+live.max+(provider?' · '+provider:'')+(region?' · 请求地区 '+region:''):'';
+  text(view.phase,phaseText);
+  // Do not expose raw diagnostic details, proxy URLs, credentials or session IDs.
+  view.phase.title=phaseText;
   view.error.hidden=!t.last_error;
   text(view.error,t.last_error||''); view.error.title=t.last_error||'';
 }

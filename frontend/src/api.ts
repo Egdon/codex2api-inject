@@ -16,6 +16,7 @@ import type {
   AddGrokAccountRequest,
   UpdateGrokAccountRequest,
   AddAntigravityAccountRequest,
+  AntigravityBatchRefreshResponse,
   AntigravityCreateResponse,
   UpdateAntigravityAccountRequest,
   AntigravityImportRequest,
@@ -716,6 +717,11 @@ export const api = {
     request<MessageResponse>(`/accounts/${id}/antigravity/refresh`, {
       method: 'POST',
       timeoutMs: 120_000,
+    }),
+  batchRefreshAntigravityAccounts: (ids: number[]) =>
+    request<AntigravityBatchRefreshResponse>('/accounts/antigravity/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
     }),
   refreshAntigravityQuota: (id: number) =>
     request<MessageResponse>(`/accounts/${id}/antigravity/quota`, {

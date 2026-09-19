@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,10 +29,9 @@ func (h *Handler) UpdateTurnStateSettings(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "请求体解析失败: "+err.Error())
 		return
 	}
-	buf, _ := json.Marshal(raw)
-	var req turnstate.Config
-	if err := json.Unmarshal(buf, &req); err != nil {
-		writeError(c, http.StatusBadRequest, "请求体解析失败: "+err.Error())
+	req, err := parseTurnStateSettings(raw, turnstate.GetConfig())
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "配置无效: "+err.Error())
 		return
 	}
 	if h.turnStateHarvest == nil {
@@ -45,6 +45,42 @@ func (h *Handler) UpdateTurnStateSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, turnstate.Publicize(normalized))
+}
+
+// Legacy PUT clients do not know the provider/Litport fields. Retain those
+// omitted fields instead of silently switching an active Litport configuration
+// back to ZooProxy. Password blanks are preserved under SaveConfig's lock.
+func parseTurnStateSettings(raw map[string]json.RawMessage, current turnstate.Config) (turnstate.Config, error) {
+	req := turnstate.Config{
+		HarvestProxyProvider:  current.HarvestProxyProvider,
+		LitportHost:           current.LitportHost,
+		LitportUsername:       current.LitportUsername,
+		LitportRegion:         current.LitportRegion,
+		LitportRegionMode:     current.LitportRegionMode,
+		LitportSessionSeconds: current.LitportSessionSeconds,
+	}
+	buf, err := json.Marshal(raw)
+	if err != nil {
+		return req, err
+	}
+	if err := json.Unmarshal(buf, &req); err != nil {
+		return req, err
+	}
+	if value, present := raw["harvest_proxy_provider"]; present {
+		var provider string
+		if err := json.Unmarshal(value, &provider); err != nil || (provider != "zooproxy" && provider != "litport") {
+			return req, fmt.Errorf("harvest_proxy_provider 必须为 zooproxy 或 litport")
+		}
+	} else if req.HarvestProxyProvider == "" {
+		req.HarvestProxyProvider = "zooproxy"
+	}
+	if value, present := raw["litport_session_seconds"]; present && (strings.TrimSpace(string(value)) == "null" || req.LitportSessionSeconds < 1 || req.LitportSessionSeconds > 86400) {
+		return req, fmt.Errorf("litport_session_seconds 必须为 1–86400 的整数")
+	}
+	if err := turnstate.ValidateHarvestProxyConfig(req); err != nil {
+		return req, err
+	}
+	return req, nil
 }
 
 type turnStateAccountRow struct {

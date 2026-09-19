@@ -201,6 +201,13 @@ test("resolveChannelBatchTestAccountIDs keeps Codex and Grok tests isolated", ()
   );
 });
 
+test("Antigravity result channel does not leak into Codex or Grok batches", () => {
+  const accounts = [{ id: 1 }, { id: 2, grok_api: true }, { id: 3, antigravity_api: true }];
+  assert.deepEqual(resolveChannelBatchTestAccountIDs(accounts, "antigravity", [1, 3, 3, 2]), [3]);
+  assert.deepEqual(resolveChannelBatchTestAccountIDs(accounts, "codex"), [1]);
+  assert.deepEqual(resolveChannelBatchTestAccountIDs(accounts, "grok"), [2]);
+});
+
 test("usage refresh results retain both refreshed and failed accounts", () => {
   const results = new Map();
   collectAccountOperationResult(results, { type: "start", action: "batch_usage_refresh" });

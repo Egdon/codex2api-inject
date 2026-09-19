@@ -22,8 +22,9 @@ import {
 } from "@/components/ui/table";
 
 const RESULT_PAGE_SIZE_OPTIONS = [50, 100, 200];
+type ResultAccount = Pick<AccountRow, "id" | "name" | "email" | "openai_responses_api" | "grok_api">;
 
-function formatResultAccountName(account: AccountRow): string {
+function formatResultAccountName(account: ResultAccount): string {
   if (account.openai_responses_api || account.grok_api) {
     return account.name?.trim() || `ID ${account.id}`;
   }
@@ -34,7 +35,7 @@ function resultAccountLines(result: {
   accountId: number;
   accountName?: string;
   accountEmail?: string;
-}, account?: AccountRow): { primary: string; secondary?: string } {
+}, account?: ResultAccount): { primary: string; secondary?: string } {
   const email = (account?.email || result.accountEmail || "").trim();
   const name = (account?.name || result.accountName || "").trim();
   if (email) {
@@ -56,8 +57,8 @@ export default function OperationResultsModal({
   onClose,
 }: {
   state: AccountOperationResultsState | null;
-  accounts: AccountRow[];
-  channel: "codex" | "grok";
+  accounts: readonly ResultAccount[];
+  channel: "codex" | "grok" | "antigravity";
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -177,7 +178,7 @@ export default function OperationResultsModal({
           <ChannelLogo
             channel={channel}
             size={26}
-            title={channel === "grok" ? "Grok" : "Codex"}
+            title={channel === "grok" ? "Grok" : channel === "antigravity" ? "Antigravity" : "Codex"}
           />
           <span>{title}</span>
         </span>

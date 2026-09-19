@@ -28,18 +28,27 @@ type Config struct {
 	PlanWeightPlus            int      `json:"plan_weight_plus"`
 	CooldownMinutes           int      `json:"cooldown_minutes"`
 	SkipTTLMinutes            int      `json:"skip_ttl_minutes"`
-	ZooHost                   string   `json:"zoo_host"`
-	ZooUserPrefix             string   `json:"zoo_user_prefix"`
-	ZooPassword               string   `json:"zoo_password,omitempty"`
-	ZooRegion                 string   `json:"zoo_region"`
-	ZooRegionMode             string   `json:"zoo_region_mode"`
-	ZooStickyMinutes          int      `json:"zoo_sticky_minutes"`
-	DisabledAccountIDs        []int64  `json:"disabled_account_ids"`
+	HarvestProxyProvider      string   `json:"harvest_proxy_provider"`
+	LitportHost               string   `json:"litport_host"`
+	LitportUsername           string   `json:"litport_username"`
+	LitportPassword           string   `json:"litport_password,omitempty"`
+	LitportRegion             string   `json:"litport_region"`
+	LitportRegionMode         string   `json:"litport_region_mode"`
+	LitportSessionSeconds     int      `json:"litport_session_seconds"`
+	harvestSID                string
+	ZooHost                   string  `json:"zoo_host"`
+	ZooUserPrefix             string  `json:"zoo_user_prefix"`
+	ZooPassword               string  `json:"zoo_password,omitempty"`
+	ZooRegion                 string  `json:"zoo_region"`
+	ZooRegionMode             string  `json:"zoo_region_mode"`
+	ZooStickyMinutes          int     `json:"zoo_sticky_minutes"`
+	DisabledAccountIDs        []int64 `json:"disabled_account_ids"`
 }
 
 type PublicConfig struct {
 	Config
-	ZooPasswordSet bool `json:"zoo_password_set"`
+	ZooPasswordSet     bool `json:"zoo_password_set"`
+	LitportPasswordSet bool `json:"litport_password_set"`
 }
 
 var configured atomic.Value // Config
@@ -62,6 +71,11 @@ func DefaultConfig() Config {
 		PlanWeightPlus:            1,
 		CooldownMinutes:           15,
 		SkipTTLMinutes:            15,
+		HarvestProxyProvider:      providerZoo,
+		LitportHost:               "hub-us-10.litport.net:1337",
+		LitportRegion:             "DE",
+		LitportRegionMode:         regionModeFixed,
+		LitportSessionSeconds:     600,
 		ZooHost:                   "us-eu.zooproxy.com:5000",
 		ZooRegion:                 "DE",
 		ZooRegionMode:             regionModeFixed,
@@ -114,6 +128,24 @@ func NormalizeConfig(cfg Config) Config {
 	if cfg.SkipTTLMinutes >= 0 && cfg.SkipTTLMinutes != 15 {
 		out.SkipTTLMinutes = clampInt(cfg.SkipTTLMinutes, 0, 55)
 	}
+	if provider := strings.ToLower(strings.TrimSpace(cfg.HarvestProxyProvider)); provider != "" {
+		out.HarvestProxyProvider = provider
+	}
+	if host := strings.TrimSpace(cfg.LitportHost); host != "" {
+		out.LitportHost = host
+	}
+	out.LitportUsername = strings.TrimSpace(cfg.LitportUsername)
+	out.LitportPassword = cfg.LitportPassword
+	out.harvestSID = cfg.harvestSID
+	if region := strings.ToUpper(strings.TrimSpace(cfg.LitportRegion)); region != "" {
+		out.LitportRegion = region
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.LitportRegionMode), regionModeRotation) {
+		out.LitportRegionMode = regionModeRotation
+	}
+	if cfg.LitportSessionSeconds != 0 {
+		out.LitportSessionSeconds = clampInt(cfg.LitportSessionSeconds, 1, 86400)
+	}
 	if host := strings.TrimSpace(cfg.ZooHost); host != "" {
 		out.ZooHost = host
 	}
@@ -151,11 +183,15 @@ func ParseConfigJSON(raw string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.astraPolicyEpoch = stored.Epoch
+	// Preserve legacy settings on load; readiness and writes validate the adapter.
 	return NormalizeConfig(cfg), nil
 }
 
 func EncodeConfig(cfg Config) (string, error) {
 	cfg = NormalizeConfig(cfg)
+	if err := ValidateHarvestProxyConfig(cfg); err != nil {
+		return "", err
+	}
 	b, err := json.Marshal(struct {
 		Config
 		Epoch int64 `json:"_astra_policy_epoch"`
@@ -168,16 +204,23 @@ func EncodeConfig(cfg Config) (string, error) {
 
 func Publicize(cfg Config) PublicConfig {
 	cfg = NormalizeConfig(cfg)
-	out := PublicConfig{Config: cfg, ZooPasswordSet: strings.TrimSpace(cfg.ZooPassword) != ""}
-	out.ZooPassword = ""
+	out := PublicConfig{Config: cfg, ZooPasswordSet: strings.TrimSpace(cfg.ZooPassword) != "", LitportPasswordSet: strings.TrimSpace(cfg.LitportPassword) != ""}
+	out.ZooPassword, out.LitportPassword = "", ""
+	out.harvestSID = ""
+	out.ZooHost = publicHarvestHost(out.ZooHost)
+	out.LitportHost = publicHarvestHost(out.LitportHost)
 	return out
 }
 
 func HarvestReady(cfg Config) bool {
 	cfg = NormalizeConfig(cfg)
-	return strings.TrimSpace(cfg.ZooHost) != "" &&
-		strings.TrimSpace(cfg.ZooUserPrefix) != "" &&
-		strings.TrimSpace(cfg.ZooPassword) != ""
+	if ValidateHarvestProxyConfig(cfg) != nil {
+		return false
+	}
+	if cfg.HarvestProxyProvider == providerLitport {
+		return strings.TrimSpace(cfg.LitportUsername) != "" && strings.TrimSpace(cfg.LitportPassword) != ""
+	}
+	return strings.TrimSpace(cfg.ZooUserPrefix) != "" && strings.TrimSpace(cfg.ZooPassword) != ""
 }
 
 func AccountHarvestEnabled(cfg Config, accountID int64) bool {

@@ -16,11 +16,15 @@ const (
 	probeNetwork
 	probeHTTP
 	probeOverload
+	probeProxyAuth
+	probeProxyConfig
+	probeProxyConnect
 )
 
 type probeFailure struct {
 	kind       probeFailureKind
 	status     int
+	proxyCode  int // Known Litport CONNECT codes only; never raw header text.
 	retryAfter time.Duration
 }
 
@@ -53,7 +57,7 @@ func classifyRetry(err error, h http.Header) (probeFailureKind, time.Duration) {
 }
 func (r attemptResult) delay(attempt int) time.Duration {
 	d := r.retryAfter
-	if r.retryKind == probeNetwork || r.retryKind == probeOverload || r.retryKind == probeHTTP {
+	if r.retryKind == probeNetwork || r.retryKind == probeOverload || r.retryKind == probeHTTP || r.retryKind == probeProxyConnect {
 		d = max(d, retryDelay(attempt))
 	}
 	return d

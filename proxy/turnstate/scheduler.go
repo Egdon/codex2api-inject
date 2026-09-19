@@ -77,6 +77,7 @@ type scheduledCell struct {
 	waitingSince         time.Time
 	policyRecovery       bool
 	regionPlan           [4]string
+	regionConfig         regionPlanConfig
 }
 
 func cloneJob(job *Job) *Job {
@@ -196,8 +197,11 @@ func (h *Harvester) submit(ctx context.Context, accountID int64, ids []int64, mo
 	if accountID < 0 {
 		return nil, nil, fmt.Errorf("账号 ID 必须为正")
 	}
+	if err := ValidateHarvestProxyConfig(cfg); err != nil {
+		return nil, nil, err
+	}
 	if !HarvestReady(cfg) {
-		return nil, nil, fmt.Errorf("ZooProxy 未配置完整，无法探测")
+		return nil, nil, fmt.Errorf("所选采集代理未配置完整，无法探测")
 	}
 	if ctx.Err() != nil {
 		return nil, nil, ctx.Err()
@@ -286,7 +290,7 @@ func (h *Harvester) submit(ctx context.Context, accountID int64, ids []int64, mo
 		generation, version := h.retainGeneration(c.acc.ID(), c.model)
 		index := h.historySlotLocked(s, key)
 		task := &scheduledCell{key: key, accountID: c.acc.ID(), model: c.model, index: index, manual: manual, force: force, max: cfg.MaxAttempts, generation: generation, version: version}
-		task.regionPlan = newBatchRegionPlan(cfg)
+		task.syncRegionPlan(cfg)
 		h.preparePolicyBatch(ctx, task, cfg)
 		task.policyRecovery = cfg.AstraPolicyEnabled && strings.EqualFold(task.model, astraModel) && h.PolicySnapshot(task.accountID).Demoted
 		task.waitingSince = time.Now()
@@ -659,6 +663,7 @@ func (h *Harvester) terminalLocked(s *harvestScheduler, c *scheduledCell, phase,
 func (h *Harvester) work(s *harvestScheduler, c *scheduledCell, task scheduledCell, cfg Config) {
 	// Settings/participation may change after dispatch but before this goroutine runs.
 	cfg = GetConfig()
+	task.syncRegionPlan(cfg)
 	result := attemptResult{phase: "skipped", status: "跳过", detail: "账号或模型已不可用"}
 	acc := h.store.FindByID(task.accountID)
 	eligible := acc != nil && len(filterHarvestAccounts([]*auth.Account{acc}, cfg)) > 0 && HarvestReady(cfg)
@@ -675,6 +680,8 @@ func (h *Harvester) work(s *harvestScheduler, c *scheduledCell, task scheduledCe
 		result = staleResult()
 	} else if !task.manual && (!cfg.AutoHarvest || !h.automaticPolicyAllowed(task.accountID, task.model, cfg)) {
 		result = attemptResult{phase: "skipped", status: "跳过", detail: "自动收割已关闭"}
+	} else if !HarvestReady(cfg) {
+		result = attemptResult{phase: "skipped", status: "跳过", detail: "所选采集代理配置无效或不完整"}
 	} else if eligible && foundModel {
 		if !task.force && len(h.dueCells([]*auth.Account{acc}, cfg, task.model, false)) == 0 {
 			result = attemptResult{phase: "skipped", status: "跳过", detail: "票据仍新鲜或处于冷却期"}
@@ -688,6 +695,7 @@ func (h *Harvester) work(s *harvestScheduler, c *scheduledCell, task scheduledCe
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	c.regionPlan, c.regionConfig = task.regionPlan, task.regionConfig
 	c.active = false
 	h.breaker.release(task.breakerLease)
 	c.breakerLease = 0

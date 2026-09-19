@@ -1466,6 +1466,19 @@ export interface UpdateAccountSchedulerRequest {
   codex_turn_state_models?: string | null
 }
 
+export interface AntigravityBatchRefreshResponse {
+  success: number
+  failed: number
+  items: Array<{
+    id: number
+    email?: string
+    ok: boolean
+    message?: string
+    warning?: string
+    error?: string
+  }>
+}
+
 export interface BatchUpdateAccountsRequest extends UpdateAccountSchedulerRequest {
   ids?: number[]
   selector?: AccountOperationSelector
