@@ -10,27 +10,55 @@ const (
 	regionModeRotation = "rotation"
 )
 
-// Plans are small value arrays, owned by one account/model batch. They are
-// generated once at admission, never per retry or per shared global job.
-func newBatchRegionPlan(cfg Config) [4]string {
-	region := strings.ToUpper(strings.TrimSpace(cfg.ZooRegion))
-	if region == "" {
-		region = "DE"
+type regionPlanConfig struct {
+	provider string
+	region   string
+	mode     string
+}
+
+func harvestRegionConfig(cfg Config) regionPlanConfig {
+	cfg = NormalizeConfig(cfg)
+	if cfg.HarvestProxyProvider == providerLitport {
+		return regionPlanConfig{cfg.HarvestProxyProvider, cfg.LitportRegion, cfg.LitportRegionMode}
 	}
-	if cfg.ZooRegionMode != regionModeRotation {
+	return regionPlanConfig{cfg.HarvestProxyProvider, cfg.ZooRegion, cfg.ZooRegionMode}
+}
+
+// One plan per account/model batch, regenerated only when selected routing changes.
+func newBatchRegionPlan(cfg Config) [4]string {
+	selected := harvestRegionConfig(cfg)
+	region := strings.ToUpper(strings.TrimSpace(selected.region))
+	if selected.mode != regionModeRotation {
 		return [4]string{region, region, region, region}
 	}
 	europe := []string{"DE", "FR", "GB", "NL", "SE", "FI", "CH", "IE"}
+	if selected.provider == providerLitport {
+		europe = []string{"DE", "FR", "GB", "NL"}
+		// A non-European preferred country must not displace the European stages.
+		if region != "FR" && region != "GB" && region != "NL" {
+			region = "DE"
+		}
+	}
 	rand.Shuffle(len(europe), func(i, j int) { europe[i], europe[j] = europe[j], europe[i] })
-	// Honor the preferred first region only if it belongs to the European pool.
 	for i, candidate := range europe {
 		if candidate == region {
 			europe[0], europe[i] = europe[i], europe[0]
 			break
 		}
 	}
+	if selected.provider == providerLitport {
+		return [4]string{europe[0], europe[1], europe[2], "JP"}
+	}
 	asia := [...]string{"JP", "KR", "TW"}
 	return [4]string{europe[0], europe[1], europe[2], asia[rand.IntN(len(asia))]}
+}
+
+func (c *scheduledCell) syncRegionPlan(cfg Config) {
+	selected := harvestRegionConfig(cfg)
+	if c.regionConfig != selected {
+		c.regionConfig = selected
+		c.regionPlan = newBatchRegionPlan(cfg)
+	}
 }
 
 func batchRegionStage(attempt, maxAttempts int) int {

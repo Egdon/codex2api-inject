@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -40,6 +41,7 @@ type JobCell struct {
 	Phase     string `json:"phase"`
 	Active    bool   `json:"active"`
 	Region    string `json:"region,omitempty"`
+	Provider  string `json:"provider"`
 }
 
 type Job struct {
@@ -311,37 +313,19 @@ func randomSID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func zooProxyURL(cfg Config) (*url.URL, error) {
-	host := strings.TrimSpace(cfg.ZooHost)
-	if host == "" {
-		return nil, fmt.Errorf("empty zoo host")
-	}
-	if !strings.Contains(host, "://") {
-		host = "http://" + host
-	}
-	u, err := url.Parse(host)
-	if err != nil {
-		return nil, err
-	}
-	user := fmt.Sprintf("%s-region-%s-sid-%s-t-%d",
-		strings.TrimSpace(cfg.ZooUserPrefix),
-		strings.ToUpper(strings.TrimSpace(cfg.ZooRegion)),
-		randomSID(),
-		cfg.ZooStickyMinutes,
-	)
-	u.User = url.UserPassword(user, cfg.ZooPassword)
-	return u, nil
-}
-
 func (h *Harvester) probe(ctx context.Context, cfg Config, acc *auth.Account, model, inject string) (string, http.Header, error) {
 	if h.probeFn != nil {
 		return h.probeFn(ctx, cfg, acc, model, inject)
 	}
-	proxyURL, err := zooProxyURL(cfg)
+	cfg = NormalizeConfig(cfg)
+	proxyURL, err := harvestProxyURL(cfg)
 	if err != nil {
 		return "", nil, err
 	}
 	transport := &http.Transport{
+		OnProxyConnectResponse: func(_ context.Context, _ *url.URL, _ *http.Request, resp *http.Response) error {
+			return proxyConnectFailure(cfg.HarvestProxyProvider, resp)
+		},
 		Proxy:                 http.ProxyURL(proxyURL),
 		DialContext:           (&net.Dialer{Timeout: 8 * time.Second, KeepAlive: 15 * time.Second}).DialContext,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, ClientSessionCache: h.tlsSessions},
@@ -371,9 +355,16 @@ func (h *Harvester) probe(ctx context.Context, cfg Config, acc *auth.Account, mo
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		var failure *probeFailure
+		if errors.As(err, &failure) {
+			return "", nil, failure
+		}
 		return "", nil, &probeFailure{kind: probeNetwork}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusProxyAuthRequired {
+		return "", resp.Header.Clone(), &probeFailure{kind: probeProxyAuth}
+	}
 	token := strings.TrimSpace(resp.Header.Get("X-Codex-Turn-State"))
 	if resp.StatusCode == http.StatusUnauthorized {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
@@ -456,13 +447,14 @@ func (h *Harvester) SaveConfig(ctx context.Context, req Config, keepPassword, ke
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	cfg := GetConfig()
-	if keepPassword {
-		req.ZooPassword = cfg.ZooPassword
-	}
+	preserveHarvestPasswords(&req, cfg, keepPassword)
 	if keepDisabled {
 		req.DisabledAccountIDs = cfg.DisabledAccountIDs
 	}
 	req = NormalizeConfig(req)
+	if err := ValidateHarvestProxyConfig(req); err != nil {
+		return Config{}, err
+	}
 	if h.db == nil {
 		return Config{}, fmt.Errorf("数据库不可用")
 	}

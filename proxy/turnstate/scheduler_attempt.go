@@ -2,6 +2,7 @@ package turnstate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -83,6 +84,26 @@ func staleResult() attemptResult {
 // Never expose transport errors, proxy credentials, response bodies, or tokens
 // through snapshots/logs. Only known error classifications cross this boundary.
 func probeErrorDetail(err error) string {
+	var failure *probeFailure
+	if errors.As(err, &failure) {
+		switch failure.proxyCode {
+		case 5:
+			return "Litport 代理访问被拒绝，请检查访问权限"
+		case 11:
+			return "Litport 代理地区选择不可用，请检查地区设置"
+		case 13:
+			return "Litport 代理余额不足"
+		}
+	}
+	kind, _ := classifyRetry(err, nil)
+	switch kind {
+	case probeProxyAuth:
+		return "采集代理认证失败，请检查代理凭据"
+	case probeProxyConfig:
+		return "采集代理配置或访问权限不可用，请检查设置、地区与余额"
+	case probeProxyConnect:
+		return "采集代理 CONNECT 失败，稍后重试"
+	}
 	if isUnauthorized(err) {
 		return "401 跳过，等待主进程刷新 token"
 	}
@@ -108,10 +129,17 @@ func (h *Harvester) attempt(ctx context.Context, cfg Config, acc *auth.Account, 
 	if !h.generationCurrent(task.key, task.generation, task.version) {
 		return staleResult()
 	}
-	// Use the batch's immutable region for both acquisition and confirmation.
-	// This is a local config copy; concurrent accounts and global config are untouched.
+	// Snapshot the provider, region and Litport session for the entire pair.
+	cfg = NormalizeConfig(cfg)
 	if region := task.regionForAttempt(); region != "" {
-		cfg.ZooRegion = region
+		if cfg.HarvestProxyProvider == providerLitport {
+			cfg.LitportRegion = region
+		} else {
+			cfg.ZooRegion = region
+		}
+	}
+	if cfg.HarvestProxyProvider == providerLitport {
+		cfg.harvestSID = randomSID()[:12]
 	}
 	existing, _ := h.cache.Get(acc.ID(), task.model)
 	existing.AccountID, existing.Model = acc.ID(), task.model
@@ -132,13 +160,17 @@ func (h *Harvester) attempt(ctx context.Context, cfg Config, acc *auth.Account, 
 	}
 	if err != nil {
 		detail = probeErrorDetail(err)
-		if isUnauthorized(err) {
+		if isUnauthorized(err) || retryKind == probeProxyAuth || retryKind == probeProxyConfig {
 			existing.Attempts, existing.LastError, existing.LastHarvestAt = task.attempt, detail, time.Now().Unix()
 			existing.CooldownUntil = time.Now().Add(time.Duration(max(cfg.CooldownMinutes, 1)) * time.Minute).Unix()
 			if !h.publishAttempt(ctx, task, existing) {
 				return staleResult()
 			}
-			return attemptResult{phase: "skipped", status: "401", detail: detail}
+			status := "代理不可用"
+			if isUnauthorized(err) {
+				status = "401"
+			}
+			return attemptResult{phase: "skipped", status: status, detail: detail}
 		}
 	} else if parsed, ok := ParseFernet(token); ok && parsed.Length == FullBloodChars && parsed.IssuedUnix <= time.Now().Unix()+60 && RemainingSeconds(parsed.IssuedUnix, time.Now().Unix()) > 0 {
 		confirming()

@@ -150,10 +150,16 @@ func networkOutcome(ctx context.Context, hdr http.Header, err error) (observe, f
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) || err != nil && isUnauthorized(err) {
 		return false, false
 	}
+	kind, _ := classifyRetry(err, hdr)
+	if kind == probeProxyAuth || kind == probeProxyConfig {
+		return false, false
+	}
+	if kind == probeProxyConnect {
+		return true, true
+	}
 	if hdr != nil || err == nil {
 		return true, false
 	}
-	kind, _ := classifyRetry(err, hdr)
 	if kind == probeNetwork {
 		return true, true
 	}
@@ -170,7 +176,8 @@ func (h *Harvester) observedProbe(ctx context.Context, cfg Config, acc *auth.Acc
 			if c := h.scheduler.cells[task.key]; c != nil && c.generation == task.generation {
 				c.attempt++
 				h.job.Cells[c.index].Attempt = c.attempt
-				h.job.Cells[c.index].Region = cfg.ZooRegion
+				h.job.Cells[c.index].Region = selectedHarvestRegion(cfg)
+				h.job.Cells[c.index].Provider = cfg.HarvestProxyProvider
 			}
 		}
 		h.mu.Unlock()
