@@ -10,39 +10,44 @@ import (
 var DefaultModels = []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 
 type Config struct {
-	AstraPolicyEnabled        bool  `json:"astra_policy_enabled"`
-	AstraFailureGroupID       int64 `json:"astra_failure_group_id"`
-	AstraRecoveryGroupID      int64 `json:"astra_recovery_group_id"`
-	AstraRecheckMinutes       int   `json:"astra_recheck_minutes"`
-	AstraMissThresholdPercent int   `json:"astra_miss_threshold_percent"`
-	astraPolicyEpoch          int64
-	InjectEnabled             bool     `json:"inject_enabled"`
-	AutoHarvest               bool     `json:"auto_harvest"`
-	IntervalMinutes           int      `json:"interval_minutes"`
-	MaxAttempts               int      `json:"max_attempts"`
-	Models                    []string `json:"models"`
-	Concurrency               int      `json:"concurrency"`
-	AccountConcurrency        int      `json:"account_concurrency"`
-	PlanWeightPro             int      `json:"plan_weight_pro"`
-	PlanWeightProlite         int      `json:"plan_weight_prolite"`
-	PlanWeightPlus            int      `json:"plan_weight_plus"`
-	CooldownMinutes           int      `json:"cooldown_minutes"`
-	SkipTTLMinutes            int      `json:"skip_ttl_minutes"`
-	HarvestProxyProvider      string   `json:"harvest_proxy_provider"`
-	LitportHost               string   `json:"litport_host"`
-	LitportUsername           string   `json:"litport_username"`
-	LitportPassword           string   `json:"litport_password,omitempty"`
-	LitportRegion             string   `json:"litport_region"`
-	LitportRegionMode         string   `json:"litport_region_mode"`
-	LitportSessionSeconds     int      `json:"litport_session_seconds"`
-	harvestSID                string
-	ZooHost                   string  `json:"zoo_host"`
-	ZooUserPrefix             string  `json:"zoo_user_prefix"`
-	ZooPassword               string  `json:"zoo_password,omitempty"`
-	ZooRegion                 string  `json:"zoo_region"`
-	ZooRegionMode             string  `json:"zoo_region_mode"`
-	ZooStickyMinutes          int     `json:"zoo_sticky_minutes"`
-	DisabledAccountIDs        []int64 `json:"disabled_account_ids"`
+	AstraPolicyEnabled          bool   `json:"astra_policy_enabled"` // Group action only.
+	AstraGroupFailureBatches    int    `json:"astra_group_failure_batches"`
+	AstraPriorityPolicyEnabled  bool   `json:"astra_priority_policy_enabled"`
+	AstraPriorityFailureBatches int    `json:"astra_priority_failure_batches"`
+	AstraFailurePriority        *int64 `json:"astra_failure_priority"`
+	AstraRecoveryPriority       int64  `json:"astra_recovery_priority"`
+	AstraFailureGroupID         int64  `json:"astra_failure_group_id"`
+	AstraRecoveryGroupID        int64  `json:"astra_recovery_group_id"`
+	AstraRecheckMinutes         int    `json:"astra_recheck_minutes"`
+	AstraMissThresholdPercent   int    `json:"astra_miss_threshold_percent"`
+	astraPolicyEpoch            int64
+	InjectEnabled               bool     `json:"inject_enabled"`
+	AutoHarvest                 bool     `json:"auto_harvest"`
+	IntervalMinutes             int      `json:"interval_minutes"`
+	MaxAttempts                 int      `json:"max_attempts"`
+	Models                      []string `json:"models"`
+	Concurrency                 int      `json:"concurrency"`
+	AccountConcurrency          int      `json:"account_concurrency"`
+	PlanWeightPro               int      `json:"plan_weight_pro"`
+	PlanWeightProlite           int      `json:"plan_weight_prolite"`
+	PlanWeightPlus              int      `json:"plan_weight_plus"`
+	CooldownMinutes             int      `json:"cooldown_minutes"`
+	SkipTTLMinutes              int      `json:"skip_ttl_minutes"`
+	HarvestProxyProvider        string   `json:"harvest_proxy_provider"`
+	LitportHost                 string   `json:"litport_host"`
+	LitportUsername             string   `json:"litport_username"`
+	LitportPassword             string   `json:"litport_password,omitempty"`
+	LitportRegion               string   `json:"litport_region"`
+	LitportRegionMode           string   `json:"litport_region_mode"`
+	LitportSessionSeconds       int      `json:"litport_session_seconds"`
+	harvestSID                  string
+	ZooHost                     string  `json:"zoo_host"`
+	ZooUserPrefix               string  `json:"zoo_user_prefix"`
+	ZooPassword                 string  `json:"zoo_password,omitempty"`
+	ZooRegion                   string  `json:"zoo_region"`
+	ZooRegionMode               string  `json:"zoo_region_mode"`
+	ZooStickyMinutes            int     `json:"zoo_sticky_minutes"`
+	DisabledAccountIDs          []int64 `json:"disabled_account_ids"`
 }
 
 type PublicConfig struct {
@@ -58,33 +63,42 @@ func init() {
 }
 
 func DefaultConfig() Config {
+	failurePriority := int64(-1)
 	return Config{
-		AstraMissThresholdPercent: 80,
-		AstraRecheckMinutes:       30,
-		IntervalMinutes:           50,
-		MaxAttempts:               6,
-		Models:                    append([]string(nil), DefaultModels...),
-		Concurrency:               2,
-		AccountConcurrency:        1,
-		PlanWeightPro:             3,
-		PlanWeightProlite:         2,
-		PlanWeightPlus:            1,
-		CooldownMinutes:           15,
-		SkipTTLMinutes:            15,
-		HarvestProxyProvider:      providerZoo,
-		LitportHost:               "hub-us-10.litport.net:1337",
-		LitportRegion:             "DE",
-		LitportRegionMode:         regionModeFixed,
-		LitportSessionSeconds:     600,
-		ZooHost:                   "us-eu.zooproxy.com:5000",
-		ZooRegion:                 "DE",
-		ZooRegionMode:             regionModeFixed,
-		ZooStickyMinutes:          120,
+		AstraGroupFailureBatches:    2,
+		AstraPriorityFailureBatches: 1,
+		AstraFailurePriority:        &failurePriority,
+		AstraMissThresholdPercent:   80,
+		AstraRecheckMinutes:         30,
+		IntervalMinutes:             50,
+		MaxAttempts:                 6,
+		Models:                      append([]string(nil), DefaultModels...),
+		Concurrency:                 2,
+		AccountConcurrency:          1,
+		PlanWeightPro:               3,
+		PlanWeightProlite:           2,
+		PlanWeightPlus:              1,
+		CooldownMinutes:             15,
+		SkipTTLMinutes:              15,
+		HarvestProxyProvider:        providerZoo,
+		LitportHost:                 "hub-us-10.litport.net:1337",
+		LitportRegion:               "DE",
+		LitportRegionMode:           regionModeFixed,
+		LitportSessionSeconds:       600,
+		ZooHost:                     "us-eu.zooproxy.com:5000",
+		ZooRegion:                   "DE",
+		ZooRegionMode:               regionModeFixed,
+		ZooStickyMinutes:            120,
 	}
 }
 
 func GetConfig() Config {
 	if v, ok := configured.Load().(Config); ok {
+		// The atomic snapshot must not expose mutable priority storage.
+		if v.AstraFailurePriority != nil {
+			priority := *v.AstraFailurePriority
+			v.AstraFailurePriority = &priority
+		}
 		return v
 	}
 	return DefaultConfig()
@@ -97,6 +111,18 @@ func SetConfig(cfg Config) {
 func NormalizeConfig(cfg Config) Config {
 	out := DefaultConfig()
 	out.AstraPolicyEnabled = cfg.AstraPolicyEnabled
+	out.AstraPriorityPolicyEnabled = cfg.AstraPriorityPolicyEnabled
+	if cfg.AstraGroupFailureBatches != 0 {
+		out.AstraGroupFailureBatches = clampInt(cfg.AstraGroupFailureBatches, 1, 50)
+	}
+	if cfg.AstraPriorityFailureBatches != 0 {
+		out.AstraPriorityFailureBatches = clampInt(cfg.AstraPriorityFailureBatches, 1, 50)
+	}
+	if cfg.AstraFailurePriority != nil {
+		priority := max(int64(-100), min(int64(100), *cfg.AstraFailurePriority))
+		out.AstraFailurePriority = &priority
+	}
+	out.AstraRecoveryPriority = max(int64(-100), min(int64(100), cfg.AstraRecoveryPriority))
 	if cfg.AstraMissThresholdPercent != 0 {
 		out.AstraMissThresholdPercent = clampInt(cfg.AstraMissThresholdPercent, 1, 100)
 	}
@@ -165,6 +191,25 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	out.DisabledAccountIDs = uniqueIDs(cfg.DisabledAccountIDs)
 	return out
+}
+
+func astraPolicyEnabled(cfg Config) bool {
+	return cfg.AstraPolicyEnabled || cfg.AstraPriorityPolicyEnabled
+}
+
+// Settings changes fence admitted outcomes and start a new shared streak. The
+// database retains ownership and per-action episode latches across this fence.
+func astraPolicySettingsChanged(before, after Config) bool {
+	before, after = NormalizeConfig(before), NormalizeConfig(after)
+	return before.AstraPolicyEnabled != after.AstraPolicyEnabled ||
+		before.AstraPriorityPolicyEnabled != after.AstraPriorityPolicyEnabled ||
+		before.AstraGroupFailureBatches != after.AstraGroupFailureBatches ||
+		before.AstraPriorityFailureBatches != after.AstraPriorityFailureBatches ||
+		before.AstraFailureGroupID != after.AstraFailureGroupID ||
+		before.AstraRecoveryGroupID != after.AstraRecoveryGroupID ||
+		*before.AstraFailurePriority != *after.AstraFailurePriority ||
+		before.AstraRecoveryPriority != after.AstraRecoveryPriority ||
+		before.AstraMissThresholdPercent != after.AstraMissThresholdPercent
 }
 
 func ParseConfigJSON(raw string) (Config, error) {

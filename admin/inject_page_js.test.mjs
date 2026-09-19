@@ -122,6 +122,64 @@ test('Astra threshold save validates before sending and uses a numeric payload',
   assert.equal(f.context.savedBody.astra_miss_threshold_percent,85);
 });
 
+test('Astra dual-action controls retain explicit zero and share dirty protection',async()=> {
+  const f=fixture(); f.run('fillCfg({astra_failure_priority:0})');
+  assert.equal(f.elements.get('astra_failure_priority').value,0);
+  assert.equal(f.elements.get('astra_group_failure_batches').value,2);
+  assert.equal(f.elements.get('astra_priority_failure_batches').value,1);
+  assert.equal(f.elements.get('astra_priority_policy_enabled').dataset.on,'0');
+  for(const field of ['astra_group_failure_batches','astra_priority_failure_batches','astra_failure_priority','astra_recovery_priority']) {
+    f.context.field=field;
+    assert.equal(f.run('configInputs.includes(field)'),true);
+  }
+  f.run(`data={config:{}}; groupsAttempted=true; render=()=>{};
+    api=()=>new Promise(resolve=>{globalThis.finishLoad=resolve;});`);
+  const loading=f.run('load({fillCfg:true})');
+  f.run(`$('astra_failure_priority').value='-7'; setSwitch('astra_priority_policy_enabled',true); markCfgDirty();
+    finishLoad({config:{astra_failure_priority:-1,astra_priority_policy_enabled:false},accounts:[]});`);
+  await loading;
+  assert.equal(f.elements.get('astra_failure_priority').value,'-7');
+  assert.equal(f.elements.get('astra_priority_policy_enabled').dataset.on,'1');
+  assert.equal(f.run('cfgDirty'),true);
+});
+
+test('Astra priority-only save needs no groups and warns without blocking reverse priorities',async()=> {
+  const f=fixture();
+  f.run(`data={config:{}}; fillCfg({models:['gpt-6-astra'],astra_priority_policy_enabled:true,astra_failure_priority:0,astra_recovery_priority:-1});
+    mutate=work=>work(); api=async(path,opts)=>{globalThis.savedBody=JSON.parse(opts.body);return savedBody;};`);
+  assert.equal(f.elements.get('astraPriorityWarning').hidden,false);
+  await f.run('saveCfg()');
+  assert.equal(f.context.savedBody.astra_priority_policy_enabled,true);
+  assert.equal(f.context.savedBody.astra_policy_enabled,false);
+  assert.equal(f.context.savedBody.astra_failure_priority,0);
+  assert.equal(f.context.savedBody.astra_recovery_priority,-1);
+  assert.equal(f.context.savedBody.astra_group_failure_batches,2);
+  assert.equal(f.context.savedBody.astra_priority_failure_batches,1);
+});
+
+test('Astra dual-action invalid ranges reject save even when native validity is unavailable',async()=> {
+  for(const [field,value] of [['astra_group_failure_batches','0'],['astra_group_failure_batches','51'],['astra_priority_failure_batches','1.5'],['astra_failure_priority','101'],['astra_recovery_priority','-101'],['astra_failure_priority','']]) {
+    const f=fixture(); f.context.field=field; f.context.value=value;
+    f.run(`data={config:{}}; fillCfg({}); $(field).value=value; mutate=()=>{throw new Error('invalid config submitted');};`);
+    await f.run('saveCfg()');
+    assert.match(f.elements.get('actionMsg').textContent,/必须为/);
+  }
+});
+
+test('Astra cards show independent fired owned suppressed states and configured targets',()=> {
+  const f=policyFixture({enabled:true,consecutive_failures:4,group_triggered:true,group_suppressed:true,priority_demoted:true,priority_triggered:true,failure_priority:-3});
+  f.run(`data={config:{astra_policy_enabled:true,astra_priority_policy_enabled:true,astra_group_failure_batches:3,astra_priority_failure_batches:5,astra_failure_group_id:11,astra_recovery_group_id:12,astra_failure_priority:0,astra_recovery_priority:7}}; renderPolicy(view)`);
+  const shown=f.context.view.policy.textContent;
+  assert.match(shown,/共享连续失败 4（迁组阈值 3，优先级阈值 5）/);
+  assert.match(shown,/迁组开启：已触发 \/ 未持有 \/ 人工覆盖后抑制；目标 #11 → #12/);
+  assert.match(shown,/优先级开启：已触发 \/ 策略持有 \/ 未抑制；目标 0 → 7/);
+  assert.match(shown,/策略持有的优先级 -3/);
+  assert.doesNotMatch(shown,/连续失败 4\/2/);
+  assert.equal(policyFixture({priority_suppressed:true}).context.view.policy.hidden,false);
+  const manual=policyFixture({error:'manual_priority_changed'}).context.view.policy.textContent;
+  assert.match(manual,/人工优先级已变更.*不影响共享失败计数或迁组动作/);
+});
+
 function policyFixture(policy) {
   const f=fixture();
   f.context.view={account:{astra_policy:policy},policy:element()};
@@ -133,7 +191,7 @@ test('Astra latest batch shows frozen counters and qualification, not an inferre
   const f=policyFixture({enabled:true,consecutive_failures:1,last_outcome:'ordinary_miss',latest_batch:{attempts:20,max_attempts:20,ordinary_misses:16,threshold_percent:80,exhausted:true,reason:'qualified_miss'}});
   f.run('data={config:{astra_miss_threshold_percent:95}}; renderPolicy(view)');
   const shown=f.context.view.policy.textContent;
-  assert.match(shown,/连续失败 1\/2/);
+  assert.match(shown,/共享连续失败 1（迁组阈值 2，优先级阈值 1）/);
   assert.match(shown,/尝试 20\/20，普通未命中 16，批次阈值 80%，已耗尽/);
   assert.match(shown,/批次判定：符合普通未命中失败条件/);
   assert.match(shown,/符合条件不代表已计数/);
@@ -156,11 +214,11 @@ test('Astra guard errors take precedence over outcomes without hiding evidence',
   for(const error of ['manual_membership_changed','policy_state_unavailable','other_error']) {
     const f=policyFixture({enabled:true,error,consecutive_failures:0,last_outcome:'ordinary_miss',latest_batch:{attempts:20,max_attempts:20,ordinary_misses:20,threshold_percent:80,exhausted:true,reason:'qualified_miss'}});
     const shown=f.context.view.policy.textContent;
-    assert.match(shown,/连续失败 0\/2/);
+    assert.match(shown,/共享连续失败 0（迁组阈值 2，优先级阈值 1）/);
     assert.match(shown,/普通未命中 20/);
     assert.doesNotMatch(shown,/本批符合普通未命中失败条件|已计入连续失败/);
     if(error==='manual_membership_changed') {
-      assert.match(shown,/人工分组已变更.*本批未计入连续失败/);
+      assert.match(shown,/人工分组已变更.*不影响共享失败计数或优先级动作/);
       assert.ok(shown.indexOf('人工分组已变更')<shown.indexOf('批次判定'));
     }
   }
@@ -172,7 +230,7 @@ test('Astra legacy outcomes have unavailable counts, never fabricated batch evid
   for(const latest_batch of [undefined,null]) {
     const f=policyFixture({last_outcome:'ordinary_miss',consecutive_failures:1,latest_batch});
     assert.match(f.context.view.policy.textContent,/最近一批计数不可用（旧版状态）/);
-    assert.match(f.context.view.policy.textContent,/连续失败 1\/2/);
+    assert.match(f.context.view.policy.textContent,/共享连续失败 1（迁组阈值 2，优先级阈值 1）/);
     assert.match(f.context.view.policy.textContent,/是否符合当前阈值未知/);
     assert.doesNotMatch(f.context.view.policy.textContent,/尝试 \d|批次阈值|已计入|本批符合普通未命中失败条件/);
   }

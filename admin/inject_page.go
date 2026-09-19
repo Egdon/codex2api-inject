@@ -220,20 +220,26 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
       </section>
     </div>
     <div class="settings-pair">
-    <section class="card" aria-label="Astra 自动分组策略">
-      <h2>Astra 自动分组策略</h2>
+    <section class="card" aria-label="Astra 自动策略">
+      <h2>Astra 自动策略</h2>
       <div class="settings-form">
+        <label>共享普通未命中占比阈值（%） <input id="astra_miss_threshold_percent" type="number" min="1" max="100" step="1" value="80" required/></label>
+        <label>分组降级复查间隔（分钟） <input id="astra_recheck_minutes" type="number" min="1" max="1440" value="30" required/></label>
         <div class="switchline full-width"><button id="astra_policy_enabled" class="switch" type="button" aria-label="自动分组策略开关" onclick="toggleBtn(this)"></button><div>自动迁组<div class="hint">默认关闭，只以 Astra 判定</div></div></div>
+        <label>迁组失败批次阈值 <input id="astra_group_failure_batches" type="number" min="1" max="50" step="1" value="2" required/></label>
         <label>失败迁入分组 <select id="astra_failure_group_id"><option value="0">请选择 Codex 分组</option></select></label>
         <label>恢复迁入分组 <select id="astra_recovery_group_id"><option value="0">请选择 Codex 分组</option></select></label>
-        <label>普通未命中占比阈值（%） <input id="astra_miss_threshold_percent" type="number" min="1" max="100" step="1" value="80" required/></label>
-        <label>降级复查间隔（分钟） <input id="astra_recheck_minutes" type="number" min="1" max="1440" value="30" required/></label>
         <button type="button" class="ghost" onclick="loadGroups(true)">刷新分组列表</button>
+        <div class="switchline full-width"><button id="astra_priority_policy_enabled" class="switch" type="button" aria-label="自动优先级策略开关" onclick="toggleBtn(this)"></button><div>自动调整调度优先级<div class="hint">独立开关，不要求选择分组</div></div></div>
+        <label>优先级失败批次阈值 <input id="astra_priority_failure_batches" type="number" min="1" max="50" step="1" value="1" required/></label>
+        <label>失败优先级 <input id="astra_failure_priority" type="number" min="-100" max="100" step="1" value="-1" required/></label>
+        <label>恢复优先级 <input id="astra_recovery_priority" type="number" min="-100" max="100" step="1" value="0" required/></label>
       </div>
+      <p id="astraPriorityWarning" class="sub" role="status" hidden>注意：失败优先级高于恢复优先级，会提高失败账号的调度顺序；仍可保存。</p>
       <p id="groupLoadMsg" class="sub" role="status"></p>
-      <p class="sub">仅耗尽全部尝试的完整 Astra batch，正常有效且非 292 的响应占尝试上限比例达到阈值（默认 ≥80%），才符合失败条件；连续 2 个符合条件的 batch 才迁组。网络异常、限流不算普通未命中；取消或 401 的 batch 不计失败。迁组后 Astra 获得新 292 且确认成功才恢复。</p>
-      <p class="sub">阈值在 batch 开始时固定，修改仅影响新 batch。下方仅展示最近一次已记录批次的计数与判定（取消可能不更新记录）；实际连续失败次数以策略状态为准。</p>
-      <p class="sub">迁组会替换账号全部分组。关闭策略不自动搬回账号；人工改组后不强行恢复。自动复查需同时开启自动探测并参与探测。</p>
+      <p class="sub">仅耗尽全部尝试的完整 Astra batch，正常有效且非 292 的响应占尝试上限比例达到共享阈值（默认 ≥80%），才符合失败条件。两个动作共享连续失败计数，分别达到自己的批次阈值时触发；迁组后计数仍可继续增长。网络异常、限流不算普通未命中；取消或 401 的 batch 不计失败。获得新 292 且确认成功才执行仍归策略所有的恢复动作。</p>
+      <p class="sub">批次阈值在开始时固定；修改动作开关、阈值或目标后，旧批次不会执行策略，新计数重新开始，但不会清除已有动作归属。下方展示最近已记录批次的证据；实际共享连续失败次数以策略状态为准。</p>
+      <p class="sub">迁组会替换全部分组，并进入仅 Astra 的低频复查；仅调整优先级不改变全模型采集。关闭动作不自动恢复；人工改组或调整优先级后，对应动作不再强行覆盖。自动复查需开启自动探测并参与探测。</p>
     </section>
     <section class="card" aria-label="采集代理">
       <h2>采集代理</h2>
@@ -284,7 +290,7 @@ button.danger:hover { background: hsl(0 60% 48% / .08); filter: none; }
     <section class="settings-actions" aria-label="保存全部设置">
       <div>
         <strong>统一保存设置</strong>
-        <p class="sub">保存注入开关、探测参数、Astra 分组策略和两套采集代理配置；卡片布局与筛选即时生效。</p>
+        <p class="sub">保存注入开关、探测参数、Astra 自动策略和两套采集代理配置；卡片布局与筛选即时生效。</p>
         <p id="cfgMsg" class="sub" role="status" aria-live="polite">修改后点击右侧按钮保存。</p>
       </div>
       <button id="saveBtn" type="button" class="savebtn" onclick="saveCfg()">保存全部设置</button>
@@ -553,7 +559,7 @@ function toggleBtn(el) {
 function updateInjectHint() {
   text($('inject_hint'),$('inject_enabled').dataset.on === '1' ? '有可用票据时自动附带 turn-state' : '关闭代理额外注入，不影响客户端自带状态');
 }
-const configInputs=['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','models','harvest_proxy_provider','zoo_host','zoo_user_prefix','zoo_password','zoo_region','zoo_region_mode','zoo_sticky_minutes','litport_host','litport_username','litport_password','litport_region','litport_region_mode','litport_session_seconds','astra_failure_group_id','astra_recovery_group_id','astra_recheck_minutes','astra_miss_threshold_percent'];
+const configInputs=['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','models','harvest_proxy_provider','zoo_host','zoo_user_prefix','zoo_password','zoo_region','zoo_region_mode','zoo_sticky_minutes','litport_host','litport_username','litport_password','litport_region','litport_region_mode','litport_session_seconds','astra_failure_group_id','astra_recovery_group_id','astra_recheck_minutes','astra_miss_threshold_percent','astra_group_failure_batches','astra_priority_failure_batches','astra_failure_priority','astra_recovery_priority'];
 function updateProxyPanels() {
   const provider=$('harvest_proxy_provider').value;
   $('zooproxy_panel').hidden=provider!=='zooproxy';
@@ -562,6 +568,8 @@ function updateProxyPanels() {
 function fillCfg(c) {
   setSwitch('inject_enabled',c.inject_enabled); setSwitch('auto_harvest',c.auto_harvest);
   setSwitch('astra_policy_enabled',c.astra_policy_enabled);
+  setSwitch('astra_priority_policy_enabled',c.astra_priority_policy_enabled);
+  for(const [id,fallback] of Object.entries({astra_group_failure_batches:2,astra_priority_failure_batches:1,astra_failure_priority:-1,astra_recovery_priority:0}))$(id).value=c[id]??fallback;
   for(const id of ['astra_failure_group_id','astra_recovery_group_id'])setGroupOptions(id,c[id]);
   $('astra_recheck_minutes').value=c.astra_recheck_minutes||30;
   $('astra_miss_threshold_percent').value=c.astra_miss_threshold_percent??80;
@@ -584,8 +592,12 @@ function fillCfg(c) {
   $('models').value=(c.models||[]).join(', ');
   $('zoo_password').placeholder=c.zoo_password_set?'已保存，留空不改':'必填才能探测';
   $('litport_password').placeholder=c.litport_password_set?'已保存，留空不改':'必填才能探测';
+  updateAstraPriorityWarning();
 }
-function markCfgDirty() { cfgEditRevision++; cfgDirty=true; $('saveBtn').classList.add('unsaved'); text($('cfgMsg'),'有未保存修改'); }
+function updateAstraPriorityWarning() {
+  $('astraPriorityWarning').hidden=!(Number($('astra_failure_priority').value)>Number($('astra_recovery_priority').value));
+}
+function markCfgDirty() { updateAstraPriorityWarning(); cfgEditRevision++; cfgDirty=true; $('saveBtn').classList.add('unsaved'); text($('cfgMsg'),'有未保存修改'); }
 function recommendedConcurrency() { $('concurrency').value=4; $('account_concurrency').value=2; markCfgDirty(); }
 function resetPlanWeights() {
   $('plan_weight_pro').value=3; $('plan_weight_prolite').value=2; $('plan_weight_plus').value=1; markCfgDirty();
@@ -596,21 +608,26 @@ function saveCfg() {
     interval_minutes:data?.config?.interval_minutes || 50,
     models:$('models').value.split(',').map(s=>s.trim()).filter(Boolean),
     astra_policy_enabled:$('astra_policy_enabled').dataset.on==='1',
+    astra_priority_policy_enabled:$('astra_priority_policy_enabled').dataset.on==='1',
     astra_failure_group_id:Number($('astra_failure_group_id').value),
     astra_recovery_group_id:Number($('astra_recovery_group_id').value),
   };
   if(body.astra_policy_enabled) {
     const fail=body.astra_failure_group_id, recovery=body.astra_recovery_group_id;
     if(!fail || !recovery || fail===recovery) {notice('请选择两个不同的失败/恢复目标分组。',true);return;}
-    if(!body.models.some(m=>m.toLowerCase()==='gpt-6-astra')) {notice('启用 Astra 策略需要在模型列表中包含 gpt-6-astra。',true);return;}
   }
-  for (const id of ['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','zoo_sticky_minutes','litport_session_seconds','astra_recheck_minutes','astra_miss_threshold_percent']) {
+  if((body.astra_policy_enabled||body.astra_priority_policy_enabled) && !body.models.some(m=>m.toLowerCase()==='gpt-6-astra')) {notice('启用 Astra 策略需要在模型列表中包含 gpt-6-astra。',true);return;}
+  for (const id of ['plan_weight_pro','plan_weight_prolite','plan_weight_plus','max_attempts','concurrency','account_concurrency','cooldown_minutes','skip_ttl_minutes','zoo_sticky_minutes','litport_session_seconds','astra_recheck_minutes','astra_miss_threshold_percent','astra_group_failure_batches','astra_priority_failure_batches','astra_failure_priority','astra_recovery_priority']) {
     if (!$(id).reportValidity()) {
       if(id==='litport_session_seconds')notice('Litport 会话 TTL 必须为 1–86400 的整数秒；请切换到 Litport 检查配置。',true);
       return;
     }
     body[id]=Number($(id).value);
   }
+  for(const [id,min,max] of [['astra_group_failure_batches',1,50],['astra_priority_failure_batches',1,50],['astra_failure_priority',-100,100],['astra_recovery_priority',-100,100]]) {
+    if(!$(id).value.toString().trim() || !Number.isInteger(body[id]) || body[id]<min || body[id]>max) {notice(id+' 必须为 '+min+'–'+max+' 的整数。',true);return;}
+  }
+  updateAstraPriorityWarning();
   for (const id of ['harvest_proxy_provider','zoo_host','zoo_user_prefix','zoo_region','zoo_region_mode','litport_host','litport_username','litport_region','litport_region_mode']) body[id]=$(id).value.trim();
   if(!['zooproxy','litport'].includes(body.harvest_proxy_provider)) {notice('请选择有效的采集代理提供商。',true);return;}
   body.zoo_password=$('zoo_password').value;
@@ -688,12 +705,18 @@ function makeCard(a) {
 }
 function renderPolicy(view) {
   const p=view.account.astra_policy;
-  view.policy.hidden=!p || (!p.enabled && !p.demoted && !p.consecutive_failures && !p.error && !p.last_outcome && !p.latest_batch);
+  view.policy.hidden=!p || (!p.enabled && !p.demoted && !p.priority_demoted && !p.group_triggered && !p.priority_triggered && !p.group_suppressed && !p.priority_suppressed && !p.consecutive_failures && !p.error && !p.last_outcome && !p.latest_batch);
   if(!p)return;
   const outcomes={ordinary_miss:'本批符合普通未命中失败条件',new_292:'获得新292',inconclusive:'本批未计失败（异常或中断）',miss_batch:'正常未命中 batch',confirmed_292:'292 确认成功',success:'获得292',demoted:'已自动迁组',recovered:'已自动恢复',manual_override:'人工调整分组'};
-  const parts=[p.enabled?'Astra 策略开启':'Astra 策略关闭', '连续失败 '+(p.consecutive_failures||0)+'/2'];
+  const cfg=data?.config||{};
+  const parts=[p.enabled?'Astra 策略开启':'Astra 策略关闭', '共享连续失败 '+(p.consecutive_failures||0)+'（迁组阈值 '+(cfg.astra_group_failure_batches??2)+'，优先级阈值 '+(cfg.astra_priority_failure_batches??1)+'）'];
+  const state=(fired,owned,suppressed)=>[fired?'已触发':'未触发',owned?'策略持有':'未持有',suppressed?'人工覆盖后抑制':'未抑制'].join(' / ');
+  const groupName=id=>availableGroups.find(g=>g.id===id)?.name || (id?'#'+id:'未配置');
+  parts.push('迁组'+(cfg.astra_policy_enabled?'开启':'关闭')+'：'+state(p.group_triggered||p.demoted,p.demoted,p.group_suppressed)+'；目标 '+groupName(cfg.astra_failure_group_id)+' → '+groupName(cfg.astra_recovery_group_id));
+  parts.push('优先级'+(cfg.astra_priority_policy_enabled?'开启':'关闭')+'：'+state(p.priority_triggered||p.priority_demoted,p.priority_demoted,p.priority_suppressed)+'；目标 '+(cfg.astra_failure_priority??-1)+' → '+(cfg.astra_recovery_priority??0));
+  if(p.priority_demoted)parts.push('策略持有的优先级 '+(p.failure_priority??'—'));
   if(p.error) {
-    const errors={manual_membership_changed:'人工分组已变更，自动恢复归属已解除；本批未计入连续失败',policy_state_unavailable:'策略状态暂不可用'};
+    const errors={manual_membership_changed:'人工分组已变更，迁组动作归属已解除，不影响共享失败计数或优先级动作',manual_priority_changed:'人工优先级已变更，优先级动作归属已解除，不影响共享失败计数或迁组动作',policy_state_unavailable:'策略状态暂不可用'};
     parts.push(errors[p.error] || '策略错误：'+p.error);
   }
   if(p.demoted) {
