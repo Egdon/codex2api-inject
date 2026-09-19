@@ -16,7 +16,7 @@ const astraModel = "gpt-6-astra"
 // credential, transport error, or the internal settings epoch.
 func (h *Harvester) PolicySnapshot(accountID int64) database.AstraPolicyState {
 	cfg := GetConfig()
-	s := database.AstraPolicyState{AccountID: accountID, Enabled: cfg.AstraPolicyEnabled, OriginalGroupIDs: []int64{}}
+	s := database.AstraPolicyState{AccountID: accountID, Enabled: astraPolicyEnabled(cfg), OriginalGroupIDs: []int64{}}
 	if h.db == nil {
 		return s
 	}
@@ -38,7 +38,7 @@ func (h *Harvester) PolicySnapshot(accountID int64) database.AstraPolicyState {
 	if saved, ok := h.policyStates[accountID]; ok {
 		s = saved
 	}
-	s.Enabled = cfg.AstraPolicyEnabled
+	s.Enabled = astraPolicyEnabled(cfg)
 	if s.Epoch != cfg.astraPolicyEpoch {
 		s.ConsecutiveFailures = 0
 	}
@@ -71,7 +71,7 @@ func (h *Harvester) preparePolicyBatch(ctx context.Context, c *scheduledCell, cf
 	c.batchID = randomSID() + randomSID()
 	c.ordinaryMisses = 0
 	c.missThresholdPercent = NormalizeConfig(cfg).AstraMissThresholdPercent
-	if h.db == nil || !cfg.AstraPolicyEnabled || !strings.EqualFold(c.model, astraModel) {
+	if h.db == nil || !astraPolicyEnabled(cfg) || !strings.EqualFold(c.model, astraModel) {
 		return
 	}
 	expected, err := h.db.AstraPolicyExpectation(ctx, c.accountID)
@@ -156,5 +156,29 @@ func (h *Harvester) finishPolicyBatch(ctx context.Context, c *scheduledCell, r a
 				groups = latest
 			}
 		}
+		if store, ok := h.store.(interface{ ApplyAccountSchedulerPriority(int64, *int64) bool }); ok {
+			row, err := h.db.GetAccountByID(ctx, c.accountID)
+			for tries := 0; err == nil && row != nil && tries < 3; tries++ {
+				priority := astraSchedulerPriority(row)
+				store.ApplyAccountSchedulerPriority(c.accountID, &priority)
+				row, err = h.db.GetAccountByID(ctx, c.accountID)
+				if err != nil || row == nil || priority == astraSchedulerPriority(row) {
+					break
+				}
+			}
+		}
 	}
+}
+
+// Match the scheduler's credential decoding and bounds, including integral JSON
+// numbers formatted with exponents. Missing or malformed priority defaults to zero.
+func astraSchedulerPriority(row *database.AccountRow) int64 {
+	if row == nil {
+		return 0
+	}
+	priority, valid := row.GetCredentialInt64("scheduler_priority")
+	if !valid {
+		return 0
+	}
+	return max(int64(-100), min(int64(100), priority))
 }

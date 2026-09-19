@@ -32,37 +32,55 @@ func (e *AstraBatchEvidence) Clone() *AstraBatchEvidence {
 // AstraPolicyState contains audit metadata only; never credentials or tickets.
 // Times exposed to callers are Unix seconds.
 type AstraPolicyState struct {
-	LatestBatch         *AstraBatchEvidence `json:"latest_batch,omitempty"`
-	AccountID           int64               `json:"account_id"`
-	Enabled             bool                `json:"enabled"`
-	ConsecutiveFailures int                 `json:"consecutive_failures"`
-	Demoted             bool                `json:"demoted"`
-	FailureGroupID      int64               `json:"failure_group_id"`
-	OriginalGroupIDs    []int64             `json:"original_group_ids"`
-	DemotedAt           int64               `json:"demoted_at"`
-	LastBatchID         string              `json:"last_batch_id"`
-	LastOutcome         string              `json:"last_outcome"`
-	LastOutcomeAt       int64               `json:"last_outcome_at"`
-	Last292At           int64               `json:"last_292_at"`
-	LastConfirmed292At  int64               `json:"last_confirmed_292_at"`
-	NextRecoveryAt      int64               `json:"next_recovery_at"`
-	Error               string              `json:"error"`
-	Epoch               int64               `json:"-"`
-	OwnedVersion        int64               `json:"-"`
-	LastBatchSequence   int64               `json:"-"`
-	DemotedAtNano       int64               `json:"-"`
+	PriorityDemoted          bool                `json:"priority_demoted"`
+	GroupTriggered           bool                `json:"group_triggered"`
+	PriorityTriggered        bool                `json:"priority_triggered"`
+	GroupSuppressed          bool                `json:"group_suppressed"`
+	PrioritySuppressed       bool                `json:"priority_suppressed"`
+	FailurePriority          int                 `json:"failure_priority"`
+	PriorityDemotedAt        int64               `json:"priority_demoted_at"`
+	GroupSuppressedAt        int64               `json:"group_suppressed_at"`
+	PrioritySuppressedAt     int64               `json:"priority_suppressed_at"`
+	PriorityOwnedVersion     int64               `json:"-"`
+	PriorityDemotedAtNano    int64               `json:"-"`
+	GroupSuppressedAtNano    int64               `json:"-"`
+	PrioritySuppressedAtNano int64               `json:"-"`
+	LatestBatch              *AstraBatchEvidence `json:"latest_batch,omitempty"`
+	AccountID                int64               `json:"account_id"`
+	Enabled                  bool                `json:"enabled"`
+	ConsecutiveFailures      int                 `json:"consecutive_failures"`
+	Demoted                  bool                `json:"demoted"`
+	FailureGroupID           int64               `json:"failure_group_id"`
+	OriginalGroupIDs         []int64             `json:"original_group_ids"`
+	DemotedAt                int64               `json:"demoted_at"`
+	LastBatchID              string              `json:"last_batch_id"`
+	LastOutcome              string              `json:"last_outcome"`
+	LastOutcomeAt            int64               `json:"last_outcome_at"`
+	Last292At                int64               `json:"last_292_at"`
+	LastConfirmed292At       int64               `json:"last_confirmed_292_at"`
+	NextRecoveryAt           int64               `json:"next_recovery_at"`
+	Error                    string              `json:"error"`
+	Epoch                    int64               `json:"-"`
+	OwnedVersion             int64               `json:"-"`
+	LastBatchSequence        int64               `json:"-"`
+	DemotedAtNano            int64               `json:"-"`
 }
 
 type astraPolicyStored struct {
 	AstraPolicyState
-	Epoch             int64 `json:"epoch"`
-	OwnedVersion      int64 `json:"owned_version"`
-	LastBatchSequence int64 `json:"last_batch_sequence"`
-	DemotedAtNano     int64 `json:"demoted_at_nano"`
+	Epoch                    int64 `json:"epoch"`
+	OwnedVersion             int64 `json:"owned_version"`
+	LastBatchSequence        int64 `json:"last_batch_sequence"`
+	DemotedAtNano            int64 `json:"demoted_at_nano"`
+	PriorityOwnedVersion     int64 `json:"priority_owned_version"`
+	PriorityDemotedAtNano    int64 `json:"priority_demoted_at_nano"`
+	GroupSuppressedAtNano    int64 `json:"group_suppressed_at_nano"`
+	PrioritySuppressedAtNano int64 `json:"priority_suppressed_at_nano"`
 }
 
 func encodeAstraState(s AstraPolicyState) ([]byte, error) {
-	return json.Marshal(astraPolicyStored{s, s.Epoch, s.OwnedVersion, s.LastBatchSequence, s.DemotedAtNano})
+	return json.Marshal(astraPolicyStored{AstraPolicyState: s, Epoch: s.Epoch, OwnedVersion: s.OwnedVersion, LastBatchSequence: s.LastBatchSequence, DemotedAtNano: s.DemotedAtNano,
+		PriorityOwnedVersion: s.PriorityOwnedVersion, PriorityDemotedAtNano: s.PriorityDemotedAtNano, GroupSuppressedAtNano: s.GroupSuppressedAtNano, PrioritySuppressedAtNano: s.PrioritySuppressedAtNano})
 }
 func decodeAstraState(raw string, s *AstraPolicyState) error {
 	var stored astraPolicyStored
@@ -72,6 +90,11 @@ func decodeAstraState(raw string, s *AstraPolicyState) error {
 	*s = stored.AstraPolicyState
 	s.LastBatchSequence = stored.LastBatchSequence
 	s.Epoch, s.OwnedVersion, s.DemotedAtNano = stored.Epoch, stored.OwnedVersion, stored.DemotedAtNano
+	s.PriorityOwnedVersion, s.PriorityDemotedAtNano = stored.PriorityOwnedVersion, stored.PriorityDemotedAtNano
+	s.GroupSuppressedAtNano, s.PrioritySuppressedAtNano = stored.GroupSuppressedAtNano, stored.PrioritySuppressedAtNano
+	// Old records only carried the group-owned flag. Preserve that action.
+	s.GroupTriggered = s.GroupTriggered || s.Demoted
+	s.PriorityTriggered = s.PriorityTriggered || s.PriorityDemoted
 	return nil
 }
 
@@ -83,7 +106,11 @@ func (db *DB) ensureAstraPolicySchema(ctx context.Context) error {
 			return fmt.Errorf("astra policy schema: %w", err)
 		}
 	}
-	return nil
+	if db.isSQLite() {
+		return db.ensureSQLiteColumn(ctx, "codex_astra_policy", "priority_version", "BIGINT NOT NULL DEFAULT 0")
+	}
+	_, err := db.conn.ExecContext(ctx, `ALTER TABLE codex_astra_policy ADD COLUMN IF NOT EXISTS priority_version BIGINT NOT NULL DEFAULT 0`)
+	return err
 }
 
 func (db *DB) AstraPolicySnapshot(ctx context.Context, id int64) (AstraPolicyState, error) {
@@ -115,16 +142,13 @@ func (db *DB) lockPolicyAccount(ctx context.Context, tx *sql.Tx, id int64) error
 	return tx.QueryRowContext(ctx, q, id).Scan(&found)
 }
 
-// markManualPolicyGroups invalidates ownership even for a same-value assignment.
-// It intentionally does not restore groups or count outcomes while disabled.
+// markManualPolicyGroups invalidates only group ownership, even for same-value
+// assignments. Call inside the membership write transaction, before its writes.
 func (db *DB) markManualPolicyGroups(ctx context.Context, tx *sql.Tx, ids []int64) error {
 	ids = append([]int64(nil), ids...)
 	slices.Sort(ids)
-	for _, id := range ids {
-		if err := db.lockPolicyAccount(ctx, tx, id); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO codex_astra_policy (account_id,membership_version) VALUES ($1,1) ON CONFLICT(account_id) DO UPDATE SET membership_version=codex_astra_policy.membership_version+1`, id); err != nil {
+	for _, id := range slices.Compact(ids) {
+		if err := db.markManualPolicyProperty(ctx, tx, id, false); err != nil {
 			return err
 		}
 	}
@@ -132,9 +156,11 @@ func (db *DB) markManualPolicyGroups(ctx context.Context, tx *sql.Tx, ids []int6
 }
 
 type AstraPolicyExpectation struct {
-	GroupIDs []int64
-	Version  int64
-	Sequence int64
+	GroupIDs        []int64
+	Version         int64
+	Sequence        int64
+	Priority        int
+	PriorityVersion int64
 }
 
 func policyMembership(ctx context.Context, tx *sql.Tx, id int64) (AstraPolicyExpectation, error) {
@@ -156,10 +182,11 @@ func policyMembership(ctx context.Context, tx *sql.Tx, id int64) (AstraPolicyExp
 	if err != nil {
 		return out, err
 	}
-	err = tx.QueryRowContext(ctx, `SELECT membership_version FROM codex_astra_policy WHERE account_id=$1`, id).Scan(&out.Version)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = nil
+	err = tx.QueryRowContext(ctx, `SELECT membership_version,priority_version FROM codex_astra_policy WHERE account_id=$1`, id).Scan(&out.Version, &out.PriorityVersion)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return out, err
 	}
+	out.Priority, err = policyPriority(ctx, tx, id)
 	return out, err
 }
 
@@ -234,9 +261,9 @@ type AstraPolicyOutcome struct {
 	IssuedUnix     int64
 }
 
-// ApplyAstraPolicyOutcome atomically checks settings, receipt, membership/version,
-// updates state, and replaces memberships. The caller must refresh runtime groups
-// from the DB after commit, never apply a previously computed desired slice.
+// ApplyAstraPolicyOutcome checks settings before locking the account and commits
+// both independent actions atomically. The caller refreshes groups AND priority
+// after a true result; no precomputed runtime value is safe to publish.
 func (db *DB) ApplyAstraPolicyOutcome(ctx context.Context, o AstraPolicyOutcome) (changed bool, err error) {
 	if o.BatchID == "" || o.Epoch == 0 {
 		return false, nil
@@ -251,126 +278,40 @@ func (db *DB) ApplyAstraPolicyOutcome(ctx context.Context, o AstraPolicyOutcome)
 		if err := tx.QueryRowContext(ctx, q).Scan(&raw); err != nil {
 			return err
 		}
-		var cfg struct {
-			Enabled  bool  `json:"astra_policy_enabled"`
-			Epoch    int64 `json:"_astra_policy_epoch"`
-			Failure  int64 `json:"astra_failure_group_id"`
-			Recovery int64 `json:"astra_recovery_group_id"`
-			Minutes  int   `json:"astra_recheck_minutes"`
-		}
-		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		cfg, err := decodeAstraPolicyConfig(raw)
+		if err != nil {
 			return err
 		}
-		if !cfg.Enabled || cfg.Epoch != o.Epoch {
+		if (!cfg.Enabled && !cfg.PriorityEnabled) || cfg.Epoch != o.Epoch {
 			return nil
 		}
 		if err := db.lockPolicyAccount(ctx, tx, o.AccountID); err != nil {
 			return err
 		}
-		now := time.Now()
-		stamp := now.Unix()
-		membership, err := policyMembership(ctx, tx, o.AccountID)
+		current, err := policyMembership(ctx, tx, o.AccountID)
 		if err != nil {
 			return err
 		}
-		s := AstraPolicyState{AccountID: o.AccountID, OriginalGroupIDs: []int64{}}
-		err = tx.QueryRowContext(ctx, `SELECT state_json FROM codex_astra_policy WHERE account_id=$1`, o.AccountID).Scan(&raw)
-		if err == nil {
-			if err = decodeAstraState(raw, &s); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, sql.ErrNoRows) {
+		s, err := loadAstraPolicyState(ctx, tx, o.AccountID)
+		if err != nil {
 			return err
 		}
-		s.AccountID = o.AccountID
 		if o.BatchSequence <= s.LastBatchSequence {
 			return nil
 		}
-		s.LastBatchSequence = o.BatchSequence
 		if s.Epoch != o.Epoch {
 			s.ConsecutiveFailures = 0
 			s.Epoch = o.Epoch
 		}
-		s.LastBatchID, s.LastOutcome, s.LastOutcomeAt, s.Error = o.BatchID, o.Outcome, stamp, ""
+		s.LastBatchSequence = o.BatchSequence
+		now := time.Now()
+		s.LastBatchID, s.LastOutcome, s.LastOutcomeAt, s.Error = o.BatchID, o.Outcome, now.Unix(), ""
 		s.LatestBatch = o.LatestBatch.Clone()
-		owned := s.Demoted && membership.Version == s.OwnedVersion && slices.Equal(membership.GroupIDs, []int64{s.FailureGroupID})
-		expected := membership.Version == o.Expected.Version && slices.Equal(membership.GroupIDs, o.Expected.GroupIDs)
-		if s.Demoted && !owned {
-			s.Demoted = false
-			s.NextRecoveryAt = 0
-			s.ConsecutiveFailures = 0
-			s.Error = "manual_membership_changed"
-		}
-		if !s.Demoted && s.OwnedVersion != membership.Version {
-			s.ConsecutiveFailures = 0
-			s.OwnedVersion = membership.Version
-		}
-		if o.Outcome == "new_292" {
-			s.ConsecutiveFailures = 0
-			s.Last292At = stamp
-			if o.Confirmed {
-				s.LastConfirmed292At = stamp
-			}
-		}
-		target := int64(0)
-		if !expected {
-			s.ConsecutiveFailures = 0
-			s.Error = "manual_membership_changed"
-		} else if o.Outcome == "ordinary_miss" && !s.Demoted {
-			s.ConsecutiveFailures++
-			if s.ConsecutiveFailures >= 2 {
-				target = cfg.Failure
-			}
-		}
-		if owned && expected && o.Outcome == "new_292" && o.Confirmed && o.ObtainedAtNano > s.DemotedAtNano && o.IssuedUnix >= s.DemotedAt && o.IssuedUnix <= stamp+60 && o.IssuedUnix+3600 > stamp {
-			target = cfg.Recovery
-		}
-		if target != 0 {
-			validation := error(nil)
-			if cfg.Failure == cfg.Recovery {
-				validation = errors.New("policy groups must be distinct")
-			} else {
-				for _, gid := range []int64{cfg.Failure, cfg.Recovery} {
-					if e := validateAstraGroup(ctx, tx, db.isSQLite(), gid); e != nil {
-						validation = e
-						break
-					}
-				}
-			}
-			if validation != nil {
-				s.Error = validation.Error()
-			} else {
-				if _, err := tx.ExecContext(ctx, `DELETE FROM account_group_members WHERE account_id=$1`, o.AccountID); err != nil {
-					return err
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO account_group_members(account_id,group_id) VALUES ($1,$2)`, o.AccountID, target); err != nil {
-					return err
-				}
-				membership.Version++
-				if s.Demoted {
-					s.Demoted = false
-					s.NextRecoveryAt = 0
-					s.ConsecutiveFailures = 0
-				} else {
-					s.OriginalGroupIDs = append([]int64{}, membership.GroupIDs...)
-					s.FailureGroupID = target
-					s.Demoted = true
-					s.DemotedAt = stamp
-					s.DemotedAtNano = now.UnixNano()
-					s.OwnedVersion = membership.Version
-				}
-				changed = true
-			}
-		}
-		if s.Demoted {
-			s.NextRecoveryAt = stamp + int64(max(cfg.Minutes, 1))*60
-		}
-		encoded, err := encodeAstraState(s)
+		changed, err = db.applyAstraPolicyActions(ctx, tx, &s, &current, cfg, o, now)
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO codex_astra_policy(account_id,state_json,membership_version) VALUES($1,$2,$3) ON CONFLICT(account_id) DO UPDATE SET state_json=excluded.state_json,membership_version=excluded.membership_version`, o.AccountID, string(encoded), membership.Version)
-		return err
+		return saveAstraPolicyState(ctx, tx, s, current.Version, current.PriorityVersion)
 	})
 	if err != nil {
 		changed = false

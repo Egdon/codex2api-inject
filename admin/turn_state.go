@@ -52,12 +52,21 @@ func (h *Handler) UpdateTurnStateSettings(c *gin.Context) {
 // back to ZooProxy. Password blanks are preserved under SaveConfig's lock.
 func parseTurnStateSettings(raw map[string]json.RawMessage, current turnstate.Config) (turnstate.Config, error) {
 	req := turnstate.Config{
-		HarvestProxyProvider:  current.HarvestProxyProvider,
-		LitportHost:           current.LitportHost,
-		LitportUsername:       current.LitportUsername,
-		LitportRegion:         current.LitportRegion,
-		LitportRegionMode:     current.LitportRegionMode,
-		LitportSessionSeconds: current.LitportSessionSeconds,
+		AstraGroupFailureBatches:    current.AstraGroupFailureBatches,
+		AstraPriorityPolicyEnabled:  current.AstraPriorityPolicyEnabled,
+		AstraPriorityFailureBatches: current.AstraPriorityFailureBatches,
+		AstraFailurePriority:        current.AstraFailurePriority,
+		AstraRecoveryPriority:       current.AstraRecoveryPriority,
+		HarvestProxyProvider:        current.HarvestProxyProvider,
+		LitportHost:                 current.LitportHost,
+		LitportUsername:             current.LitportUsername,
+		LitportRegion:               current.LitportRegion,
+		LitportRegionMode:           current.LitportRegionMode,
+		LitportSessionSeconds:       current.LitportSessionSeconds,
+	}
+	if req.AstraFailurePriority != nil {
+		priority := *req.AstraFailurePriority
+		req.AstraFailurePriority = &priority
 	}
 	buf, err := json.Marshal(raw)
 	if err != nil {
@@ -76,6 +85,30 @@ func parseTurnStateSettings(raw map[string]json.RawMessage, current turnstate.Co
 	}
 	if value, present := raw["litport_session_seconds"]; present && (strings.TrimSpace(string(value)) == "null" || req.LitportSessionSeconds < 1 || req.LitportSessionSeconds > 86400) {
 		return req, fmt.Errorf("litport_session_seconds 必须为 1–86400 的整数")
+	}
+	// New action fields are optional for legacy clients, but explicit values
+	// must be integral and within range. In particular priority zero is valid.
+	for _, field := range []struct {
+		name     string
+		min, max int64
+	}{
+		{"astra_group_failure_batches", 1, 50},
+		{"astra_priority_failure_batches", 1, 50},
+		{"astra_failure_priority", -100, 100},
+		{"astra_recovery_priority", -100, 100},
+	} {
+		if value, present := raw[field.name]; present {
+			var integer int64
+			if strings.TrimSpace(string(value)) == "null" || json.Unmarshal(value, &integer) != nil || integer < field.min || integer > field.max {
+				return req, fmt.Errorf("%s 必须为 %d–%d 的整数", field.name, field.min, field.max)
+			}
+		}
+	}
+	if value, present := raw["astra_priority_policy_enabled"]; present {
+		var enabled bool
+		if strings.TrimSpace(string(value)) == "null" || json.Unmarshal(value, &enabled) != nil {
+			return req, fmt.Errorf("astra_priority_policy_enabled 必须为布尔值")
+		}
 	}
 	if err := turnstate.ValidateHarvestProxyConfig(req); err != nil {
 		return req, err

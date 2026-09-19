@@ -7121,12 +7121,7 @@ func (db *DB) UpdateAccountSchedulerConfig(ctx context.Context, id int64, scoreB
 // UpdateAccountSchedulerMetadata applies scheduler overrides and UI metadata in
 // one transaction. Runtime store updates should happen only after this returns.
 func (db *DB) UpdateAccountSchedulerMetadata(ctx context.Context, id int64, scoreBiasOverride OptionalNullInt64, baseConcurrencyOverride OptionalNullInt64, skipWarmTier OptionalBool, allowedAPIKeyIDs OptionalInt64Slice, tags OptionalStringSlice, groupIDs OptionalInt64Slice, proxyURL OptionalString, credentialUpdates map[string]interface{}) error {
-	return db.withSQLiteWriteLock(ctx, func() error {
-		tx, err := db.conn.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
+	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
 
 		query := `SELECT credentials FROM accounts WHERE id = $1 AND status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`
 		if db.isSQLite() {
@@ -7210,6 +7205,11 @@ func (db *DB) UpdateAccountSchedulerMetadata(ctx context.Context, id int64, scor
 				return err
 			}
 		}
+		if _, manualPriority := credentialUpdates["scheduler_priority"]; manualPriority {
+			if err := db.markManualPolicyPriority(ctx, tx, id); err != nil {
+				return err
+			}
+		}
 		if groupIDs.Set {
 			if err := db.markManualPolicyGroups(ctx, tx, []int64{id}); err != nil {
 				return err
@@ -7229,23 +7229,18 @@ func (db *DB) UpdateAccountSchedulerMetadata(ctx context.Context, id int64, scor
 				}
 			}
 		}
-		return tx.Commit()
+		return nil
 	})
 }
 
 func (db *DB) BatchUpdateAccountMetadata(ctx context.Context, ids []int64, update BatchAccountMetadataUpdate) ([]int64, error) {
 	ids = normalizeIDSlice(ids)
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	if len(ids) == 0 || !update.HasChanges() {
 		return nil, nil
 	}
 	var updatedIDs []int64
-	err := db.withSQLiteWriteLock(ctx, func() error {
-		tx, err := db.conn.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-
+	err := db.withWriteTx(ctx, func(tx *sql.Tx) error {
 		credentialUpdates := cloneCredentialUpdates(update.CredentialUpdates)
 		if update.AllowedAPIKeyIDs.Set {
 			if credentialUpdates == nil {
@@ -7259,7 +7254,7 @@ func (db *DB) BatchUpdateAccountMetadata(ctx context.Context, ids []int64, updat
 			return selectErr
 		}
 		if len(active.ids) == 0 {
-			return tx.Commit()
+			return nil
 		}
 
 		if updateErr := db.batchUpdateAccountColumns(ctx, tx, active.ids, update); updateErr != nil {
@@ -7275,13 +7270,13 @@ func (db *DB) BatchUpdateAccountMetadata(ctx context.Context, ids []int64, updat
 				return updateErr
 			}
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return commitErr
-		}
 		updatedIDs = active.ids
 		return nil
 	})
-	return updatedIDs, err
+	if err != nil {
+		return nil, err
+	}
+	return updatedIDs, nil
 }
 
 type batchAccountCredentials struct {
@@ -7295,7 +7290,7 @@ func (db *DB) selectBatchAccounts(ctx context.Context, tx *sql.Tx, ids []int64, 
 	if includeCredentials {
 		columns = "id, credentials"
 	}
-	query := fmt.Sprintf(`SELECT %s FROM accounts WHERE status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted' AND id IN (%s)`, columns, strings.Join(placeholders, ","))
+	query := fmt.Sprintf(`SELECT %s FROM accounts WHERE status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted' AND id IN (%s) ORDER BY id`, columns, strings.Join(placeholders, ","))
 	if !db.isSQLite() {
 		query += ` FOR UPDATE`
 	}
@@ -7398,7 +7393,19 @@ func (db *DB) batchUpdateAccountCredentials(ctx context.Context, tx *sql.Tx, cur
 		query = `UPDATE accounts SET credentials = $1::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
 		identityQuery = `UPDATE accounts SET credentials = $1::jsonb, credential_generation = credential_generation + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
 	}
-	for id, credentials := range current {
+	ids := make([]int64, 0, len(current))
+	for id := range current {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	_, manualPriority := updates["scheduler_priority"]
+	for _, id := range ids {
+		credentials := current[id]
+		if manualPriority {
+			if err := db.markManualPolicyPriority(ctx, tx, id); err != nil {
+				return err
+			}
+		}
 		// Each account can start with a different value. Compare independently
 		// so an idempotent update for one row does not inherit another row's
 		// generation bump.
@@ -7607,16 +7614,21 @@ func (db *DB) updateCredentialsReadMerge(ctx context.Context, id int64, credenti
 	if _, err := tx.ExecContext(ctx, updateQuery, credJSON, id); err != nil {
 		return err
 	}
+	if _, manualPriority := credentials["scheduler_priority"]; manualPriority {
+		if err := db.markManualPolicyPriority(ctx, tx, id); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
 func (db *DB) updateCredentialsSQLite(ctx context.Context, id int64, credentials map[string]interface{}) error {
-	return db.withSQLiteWriteLock(ctx, func() error {
-		if len(credentials) == 0 {
-			return nil
-		}
+	if len(credentials) == 0 {
+		return nil
+	}
+	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
 		if grokIdentityUpdateKeysPresent(credentials) {
-			return db.updateCredentialsReadMergeSQLiteUnlocked(ctx, id, credentials)
+			return db.updateCredentialsReadMergeSQLiteTx(ctx, tx, id, credentials)
 		}
 
 		args := make([]interface{}, 0, len(credentials)*2+1)
@@ -7624,7 +7636,7 @@ func (db *DB) updateCredentialsSQLite(ctx context.Context, id int64, credentials
 		argIdx := 1
 		for key, value := range credentials {
 			if !sqliteJSONSetKeySupported(key) {
-				return db.updateCredentialsReadMergeSQLiteUnlocked(ctx, id, credentials)
+				return db.updateCredentialsReadMergeSQLiteTx(ctx, tx, id, credentials)
 			}
 			// SQLite 逐键写:敏感字段在此处按键加密(密钥未设时 no-op)。
 			if _, sensitive := sensitiveCredentialKeys[key]; sensitive {
@@ -7646,7 +7658,7 @@ func (db *DB) updateCredentialsSQLite(ctx context.Context, id int64, credentials
 			`UPDATE accounts SET credentials = json_set(COALESCE(NULLIF(credentials, ''), '{}'), %s), updated_at = CURRENT_TIMESTAMP WHERE id = $%d`,
 			strings.Join(jsonSetArgs, ", "), argIdx,
 		)
-		res, err := db.conn.ExecContext(ctx, query, args...)
+		res, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
@@ -7657,23 +7669,20 @@ func (db *DB) updateCredentialsSQLite(ctx context.Context, id int64, credentials
 		if affected == 0 {
 			return sql.ErrNoRows
 		}
+		if _, manualPriority := credentials["scheduler_priority"]; manualPriority {
+			return db.markManualPolicyPriority(ctx, tx, id)
+		}
 		return nil
 	})
 }
 
 func (db *DB) updateCredentialsReadMergeSQLite(ctx context.Context, id int64, credentials map[string]interface{}) error {
-	return db.withSQLiteWriteLock(ctx, func() error {
-		return db.updateCredentialsReadMergeSQLiteUnlocked(ctx, id, credentials)
+	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
+		return db.updateCredentialsReadMergeSQLiteTx(ctx, tx, id, credentials)
 	})
 }
 
-func (db *DB) updateCredentialsReadMergeSQLiteUnlocked(ctx context.Context, id int64, credentials map[string]interface{}) error {
-	tx, err := db.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
+func (db *DB) updateCredentialsReadMergeSQLiteTx(ctx context.Context, tx *sql.Tx, id int64, credentials map[string]interface{}) error {
 	var currentRaw interface{}
 	if err := tx.QueryRowContext(ctx, `SELECT credentials FROM accounts WHERE id = $1`, id).Scan(&currentRaw); err != nil {
 		return err
@@ -7693,7 +7702,10 @@ func (db *DB) updateCredentialsReadMergeSQLiteUnlocked(ctx context.Context, id i
 	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET credentials = $1`+generationUpdate+`, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, credJSON, id); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if _, manualPriority := credentials["scheduler_priority"]; manualPriority {
+		return db.markManualPolicyPriority(ctx, tx, id)
+	}
+	return nil
 }
 
 var grokIdentityCredentialKeys = map[string]struct{}{
@@ -7751,96 +7763,96 @@ func sqliteJSONSetKeySupported(key string) bool {
 }
 
 func (db *DB) UpdateOpenAIResponsesAccount(ctx context.Context, id int64, name string, credentials map[string]interface{}, proxyURL string) error {
-	tx, err := db.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
 
-	selectQuery := `SELECT credentials FROM accounts WHERE id = $1 AND status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`
-	if !db.isSQLite() {
-		selectQuery += ` FOR UPDATE`
-	}
+		selectQuery := `SELECT credentials FROM accounts WHERE id = $1 AND status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`
+		if !db.isSQLite() {
+			selectQuery += ` FOR UPDATE`
+		}
 
-	var currentRaw interface{}
-	if err := tx.QueryRowContext(ctx, selectQuery, id).Scan(&currentRaw); err != nil {
-		return err
-	}
-
-	current := decodeCredentials(currentRaw)
-	merged := mergeCredentialMaps(cloneCredentialUpdates(current), credentials)
-	identityChanged := openAIResponsesIdentityCredentialChanged(current, merged)
-	credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
-	if err != nil {
-		return fmt.Errorf("序列化 credentials 失败: %w", err)
-	}
-
-	identityUpdate := ""
-	if identityChanged {
-		identityUpdate = ", credential_generation = credential_generation + 1, status = 'active', error_message = '', cooldown_reason = '', cooldown_until = NULL"
-	}
-	updateQuery := `UPDATE accounts SET name = $1, credentials = $2, proxy_url = $3, platform = 'openai', type = 'responses_api'` + identityUpdate + `, updated_at = CURRENT_TIMESTAMP WHERE id = $4`
-	if !db.isSQLite() {
-		updateQuery = `UPDATE accounts SET name = $1, credentials = $2::jsonb, proxy_url = $3, platform = 'openai', type = 'responses_api'` + identityUpdate + `, updated_at = CURRENT_TIMESTAMP WHERE id = $4`
-	}
-	res, err := tx.ExecContext(ctx, updateQuery, name, credJSON, proxyURL, id)
-	if err != nil {
-		return err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return sql.ErrNoRows
-	}
-	if identityChanged {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM account_model_cooldowns WHERE account_id = $1`, id); err != nil {
+		var currentRaw interface{}
+		if err := tx.QueryRowContext(ctx, selectQuery, id).Scan(&currentRaw); err != nil {
 			return err
 		}
-	}
-	return tx.Commit()
+
+		current := decodeCredentials(currentRaw)
+		merged := mergeCredentialMaps(cloneCredentialUpdates(current), credentials)
+		identityChanged := openAIResponsesIdentityCredentialChanged(current, merged)
+		credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
+		if err != nil {
+			return fmt.Errorf("序列化 credentials 失败: %w", err)
+		}
+
+		identityUpdate := ""
+		if identityChanged {
+			identityUpdate = ", credential_generation = credential_generation + 1, status = 'active', error_message = '', cooldown_reason = '', cooldown_until = NULL"
+		}
+		updateQuery := `UPDATE accounts SET name = $1, credentials = $2, proxy_url = $3, platform = 'openai', type = 'responses_api'` + identityUpdate + `, updated_at = CURRENT_TIMESTAMP WHERE id = $4`
+		if !db.isSQLite() {
+			updateQuery = `UPDATE accounts SET name = $1, credentials = $2::jsonb, proxy_url = $3, platform = 'openai', type = 'responses_api'` + identityUpdate + `, updated_at = CURRENT_TIMESTAMP WHERE id = $4`
+		}
+		res, err := tx.ExecContext(ctx, updateQuery, name, credJSON, proxyURL, id)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return sql.ErrNoRows
+		}
+		if identityChanged {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM account_model_cooldowns WHERE account_id = $1`, id); err != nil {
+				return err
+			}
+		}
+		if _, manualPriority := credentials["scheduler_priority"]; manualPriority {
+			return db.markManualPolicyPriority(ctx, tx, id)
+		}
+		return nil
+	})
 }
 
 func (db *DB) UpdateOAuthAccountCredentials(ctx context.Context, id int64, credentials map[string]interface{}, proxyURL string) error {
-	tx, err := db.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
 
-	selectQuery := `SELECT credentials FROM accounts WHERE id = $1 AND status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`
-	if !db.isSQLite() {
-		selectQuery += ` FOR UPDATE`
-	}
+		selectQuery := `SELECT credentials FROM accounts WHERE id = $1 AND status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`
+		if !db.isSQLite() {
+			selectQuery += ` FOR UPDATE`
+		}
 
-	var currentRaw interface{}
-	if err := tx.QueryRowContext(ctx, selectQuery, id).Scan(&currentRaw); err != nil {
-		return err
-	}
+		var currentRaw interface{}
+		if err := tx.QueryRowContext(ctx, selectQuery, id).Scan(&currentRaw); err != nil {
+			return err
+		}
 
-	merged := mergeCredentialMaps(decodeCredentials(currentRaw), credentials)
-	credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
-	if err != nil {
-		return fmt.Errorf("序列化 credentials 失败: %w", err)
-	}
+		merged := mergeCredentialMaps(decodeCredentials(currentRaw), credentials)
+		credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
+		if err != nil {
+			return fmt.Errorf("序列化 credentials 失败: %w", err)
+		}
 
-	updateQuery := `UPDATE accounts SET credentials = $1, proxy_url = $2, platform = 'openai', type = 'oauth', updated_at = CURRENT_TIMESTAMP WHERE id = $3`
-	if !db.isSQLite() {
-		updateQuery = `UPDATE accounts SET credentials = $1::jsonb, proxy_url = $2, platform = 'openai', type = 'oauth', updated_at = CURRENT_TIMESTAMP WHERE id = $3`
-	}
-	res, err := tx.ExecContext(ctx, updateQuery, credJSON, proxyURL, id)
-	if err != nil {
-		return err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return sql.ErrNoRows
-	}
-	return tx.Commit()
+		updateQuery := `UPDATE accounts SET credentials = $1, proxy_url = $2, platform = 'openai', type = 'oauth', updated_at = CURRENT_TIMESTAMP WHERE id = $3`
+		if !db.isSQLite() {
+			updateQuery = `UPDATE accounts SET credentials = $1::jsonb, proxy_url = $2, platform = 'openai', type = 'oauth', updated_at = CURRENT_TIMESTAMP WHERE id = $3`
+		}
+		res, err := tx.ExecContext(ctx, updateQuery, credJSON, proxyURL, id)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return sql.ErrNoRows
+		}
+		if _, manualPriority := credentials["scheduler_priority"]; manualPriority {
+			return db.markManualPolicyPriority(ctx, tx, id)
+		}
+		return nil
+	})
 }
 
 // UpdateUsageSnapshot 持久化账号用量快照（7d + 5h）

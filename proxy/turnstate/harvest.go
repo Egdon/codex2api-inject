@@ -459,7 +459,7 @@ func (h *Harvester) SaveConfig(ctx context.Context, req Config, keepPassword, ke
 		return Config{}, fmt.Errorf("数据库不可用")
 	}
 	req.astraPolicyEpoch = cfg.astraPolicyEpoch
-	if req.AstraPolicyEnabled {
+	if astraPolicyEnabled(req) {
 		found := false
 		for _, model := range req.Models {
 			if strings.EqualFold(model, astraModel) {
@@ -470,12 +470,14 @@ func (h *Harvester) SaveConfig(ctx context.Context, req Config, keepPassword, ke
 		if !found {
 			return Config{}, fmt.Errorf("Astra policy requires gpt-6-astra in configured models")
 		}
+	}
+	if req.AstraPolicyEnabled {
 		if err := h.db.ValidateAstraPolicyGroups(ctx, req.AstraFailureGroupID, req.AstraRecoveryGroupID); err != nil {
 			return Config{}, err
 		}
-		if !cfg.AstraPolicyEnabled || cfg.astraPolicyEpoch == 0 || cfg.AstraFailureGroupID != req.AstraFailureGroupID || cfg.AstraRecoveryGroupID != req.AstraRecoveryGroupID {
-			req.astraPolicyEpoch = max(time.Now().UnixNano(), cfg.astraPolicyEpoch+1)
-		}
+	}
+	if astraPolicySettingsChanged(cfg, req) || (astraPolicyEnabled(req) && cfg.astraPolicyEpoch == 0) {
+		req.astraPolicyEpoch = max(time.Now().UnixNano(), cfg.astraPolicyEpoch+1)
 	}
 	encoded, err := EncodeConfig(req)
 	if err != nil {

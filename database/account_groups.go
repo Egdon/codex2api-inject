@@ -220,6 +220,33 @@ func (db *DB) DeleteAccountGroup(ctx context.Context, id int64, force ...bool) e
 		if count > 0 && !allowMembers {
 			return ErrAccountGroupNotEmpty
 		}
+		// Membership removal is a manual assignment, including force-deleting
+		// a current group before an automatic policy reaches its threshold.
+		// Lock accounts in order before deleting the group, matching policy
+		// writers' account-before-group order. Ignore orphan memberships.
+		rows, err := tx.QueryContext(ctx, `SELECT a.id FROM accounts a JOIN account_group_members m ON m.account_id = a.id WHERE m.group_id = `+ph+` ORDER BY a.id`, id)
+		if err != nil {
+			return err
+		}
+		var accountIDs []int64
+		for rows.Next() {
+			var accountID int64
+			if err := rows.Scan(&accountID); err != nil {
+				rows.Close()
+				return err
+			}
+			accountIDs = append(accountIDs, accountID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := db.markManualPolicyGroups(ctx, tx, accountIDs); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM account_group_members WHERE group_id = "+ph, id); err != nil {
 			return err
 		}

@@ -13,6 +13,48 @@ import (
 
 // These tests use only in-process HTTP handlers and the local test database.
 // The harvester is never started and no probe is enqueued.
+func TestTurnStateSettingsAstraDualActionPresenceAndValidation(t *testing.T) {
+	current := turnstate.DefaultConfig()
+	current.AstraPriorityPolicyEnabled = true
+	current.AstraGroupFailureBatches = 8
+	current.AstraPriorityFailureBatches = 4
+	*current.AstraFailurePriority = -7
+	current.AstraRecoveryPriority = 3
+	got, err := parseTurnStateSettings(map[string]json.RawMessage{}, current)
+	if err != nil || !got.AstraPriorityPolicyEnabled || got.AstraGroupFailureBatches != 8 || got.AstraPriorityFailureBatches != 4 || *got.AstraFailurePriority != -7 || got.AstraRecoveryPriority != 3 {
+		t.Fatalf("legacy PUT lost new fields: %+v %v", got, err)
+	}
+	got, err = parseTurnStateSettings(map[string]json.RawMessage{"astra_failure_priority": json.RawMessage("0"), "astra_priority_policy_enabled": json.RawMessage("false")}, current)
+	if err != nil || *got.AstraFailurePriority != 0 || got.AstraPriorityPolicyEnabled || *current.AstraFailurePriority != -7 {
+		t.Fatalf("explicit zero/false lost or changed caller: %+v %v", got, err)
+	}
+	for _, field := range []string{"astra_group_failure_batches", "astra_priority_failure_batches", "astra_failure_priority", "astra_recovery_priority"} {
+		invalid := []string{"null", "1.5", `"1"`, "true"}
+		valid := []string{"-100", "0", "100"}
+		if strings.HasSuffix(field, "batches") {
+			invalid = append(invalid, "0", "51", "-1")
+			valid = []string{"1", "50"}
+		} else {
+			invalid = append(invalid, "-101", "101")
+		}
+		for _, value := range invalid {
+			if _, err := parseTurnStateSettings(map[string]json.RawMessage{field: json.RawMessage(value)}, current); err == nil {
+				t.Fatalf("accepted %s=%s", field, value)
+			}
+		}
+		for _, value := range valid {
+			if _, err := parseTurnStateSettings(map[string]json.RawMessage{field: json.RawMessage(value)}, current); err != nil {
+				t.Fatalf("rejected %s=%s: %v", field, value, err)
+			}
+		}
+	}
+	for _, value := range []string{"null", "1", `"false"`} {
+		if _, err := parseTurnStateSettings(map[string]json.RawMessage{"astra_priority_policy_enabled": json.RawMessage(value)}, current); err == nil {
+			t.Fatalf("accepted invalid priority toggle %s", value)
+		}
+	}
+}
+
 func TestTurnStateSettingsLegacyProviderAndLitportFields(t *testing.T) {
 	current := turnstate.DefaultConfig()
 	current.HarvestProxyProvider = "litport"
