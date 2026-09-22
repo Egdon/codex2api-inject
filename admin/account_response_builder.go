@@ -264,6 +264,8 @@ func (h *Handler) buildAccountResponse(
 		ClaudeVersionPolicyOverride:  claudeVersionPolicyOverride,
 		ClaudeClientVersionOverride:  claudeClientVersionOverride,
 		Timezone:                     accountTimezone,
+		CodexTurnStateProxyURL:       strings.TrimSpace(row.GetCredential(auth.CodexTurnStateProxyURLCredentialKey)),
+		CodexTurnStateDisabled:       row.GetCredentialBool(auth.CodexTurnStateDisabledCredentialKey),
 		CodexTurnState:               strings.TrimSpace(row.GetCredential(auth.CodexTurnStateCredentialKey)),
 		CodexTurnStateModels:         auth.NormalizeCodexTurnStateModels(row.GetCredential(auth.CodexTurnStateModelsCredentialKey)),
 		CodexTurnStateSetAt:          strings.TrimSpace(row.GetCredential(auth.CodexTurnStateSetAtCredentialKey)),

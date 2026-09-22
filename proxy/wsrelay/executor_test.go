@@ -38,7 +38,7 @@ func TestPrepareWebsocketHeadersUsesConfiguredDefaultsAndBetaFeatures(t *testing
 		"Originator": []string{"custom-originator"},
 	}
 
-	headers := exec.prepareWebsocketHeaders("token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", cfg, ginHeaders, nil)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", cfg, ginHeaders, nil, "")
 
 	if got := headers.Get("Authorization"); got != "Bearer token-123" {
 		t.Fatalf("Authorization = %q", got)
@@ -83,14 +83,14 @@ func TestPrepareWebsocketHeadersForwardsAttestationOnlyWhenPresent(t *testing.T)
 	exec := NewExecutor()
 	acc := &auth.Account{DBID: 42, AccountID: "42"}
 
-	withToken := exec.prepareWebsocketHeaders("token-123", acc, "42", "session-123", "api-key-1", nil, http.Header{
+	withToken := exec.prepareWebsocketHeaders(context.Background(), "token-123", acc, "42", "session-123", "api-key-1", nil, http.Header{
 		"X-Oai-Attestation": []string{"v1.real-devicecheck-token"},
-	}, nil)
+	}, nil, "")
 	if got := withToken.Get("X-Oai-Attestation"); got != "v1.real-devicecheck-token" {
 		t.Fatalf("X-Oai-Attestation = %q, want passthrough of downstream token", got)
 	}
 
-	without := exec.prepareWebsocketHeaders("token-123", acc, "42", "session-123", "api-key-1", nil, http.Header{}, nil)
+	without := exec.prepareWebsocketHeaders(context.Background(), "token-123", acc, "42", "session-123", "api-key-1", nil, http.Header{}, nil, "")
 	if got := without.Get("X-Oai-Attestation"); got != "" {
 		t.Fatalf("X-Oai-Attestation = %q, want empty (never fabricate)", got)
 	}
@@ -108,7 +108,7 @@ func TestPrepareWebsocketHeadersAppliesAccountCustomHeadersLast(t *testing.T) {
 		},
 	}
 
-	headers := exec.prepareWebsocketHeaders("token-123", account, "42", "session-123", "api-key-1", nil, http.Header{}, nil)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", account, "42", "session-123", "api-key-1", nil, http.Header{}, nil, "")
 
 	if got := headers.Get("Authorization"); got != "Bearer websocket-override" {
 		t.Fatalf("Authorization = %q", got)
@@ -126,19 +126,19 @@ func TestPrepareWebsocketHeadersSendsRoutingHintFromBody(t *testing.T) {
 	account := &auth.Account{DBID: 42, AccountID: "42"}
 	wsBody := []byte(`{"model":"gpt-5.6-codex","service_tier":"fast"}`)
 
-	headers := exec.prepareWebsocketHeaders("token-123", account, "42", "session-123", "api-key-1", nil, http.Header{}, wsBody)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", account, "42", "session-123", "api-key-1", nil, http.Header{}, wsBody, "")
 	if got := headers.Get("X-Codex-Routing-Hint"); got != "model=gpt-5.6-codex;tier=priority" {
 		t.Fatalf("X-Codex-Routing-Hint = %q, want priority hint from final WS body", got)
 	}
 
 	// 无 body 时不发。
-	headers = exec.prepareWebsocketHeaders("token-123", account, "42", "session-123", "api-key-1", nil, http.Header{}, []byte(`{"model":"gpt-5.6-sol","service_tier":"ultrafast"}`))
+	headers = exec.prepareWebsocketHeaders(context.Background(), "token-123", account, "42", "session-123", "api-key-1", nil, http.Header{}, []byte(`{"model":"gpt-5.6-sol","service_tier":"ultrafast"}`), "")
 	if got := headers.Get("X-Codex-Routing-Hint"); got != "model=gpt-5.6-sol;tier=ultrafast" {
 		t.Fatalf("Ultrafast routing hint = %q", got)
 	}
 
 	// 无 body 时不发。
-	headers = exec.prepareWebsocketHeaders("token-123", account, "42", "session-123", "api-key-1", nil, http.Header{}, nil)
+	headers = exec.prepareWebsocketHeaders(context.Background(), "token-123", account, "42", "session-123", "api-key-1", nil, http.Header{}, nil, "")
 	if got := headers.Get("X-Codex-Routing-Hint"); got != "" {
 		t.Fatalf("X-Codex-Routing-Hint = %q, want empty without body", got)
 	}
@@ -154,7 +154,7 @@ func TestPrepareWebsocketHeadersSendsUserAgentByDefault(t *testing.T) {
 		"X-Responsesapi-Include-Timing-Metrics": []string{"true"},
 	}
 
-	headers := exec.prepareWebsocketHeaders("token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", nil, ginHeaders, nil)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", nil, ginHeaders, nil, "")
 
 	if got := headers.Get("User-Agent"); got != proxy.MinimalCodexCLIUserAgentForHeaders() {
 		t.Fatalf("User-Agent = %q, want %q", got, proxy.MinimalCodexCLIUserAgentForHeaders())
@@ -185,7 +185,7 @@ func TestPrepareWebsocketHeadersCanOptOutOfUserAgent(t *testing.T) {
 	t.Setenv("CODEX_WS_SEND_USER_AGENT", "false")
 	exec := NewExecutor()
 
-	headers := exec.prepareWebsocketHeaders("token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", nil, http.Header{}, nil)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", nil, http.Header{}, nil, "")
 
 	if got := headers.Get("User-Agent"); got != "" {
 		t.Fatalf("User-Agent = %q, want empty", got)
@@ -211,7 +211,7 @@ func TestPrepareWebsocketHeadersHonorsForcedGeneratedUserAgent(t *testing.T) {
 		"Version":    []string{"1.2.3"},
 	}
 
-	headers := exec.prepareWebsocketHeaders("token-123", account, "42", "session-123", "api-key-1", nil, ginHeaders, nil)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", account, "42", "session-123", "api-key-1", nil, ginHeaders, nil, "")
 
 	got := headers.Get("User-Agent")
 	if got == ginHeaders.Get("User-Agent") {
@@ -524,7 +524,7 @@ func TestResolveHandshakeSessionID(t *testing.T) {
 func TestPrepareWebsocketHeadersOmitsSessionHeadersWhenEmpty(t *testing.T) {
 	exec := NewExecutor()
 
-	headers := exec.prepareWebsocketHeaders("token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "", "api-key-1", nil, http.Header{}, nil)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "", "api-key-1", nil, http.Header{}, nil, "")
 
 	if got := headers.Get("Session_id"); got != "" {
 		t.Fatalf("Session_id = %q, want unset", got)
@@ -596,7 +596,7 @@ func TestPrepareWebsocketHeadersConvergesForwardedClientRequestID(t *testing.T) 
 
 	account := &auth.Account{DBID: 42, AccountID: "42", CodexFingerprintMode: auth.CodexFingerprintModeSession}
 	exec := NewExecutor()
-	headers := exec.prepareWebsocketHeaders("token-123", account, "42", "upstream-session-id", "api-key-1", nil, ginHeaders, nil)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", account, "42", "upstream-session-id", "api-key-1", nil, ginHeaders, nil, "")
 
 	if got := headers.Get("X-Client-Request-Id"); got == clientUUID {
 		t.Fatal("X-Client-Request-Id still carries the downstream thread id after convergence")
@@ -653,7 +653,7 @@ func TestPrepareWebsocketHeadersGeneratedDesktopClientSendsMatchingOriginator(t 
 		"Originator": []string{"codex-tui"},
 	}
 
-	headers := exec.prepareWebsocketHeaders("token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", nil, ginHeaders, nil)
+	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", nil, ginHeaders, nil, "")
 
 	wantUA := "Codex Desktop/0.153.3 (Windows 10.0.26100; x86_64) unknown (Codex Desktop; 26.901.41123)"
 	if got := headers.Get("User-Agent"); got != wantUA {
@@ -664,5 +664,26 @@ func TestPrepareWebsocketHeadersGeneratedDesktopClientSendsMatchingOriginator(t 
 	}
 	if got := headers.Get("Version"); got != "0.153.3" {
 		t.Fatalf("Version = %q, want 0.153.3", got)
+	}
+}
+
+func TestPrepareWebsocketHeadersGuardsForeignTurnState(t *testing.T) {
+	affinityKey := "ws-turn-guard::api-key:1"
+	minter := &auth.Account{DBID: 101, AccountID: "101"}
+	other := &auth.Account{DBID: 202, AccountID: "202"}
+	proxy.NoteCodexTurnStateProvenance(affinityKey, minter)
+	t.Cleanup(func() { proxy.ClearCodexTurnStateProvenance(affinityKey) })
+
+	ginHeaders := http.Header{}
+	ginHeaders.Set("X-Codex-Turn-State", "blob-from-minter")
+	exec := NewExecutor()
+	out := exec.prepareWebsocketHeaders(context.Background(), "token", other, "202", "session-1", "api-key", nil, ginHeaders, nil, affinityKey)
+	if got := out.Get("X-Codex-Turn-State"); got != "" {
+		t.Fatalf("foreign-account turn-state forwarded on WS path: %q", got)
+	}
+
+	same := exec.prepareWebsocketHeaders(context.Background(), "token", minter, "101", "session-1", "api-key", nil, ginHeaders, nil, affinityKey)
+	if got := same.Get("X-Codex-Turn-State"); got != "blob-from-minter" {
+		t.Fatalf("same-account turn-state stripped on WS path: %q", got)
 	}
 }

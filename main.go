@@ -60,6 +60,7 @@ func main() {
 		log.Fatalf("数据库初始化失败: %v", err)
 	}
 	defer db.Close()
+	proxy.SetCodexTurnStateTemplateDatabase(db)
 	if migrateOnlyEnabled() {
 		log.Println("数据库迁移完成，CODEX_MIGRATE_ONLY 已启用，进程退出")
 		return
@@ -438,6 +439,7 @@ func main() {
 
 	// 注册 Agent Identity task 确保函数（proxy 无 Store 引用，启动时注入）
 	proxy.EnsureCodexAgentIdentityTaskFunc = store.EnsureCodexAgentIdentityTask
+	adminHandler.StartCodexTurnStateRenewal(backgroundCtx)
 
 	// 上游 WS 空闲连接保活常驻任务（默认关闭：goroutine 常驻但仅在运行时开关开启时才发送 Ping）
 	wsKeepalive := wsrelay.NewKeepaliveTask(
@@ -455,6 +457,16 @@ func main() {
 
 	handler.RegisterRoutes(r)
 	adminHandler.RegisterExternalImageRoutes(r, handler)
+	imageWorkers, queueErr := admin.ImageJobWorkerCount()
+	if queueErr != nil {
+		log.Fatal(queueErr)
+	}
+	if err := adminHandler.StartImageJobQueue(backgroundCtx, imageWorkers); err != nil {
+		log.Fatalf("Initialize image queue: %v", err)
+	}
+	if err := adminHandler.StartImageMaintenance(backgroundCtx); err != nil {
+		log.Fatalf("Initialize image maintenance: %v", err)
+	}
 	adminHandler.StartPromptIntelligence(backgroundCtx)
 	adminHandler.RegisterRoutes(r)
 
@@ -622,7 +634,10 @@ func main() {
 	log.Printf("  API:    POST /v1/responses")
 	log.Printf("  API:    POST /v1/images/generations")
 	log.Printf("  API:    POST /v1/images/jobs")
+	log.Printf("  API:    POST /v1/images/jobs/results")
 	log.Printf("  API:    GET  /v1/images/jobs/:id")
+	log.Printf("  API:    GET  /v1/images/jobs/:id/output")
+	log.Printf("  API:    POST /v1/images/jobs/:id/ack")
 	log.Printf("  API:    POST /v1/messages")
 	log.Printf("  API:    GET  /v1/models")
 	log.Println("==========================================")
@@ -657,6 +672,7 @@ func main() {
 	adminHandler.WaitAutoResetCredits()
 	adminHandler.WaitAutoActivate5hWindow()
 	adminHandler.WaitQualityTests()
+	adminHandler.WaitCodexTurnStateRenewal()
 	wsKeepalive.Stop()
 	wsrelay.ShutdownExecutor()
 	if !proxy.DrainResponseCacheBackendWrites(2 * time.Second) {

@@ -113,6 +113,43 @@ func TestSchedulerQueueOverloadCommittedSSE(t *testing.T) {
 	}
 }
 
+func TestSelectionTimeoutHTTPProtocols(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		protocol continuousRetryHTTPProtocol
+		marker   string
+	}{
+		{continuousRetryProtocolResponses, `"type":"response.failed"`},
+		{continuousRetryProtocolChat, `"error"`},
+		{continuousRetryProtocolAnthropic, "event: error"},
+	} {
+		for _, committed := range []bool{false, true} {
+			r := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(r)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			if committed {
+				c.Header("Content-Type", "text/event-stream")
+				_, _ = c.Writer.WriteString(": keepalive\n\n")
+				c.Writer.Flush()
+			}
+			if !writeSchedulerQueueError(c, context.DeadlineExceeded, tc.protocol) {
+				t.Fatal("selection timeout would fall through to another account scan")
+			}
+			body := r.Body.String()
+			if !strings.Contains(body, schedulerSelectionTimeoutMessage) {
+				t.Fatalf("missing selection timeout: %s", body)
+			}
+			if committed {
+				if r.Code != http.StatusOK || !strings.HasPrefix(body, ": keepalive\n\n") || !strings.Contains(body, tc.marker) {
+					t.Fatalf("committed timeout response = %d %s", r.Code, body)
+				}
+			} else if r.Code != http.StatusServiceUnavailable || r.Header().Get("Retry-After") != "1" {
+				t.Fatalf("timeout response = %d, retry-after=%q", r.Code, r.Header().Get("Retry-After"))
+			}
+		}
+	}
+}
+
 func TestSchedulerQueueOverloadResponsesWebSocket(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	s := saturatedSchedulerQueue(t)

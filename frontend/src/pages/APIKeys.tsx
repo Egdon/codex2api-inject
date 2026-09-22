@@ -189,6 +189,7 @@ const emptyScopeLimitRow: ScopeLimitFormState = {
 
 // Grok 账号都未声明模型时的下拉兜底(与 Grok 账号页测试模型列表一致)。
 const DEFAULT_GROK_MODEL_OPTIONS = [
+  "grok-4.7",
   "grok-4.6",
   "grok-4.5",
   "grok-4",

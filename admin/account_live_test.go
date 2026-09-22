@@ -42,6 +42,9 @@ func TestGetAccountLiveStateReturnsVisibleInflightCounts(t *testing.T) {
 	if got := response.Accounts["42"].OccupiedRequests; got != 5 {
 		t.Fatalf("occupied_requests = %d, want 5", got)
 	}
+	if status := response.Accounts["42"].CodexTurnStateStatus; status == nil || status.State != "unknown" || status.TemplateLength != 292 {
+		t.Fatalf("expected cold-start Codex status, got %+v", status)
+	}
 	if !response.SessionSlotBufferEnabled {
 		t.Fatal("session slot buffer enabled state was not returned")
 	}

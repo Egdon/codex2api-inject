@@ -180,11 +180,15 @@ func grokMediaPreferredAccountFilter(model string) auth.AccountFilter {
 // nextGrokMediaAccount 两层选号:先付费凭据,挑不到再放开到全部候选
 // (与生图路径的 plus 优先层级同构)。两层都过 scope 预算闸门。
 func (h *Handler) nextGrokMediaAccount(c *gin.Context, apiKeyID int64, exclude map[int64]bool, model string, identity requestSessionIdentity) (*auth.Account, string) {
-	preferred := applyAffinityGroupRouting(c, identity, h.withModelCooldownFilter(model, grokMediaPreferredAccountFilter(model)))
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	preferred := applyAffinityGroupRouting(c, identity, h.withModelCooldownFilter(ctx, model, grokMediaPreferredAccountFilter(model)))
 	if account, stickyProxyURL := h.nextAccountForSessionWithFilter("", apiKeyID, exclude, h.applyScopeBudgetFilter(c, preferred)); account != nil {
 		return account, stickyProxyURL
 	}
-	fallback := applyAffinityGroupRouting(c, identity, h.withModelCooldownFilter(model, grokMediaAccountFilter(model)))
+	fallback := applyAffinityGroupRouting(c, identity, h.withModelCooldownFilter(ctx, model, grokMediaAccountFilter(model)))
 	return h.nextAccountForSessionWithFilter("", apiKeyID, exclude, h.applyScopeBudgetFilter(c, fallback))
 }
 

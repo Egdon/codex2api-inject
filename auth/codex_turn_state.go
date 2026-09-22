@@ -12,8 +12,10 @@ import (
 // 也不进调度。与 proxy/codex_turn_state.go 的"跨账号回声剥离"互补——那边处理客户端
 // 自己回带的值，这边处理运维显式配置的值。
 const (
-	CodexTurnStateCredentialKey       = "codex_turn_state"
-	CodexTurnStateModelsCredentialKey = "codex_turn_state_models"
+	CodexTurnStateProxyURLCredentialKey = "codex_turn_state_proxy_url"
+	CodexTurnStateDisabledCredentialKey = "codex_turn_state_disabled"
+	CodexTurnStateCredentialKey         = "codex_turn_state"
+	CodexTurnStateModelsCredentialKey   = "codex_turn_state_models"
 	// CodexTurnStateSetAtCredentialKey 记录注入值最后一次被换掉的时刻（RFC3339）。
 	// 只服务于界面上的 1 小时时效倒计时：换值时重置，只改模型名单时保持不变。
 	CodexTurnStateSetAtCredentialKey = "codex_turn_state_set_at"
@@ -139,9 +141,10 @@ func (a *Account) CodexTurnStateInjection(models ...string) string {
 	}
 	a.mu.RLock()
 	value, scope := a.CodexTurnState, a.CodexTurnStateModels
+	disabled := a.CodexTurnStateDisabled
 	a.mu.RUnlock()
 	value = strings.TrimSpace(value)
-	if value == "" || !CodexTurnStateModelsMatch(scope, models...) {
+	if disabled || value == "" || !CodexTurnStateModelsMatch(scope, models...) {
 		return ""
 	}
 	return value
@@ -159,7 +162,10 @@ func (a *Account) CodexTurnStateConfig() (value, models string, setAt time.Time)
 
 func (a *Account) setCodexTurnStateFromRowLocked(row interface {
 	GetCredential(string) string
+	GetCredentialBool(string) bool
 }) {
+	a.CodexTurnStateProxyURL = strings.TrimSpace(row.GetCredential(CodexTurnStateProxyURLCredentialKey))
+	a.CodexTurnStateDisabled = row.GetCredentialBool(CodexTurnStateDisabledCredentialKey)
 	a.CodexTurnState = strings.TrimSpace(row.GetCredential(CodexTurnStateCredentialKey))
 	a.CodexTurnStateModels = NormalizeCodexTurnStateModels(row.GetCredential(CodexTurnStateModelsCredentialKey))
 	a.CodexTurnStateSetAt = ParseCodexTurnStateSetAt(row.GetCredential(CodexTurnStateSetAtCredentialKey))
@@ -172,6 +178,42 @@ func (s *Store) ApplyAccountCodexTurnState(id int64, value, models string, setAt
 		a.CodexTurnState = strings.TrimSpace(value)
 		a.CodexTurnStateModels = NormalizeCodexTurnStateModels(models)
 		a.CodexTurnStateSetAt = setAt
+		a.mu.Unlock()
+	}
+}
+
+// Turn-State injection defaults to following the global switch; true opts out.
+func (a *Account) IsCodexTurnStateDisabled() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.CodexTurnStateDisabled
+}
+
+func (s *Store) ApplyAccountCodexTurnStateDisabled(id int64, disabled bool) {
+	if a := s.FindByID(id); a != nil {
+		a.mu.Lock()
+		a.CodexTurnStateDisabled = disabled
+		a.mu.Unlock()
+	}
+}
+
+// CodexTurnStateProxy is only used by explicit template acquisition/validation.
+func (a *Account) CodexTurnStateProxy() string {
+	if a == nil {
+		return ""
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.CodexTurnStateProxyURL
+}
+
+func (s *Store) ApplyAccountCodexTurnStateProxyURL(id int64, proxyURL string) {
+	if a := s.FindByID(id); a != nil {
+		a.mu.Lock()
+		a.CodexTurnStateProxyURL = strings.TrimSpace(proxyURL)
 		a.mu.Unlock()
 	}
 }

@@ -483,6 +483,21 @@ func (h *Handler) nextRetryAccount(ctx context.Context, affinityKey string, apiK
 	return account, proxyURL
 }
 
+// accountSelectionTimeout covers the initial synchronous selection as well as
+// pool waits/retry cycles. The upstream first-token guard starts too late to
+// protect this phase. This context is canceled on return, so it never limits a
+// successfully selected account's subsequent streaming response.
+const accountSelectionTimeout = 30 * time.Second
+
+func selectionFilterWithContext(ctx context.Context, filter auth.AccountFilter) auth.AccountFilter {
+	return func(acc *auth.Account) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		return (filter == nil || filter(acc)) && ctx.Err() == nil
+	}
+}
+
 func (h *Handler) nextRetryAccountWithGuard(ctx context.Context, affinityKey string, apiKeyID int64, exclusions *retryAccountExclusions, filter auth.AccountFilter, preserveBinding bool, policy auth.DispatchPolicy) (*auth.Account, string, auth.SessionAffinityGuard, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -490,7 +505,13 @@ func (h *Handler) nextRetryAccountWithGuard(ctx context.Context, affinityKey str
 	if h == nil || h.store == nil {
 		return nil, "", auth.SessionAffinityGuard{}, nil
 	}
+	ctx, cancelSelection := context.WithTimeout(ctx, accountSelectionTimeout)
+	defer cancelSelection()
+	filter = selectionFilterWithContext(ctx, filter)
 	for {
+		if ctx.Err() != nil {
+			return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
+		}
 		exclude := exclusions.ForSelection()
 		var account *auth.Account
 		var stickyProxyURL string
@@ -503,9 +524,12 @@ func (h *Handler) nextRetryAccountWithGuard(ctx context.Context, affinityKey str
 		if account != nil {
 			if ctx.Err() != nil {
 				h.store.Release(account)
-				return nil, "", auth.SessionAffinityGuard{}, nil
+				return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
 			}
 			return account, stickyProxyURL, guard, nil
+		}
+		if ctx.Err() != nil {
+			return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
 		}
 		h.store.TriggerDispatchStateReconcileAsync()
 		var admissionErr error
@@ -513,12 +537,12 @@ func (h *Handler) nextRetryAccountWithGuard(ctx context.Context, affinityKey str
 		if account != nil {
 			if ctx.Err() != nil {
 				h.store.Release(account)
-				return nil, "", auth.SessionAffinityGuard{}, nil
+				return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
 			}
 			return account, stickyProxyURL, guard, nil
 		}
 		if ctx.Err() != nil {
-			return nil, "", auth.SessionAffinityGuard{}, nil
+			return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
 		}
 		if admissionErr != nil {
 			return nil, "", auth.SessionAffinityGuard{}, admissionErr
@@ -532,7 +556,7 @@ func (h *Handler) nextRetryAccountWithGuard(ctx context.Context, affinityKey str
 				return nil, "", auth.SessionAffinityGuard{}, nil
 			}
 			if !waitForContinuousPoolRetry(ctx) {
-				return nil, "", auth.SessionAffinityGuard{}, nil
+				return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
 			}
 			continue
 		}

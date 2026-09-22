@@ -75,6 +75,14 @@ Codex2API 采用三层配置架构：
 | `CODEX_TRANSPORT_MODE` | 否 | `standard` | Codex HTTP transport：默认标准 Go TLS；`utls_chrome` 可回滚旧 Chrome uTLS 行为 |
 | `CODEX_WS_SEND_USER_AGENT` | 否 | `true` | WS 握手是否发送 Codex `User-Agent`/`Version`；设为 `false` 可关闭 |
 | `CODEX_SESSION_AFFINITY_TTL` | 否 | `1h` | Codex 会话到账号/代理的黏性 TTL，支持 `1h`、`90m` 或秒数 |
+| ~~`CODEX_TURN_STATE_TEMPLATE_CACHE`~~ | — | — | **已弃用**：主开关改到管理后台「Turn-State 模板缓存（实验性）」（`codex_turn_state_template_cache_enabled`，默认关闭）；账号规则 `codex_turn_state_account_mode`=`personal`\|`team`\|`auto`（默认 `auto`） |
+| `CODEX_TURN_STATE_TEMPLATE_LENGTH` | 否 | （由账号规则推导） | （可选调参）强制模板 Fernet 编码长度，须对应合法 blocks（个人 ~292 / Team ~332） |
+| `CODEX_TURN_STATE_REPLACE_LENGTH` | 否 | （由账号规则推导） | （可选调参）强制降质 Fernet 编码长度（个人 ~312 / Team ~356）；`replace-only` 按 **Blocks** 判定 |
+| `CODEX_TURN_STATE_INJECT_MODE` | 否 | `replace-only` | （可选调参）`replace-only`：仅当入站 Blocks=replace 时替换；`always`：有缓存模板时强制写入（含空头） |
+| `CODEX_TURN_STATE_TTL` | 否 | `1h` | （可选调参）Accept 窗口：`now < issued+(TTL-30s)`，且拒绝 issued 超前 >30s；无效信封永不存储 |
+| `CODEX_TURN_STATE_MAX_ENTRIES` | 否 | `256` | （可选调参）进程内缓存条目上限，超出按最旧 issuedAt 淘汰 |
+| `CODEX_TURN_STATE_LOG_DECISIONS` | 否 | `false` | （可选调参）记录 harvest/substitute/inject/pass/strike 决策（仅 account/model/len，从不记录 state 值） |
+| `CODEX_TURN_STATE_DRY_RUN` | 否 | `false` | （可选调参）只决策+打日志，不改写出站头 |
 | `CODEX_COMPACTION_AFFINITY_TTL` | 否 | `168h` | 加密压缩状态的来源亲和 TTL。缓存仅保存密文的 SHA-256 摘要、来源账号和兼容域；已知状态不会跨 Codex 官方、不同 Responses 中转或 Grok 上游流转 |
 | `CODEX_FINGERPRINT_DEBUG` | 否 | `false` | 输出脱敏指纹策略诊断日志，不记录 token |
 | `CODEX_REQUEST_COMPRESSION` | 否 | 跟随系统设置 | 覆盖系统设置「Codex HTTP 请求体压缩」。`zstd`/`on`/`true`/`1` 强制开启，`off`/`false`/`0` 强制关闭，未设置或取值无法识别时以系统设置为准。作为部署级逃生阀存在：DB 不可达或后台打不开时仍可整机切换 |
@@ -202,6 +210,18 @@ API Key 启用多个 RPM/RPD/费用/Token 窗口时，Redis 会通过一次 `MGE
 ### 模型列表读取上限
 
 `models_list_read_max_bytes` 限制上游 OpenAI 兼容 `/v1/models` 与 Codex OAuth 模型清单成功响应的最大读取大小。默认 `8,388,608` bytes（8 MiB），管理后台以整数 MiB 展示，允许范围为 1-256 MiB。响应超过上限时请求会明确失败，不会把截断的 JSON 当成完整模型列表解析。
+
+### Turn-State 模板生命周期
+
+管理后台的实验性模板缓存开关默认关闭。开启后，上游铸造的有效模板按账号和精确模型存入 PostgreSQL/SQLite，重启后可用；只采集上游响应，不从客户端请求头收集模板。账号可关闭注入、限定模型范围，或设置独立模板签发代理。模板和代理配置保留在数据库，关闭注入不会删除它们。
+
+账号页的“重新获取模板”先获取候选，再发起验证请求，验证通过才保存。无显式范围时默认选择 `gpt-6-astra` 与 `gpt-5.6-*`。`codex-auto-review` 不参与缓存、获取、续签或账号形态状态汇总，也不会作为智力检测可选模型。状态标签是 Turn-State 形态启发式信号，不证明实际推理能力。
+
+已有有效模板在到期前 10 分钟后台续签，首次使用账号签发代理（留空沿用默认出口）；失败后至少等待 10 秒，从已启用且未报错的代理中选择本轮未使用的 URL，最多 10 次（含首次），成功即停。次数按账号、模型和原签发时间持久化，重启不重置；新模板必须具有更晚的上游签发时间才算续签成功。失败保留旧模板原有效期，不伪造时间。无模板或已过期时不主动首次获取。
+
+单模型获取与验证共享 60 秒期限和同一出口。后台全局最多 4 个账号并发，单账号与手动获取互斥，退出时取消并等待任务结束。后台代理选择独立于普通代理池分配开关，不改账号代理绑定，不改变普通业务出口。不同代理 URL 可能共享 IP。
+
+“降智检测 → 续签记录”提供后台尝试的代理、状态、耗时、有效期和结果原因，支持过滤、分页、自动刷新。记录在独立表中保留，模板清理不删除历史；进程被强杀留下的过时运行记录会标记中断，不推断为成功。
 
 ### Responses 上下文缓存
 

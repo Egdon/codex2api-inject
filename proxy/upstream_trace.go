@@ -120,7 +120,7 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 	if ws && proxyURL == "" {
 		label = auth.ProxyAuditLabel{Name: "unknown"}
 	}
-	if resinCarriesEgress(account) {
+	if resinCarriesEgress(account) && CodexTurnStateRefreshProxy(ctx, account) == "" {
 		label = auth.ProxyAuditLabel{Name: "resin"}
 	}
 	label.Name = security.MaskSensitiveData(label.Name)

@@ -395,6 +395,25 @@ Images 入口的 2.5 token 计费区分文本输入、图片输入与各自缓�
 
 - `POST /v1/images/jobs`：以后台创建的 API Key 认证，返回 HTTP 202 和 `job`。
 - `GET /v1/images/jobs/:id`：使用创建时的同一 API Key 查询，其他密钥返回 404。
+- `POST /v1/images/jobs/results`：批量查询最多 500 个任务的精简结果，兼容 `/v1/images/jobs/result`。
+- `GET /v1/images/jobs/:id/output`：流式返回生成结果 Base64；仅对主动选择 `delete_after_read` 的图片在完整交付后清理。
+- `POST /v1/images/jobs/:id/ack`：URL 下载方确认已保存结果，幂等清理本任务中 `delete_after_read` 的图片。
+- `GET /v1/images/jobs/:id/result`：使用同一 API Key 查询精简状态和结果；不返回提示词、`params_json`、输入图片、密钥展示信息或图片 Base64 缓存。适合频繁轮询，原创建和查询接口保持不变。
+
+创建接口可选 `storage_mode`（legacy/temporary/delete_after_read）与 `retention_seconds`；不传保留旧逻辑。临时存储 2 小时示例：`"storage_mode":"temporary","retention_seconds":7200`。详见 [图片结果存储策略](IMAGE_RESULT_STORAGE.md)，包括过期时间、消费接口和安全重试语义。
+
+精简查询在 queued/running 时也返回 HTTP 200，`assets` 为空数组；成功后通过 `job.assets[].proxy_url` 下载图片文件，相对路径按服务地址解析。失败原因在 `error_message`，部分成功的提示在 `warning`。该接口忽略 `include_cache`，始终不附带图片缓存。不存在或不属于当前 Key 的任务均返回 404。
+
+```bash
+curl 'https://your-host/v1/images/jobs/42/result' \
+  --header 'Authorization: Bearer YOUR_API_KEY'
+```
+
+成功响应示例（签名 URL 仅为占位）：
+
+```json
+{"job":{"id":42,"status":"succeeded","assets":[{"id":123,"proxy_url":"/p/img/123?exp=...&sig=...","mime_type":"image/png","bytes":1500000,"width":1024,"height":1536,"model":"gpt-image-2","output_format":"png"}],"error_message":"","duration_ms":45000,"created_at":"2026-09-19T06:50:40Z"}}
+```
 
 请求示例：
 
@@ -513,7 +532,7 @@ Images 入口的 2.5 token 计费区分文本输入、图片输入与各自缓�
 }
 ```
 
-池内存在 Grok 账号时会一并列出其文本模型（如 `grok-4.6`）与媒体模型（`grok-imagine-*`）。媒体模型与账号的文本模型白名单相互独立：白名单只声明文本模型不会关闭媒体能力；白名单里显式写了 `grok-imagine` 条目时以声明为准收窄。
+池内存在 Grok 账号时会一并列出其文本模型（如 `grok-4.7`）与媒体模型（`grok-imagine-*`）。媒体模型与账号的文本模型白名单相互独立：白名单只声明文本模型不会关闭媒体能力；白名单里显式写了 `grok-imagine` 条目时以声明为准收窄。
 
 #### Grok 的 GPT 兼容别名
 
@@ -753,6 +772,8 @@ Codex 的流式 remote compact v2（`POST /v1/responses`，`stream:true`，`inpu
 | base_concurrency_override | integer/null   | 否   | 基础并发覆盖值，`≥1` 无上限，`null` 表示恢复全局默认                                                      |
 | skip_warm_tier            | boolean/null   | 否   | 是否跳过 warm 层级；`null` 等同 `false`，字段省略时保持原值                                                |
 | allowed_api_key_ids       | integer[]/null | 否   | 允许调用该账号的 API Key ID 列表，去重升序保存；字段省略时保持原值，传 `null` 或 `[]` 表示恢复为全部可调用 |
+| codex_turn_state_disabled | boolean        | 否   | `true` 关闭账号的自动与手动 Turn-State 注入；保留已有配置和模板，形态观测继续工作。默认 `false`，跟随全局模板开关 |
+| codex_turn_state_proxy_url | string/null    | 否   | 模板获取、验证和首次后台续签使用的独立代理 URL；空或 `null` 沿用账号默认出口。普通业务请求不受影响 |
 | codex_turn_state          | string/null    | 否   | 凭据级强制注入的 `X-Codex-Turn-State`：非空时该账号每个出站 Codex 请求（HTTP 头与 WebSocket 帧体 `client_metadata` 都覆盖）都强制携带该值，优先于客户端回带值与自定义请求头；只接受单行 ASCII 可见字符，最长 4096 字节；`null` 或空串表示关闭。换成新值时会重置 `codex_turn_state_set_at`（时效起点，实测约 1 小时失效），原样重提同一个值不重置，存量值没有起点时补一次 |
 | codex_turn_state_models   | string/null    | 否   | 把上述注入限定在指定模型：逗号分隔，大小写不敏感，结尾 `*` 做前缀匹配，客户端模型与上游模型任一命中即注入；空表示不限模型；识别不出模型名的请求照常注入 |
 
@@ -890,6 +911,20 @@ Codex 的流式 remote compact v2（`POST /v1/responses`，`stream:true`，`inpu
 并发数遵循 `usage_probe_concurrency`，单个查询最多 15 秒。同一实例正在执行
 此批量操作时，再次调用返回 409；客户端断开后取消查询和待处理任务。完成事件
 发出前会使账号列表与分析缓存失效，随后读取即可更新用量进度条。
+
+#### 获取 Turn-State 模板
+
+`POST /api/admin/accounts/:id/turn-state/refresh` 使用管理员认证，返回 SSE 进度。仅支持运行时 Codex 原生账号，要求全局模板缓存开启且账号未关闭注入。已有同账号获取/续签任务时返回 409。
+
+事件依次为 `start`（`models`）、每模型的 `testing`（`model`）与 `result`（`result.model/saved/error`），最后为 `done`（`saved/total/status`）。每模型先获取候选，再携带候选完成验证，才保存模板；响应不包含模板正文。未重新签发时保持候选原始签发时间，不延长 TTL。具体模型范围与后台续签策略见 [配置说明](CONFIGURATION.md#turn-state-模板生命周期)。
+
+#### 查询 Turn-State 续签记录
+
+`GET /api/admin/codex-turn-state/renewals` 使用管理员认证。参数：`page`（默认 1）、`page_size`（默认 20、最大 50）、`account_id`、`plan`、`model`、`status`、`proxy_url`。`status` 为 `running/success/failed/interrupted`，筛选条件组合生效。
+
+响应包含 `records`、匹配记录数 `total` 和筛选选项 `facets`。每条记录提供账号/模型快照、`attempt/max_attempts`、代理 ID/名称/脱敏 URL/最近检测 IP、`started_at/finished_at/duration_ms`、状态、结果原因和 `expires_before/expires_after`。时间戳为 Unix 毫秒；URL 去除认证、路径及查询参数，不返回模板或访问令牌。代理 IP 是节点最近检测值，不是当次请求实时测量。
+
+该记录只覆盖后台临期续签，不回填旧结果，也不记录手动首次获取。账号 live 接口会附带 `codex_turn_state_status`，仅含近期形态、模型状态和模板有效期，不包含模板正文。
 
 ### Claude 凭据与原生 Messages
 
@@ -2791,3 +2826,8 @@ Retry-After: 3600
 2. 实现指数退避重试策略
 3. 处理 429/503 状态码，根据 `Retry-After` 等待后重试
 4. 避免在短时内发送大量请求
+
+
+### 可选的持久化生图队列
+
+设置 `IMAGE_JOB_WORKERS=2` 可启用固定并发的数据库任务队列。启用后创建接口只返回 `job.id` 和 `job.status`；参考图在任务执行时读取。数据库增量迁移、内存限制、重启恢复及兼容性详见 [图片任务队列](IMAGE_JOB_QUEUE.md)。

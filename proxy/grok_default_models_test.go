@@ -7,12 +7,12 @@ import (
 )
 
 // TestDefaultGrokModelIDsForAccountByAuthKind 守护两条通道目录不同这一实测事实：
-// OAuth 走 cli-chat-proxy，兜底当前旗舰 grok-4.6 / grok-4.5；API Key 走 xAI 公开 API，目录更宽。
+// OAuth 走 cli-chat-proxy，兜底当前旗舰 grok-4.7 / grok-4.6 / grok-4.5；API Key 走 xAI 公开 API，目录更宽。
 func TestDefaultGrokModelIDsForAccountByAuthKind(t *testing.T) {
 	oauth := &auth.Account{UpstreamType: auth.UpstreamGrok, RefreshToken: "rt"}
 	gotOAuth := DefaultGrokModelIDsForAccount(oauth)
-	if !modelIDInList("grok-4.6", gotOAuth) || !modelIDInList("grok-4.5", gotOAuth) {
-		t.Fatalf("OAuth 默认集 = %v, want grok-4.6 与 grok-4.5", gotOAuth)
+	if !modelIDInList("grok-4.7", gotOAuth) || !modelIDInList("grok-4.6", gotOAuth) || !modelIDInList("grok-4.5", gotOAuth) {
+		t.Fatalf("OAuth 默认集 = %v, want grok-4.7 / grok-4.6 / grok-4.5", gotOAuth)
 	}
 	for _, model := range []string{"grok-3", "grok-2", "grok-3-fast"} {
 		if modelIDInList(model, gotOAuth) {
@@ -28,8 +28,8 @@ func TestDefaultGrokModelIDsForAccountByAuthKind(t *testing.T) {
 	if len(got) <= len(gotOAuth) {
 		t.Fatalf("API Key 默认集应比 OAuth 宽, oauth=%v apiKey=%v", gotOAuth, got)
 	}
-	if !modelIDInList("grok-4.6", got) || !modelIDInList("grok-3", got) {
-		t.Fatalf("API Key 默认集应含 grok-4.6 与 grok-3, got %v", got)
+	if !modelIDInList("grok-4.7", got) || !modelIDInList("grok-4.6", got) || !modelIDInList("grok-3", got) {
+		t.Fatalf("API Key 默认集应含 grok-4.7 / grok-4.6 与 grok-3, got %v", got)
 	}
 
 	// 空账号按 OAuth 处理：CLI 通道是更保守的一侧，宁可少放行也不要advertise 不存在的模型。

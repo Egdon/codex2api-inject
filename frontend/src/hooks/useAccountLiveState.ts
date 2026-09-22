@@ -1,23 +1,31 @@
 import { useEffect, useMemo } from 'react'
 import { api } from '../api'
-import type { AccountLiveStateResponse } from '../types'
+import type { AccountLiveStateResponse, CodexTurnStateStatus } from '../types'
 
 // Merge a live poll response into an account list. Rows whose live concurrency
 // counters did not change keep their object identity, and a no-op poll returns the
 // original array, so the 1s polling cadence cannot defeat row-level memoization.
-export function mergeAccountLiveState<T extends { id: number; active_requests?: number; occupied_requests?: number; session_slot_buffer_enabled?: boolean }>(
+export function mergeAccountLiveState<T extends {
+  id: number
+  codex_turn_state_status?: CodexTurnStateStatus
+  active_requests?: number
+  occupied_requests?: number
+  session_slot_buffer_enabled?: boolean
+}>(
   current: T[],
   response: AccountLiveStateResponse,
 ): T[] {
   let changed = false
   const next = current.map((account) => {
+    const live = response.accounts[String(account.id)]
     const activeRequests = response.accounts[String(account.id)]?.active_requests ?? 0
     const occupiedRequests = response.accounts[String(account.id)]?.occupied_requests ?? activeRequests
     const slotBufferEnabled = response.session_slot_buffer_enabled === true
     if (
       (account.active_requests ?? 0) === activeRequests &&
       (account.occupied_requests ?? account.active_requests ?? 0) === occupiedRequests &&
-      (account.session_slot_buffer_enabled ?? false) === slotBufferEnabled
+      (account.session_slot_buffer_enabled ?? false) === slotBufferEnabled &&
+      (!live || JSON.stringify(account.codex_turn_state_status) === JSON.stringify(live.codex_turn_state_status))
     ) return account
     changed = true
     return {
@@ -25,6 +33,7 @@ export function mergeAccountLiveState<T extends { id: number; active_requests?: 
       active_requests: activeRequests,
       occupied_requests: occupiedRequests,
       session_slot_buffer_enabled: slotBufferEnabled,
+      ...(live ? { codex_turn_state_status: live.codex_turn_state_status } : {}),
     }
   })
   return changed ? next : current
