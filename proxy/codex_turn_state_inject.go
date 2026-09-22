@@ -186,9 +186,18 @@ func codexTurnStateFromFrame(payload []byte) string {
 
 // ObserveCodexTurnStateFrame 供 WS 中继在逐帧转发时调用：发现上游回带的 turn state
 // 就记到本次尝试的追踪里（用量日志据此显示"回带 Turn State"）。
-func ObserveCodexTurnStateFrame(ctx context.Context, payload []byte) {
-	if state := codexTurnStateFromFrame(payload); state != "" {
+// 只有上游专用 metadata 事件可作为模板来源；response.created/completed
+// 可能回显客户端 metadata，不能将这种回显当成上游新铸造的模板。
+func ObserveCodexTurnStateFrame(ctx context.Context, payload []byte) string {
+	state := codexTurnStateFromFrame(payload)
+	if state != "" {
 		noteUpstreamTurnState(ctx, state)
+	}
+	switch gjson.GetBytes(payload, "type").String() {
+	case "codex.response.metadata", "response.metadata":
+		return state
+	default:
+		return ""
 	}
 }
 

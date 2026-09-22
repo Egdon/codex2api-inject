@@ -175,7 +175,10 @@ func TestCodexRefreshDatabaseFailureFencesRestartAndDoesNotPublish(t *testing.T)
 func TestCodexRefreshRetriesPersistenceWithoutRepeatingOAuth(t *testing.T) {
 	var calls atomic.Int32
 	store, db, id, path := codexRefreshFixture(t, func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); writeCodexRefreshedTokens(w) })
-	injector, err := sql.Open("sqlite", path)
+	// The trigger is dropped while the store may hold the WAL write lock. A
+	// raw connection has no busy timeout and fails with SQLITE_BUSY instead
+	// of waiting, which leaves the trigger in place past the retry budget.
+	injector, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -182,7 +182,7 @@ func (h *Handler) handleGeminiCountTokens(c *gin.Context, model string, rawBody 
 	}
 
 	accountFilter := antigravityOAuthChannelAccountFilter(model)
-	accountFilter = h.withModelCooldownFilter(model, accountFilter)
+	accountFilter = h.withModelCooldownFilter(c.Request.Context(), model, accountFilter)
 	accountFilter = h.applyUpstreamChannelFilter(c, model, accountFilter)
 	accountFilter = h.applyScopeBudgetFilter(c, accountFilter)
 	defer h.ReleaseAPIKeyScopeConcurrency(c)
@@ -348,7 +348,7 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 	}
 
 	accountFilter := antigravityOAuthChannelAccountFilter(model)
-	accountFilter = h.withModelCooldownFilter(model, accountFilter)
+	accountFilter = h.withModelCooldownFilter(c.Request.Context(), model, accountFilter)
 	accountFilter = h.applyUpstreamChannelFilter(c, model, accountFilter)
 	accountFilter = h.applyScopeBudgetFilter(c, accountFilter)
 	defer h.ReleaseAPIKeyScopeConcurrency(c)

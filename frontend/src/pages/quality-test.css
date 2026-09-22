@@ -188,3 +188,9 @@
 .quality-test-prompt-label > span { display: inline-flex; align-items: center; gap: 2px; }
 .quality-test-preset-dialog .quality-test-fields textarea { min-height: 180px; }
 @media (prefers-reduced-motion: reduce) { .quality-test-progress span { animation: none; width: 100%; } }
+
+.turn-state-history tbody tr { cursor: default; }
+.turn-state-history-proxy, .turn-state-history-expiry { display: flex; flex-direction: column; gap: 5px; }
+.turn-state-history-proxy code { font-size: 11px; }
+.turn-state-history-proxy small { color: var(--color-muted-foreground); font-size: 10px; }
+.turn-state-history-reason { white-space: normal; min-width: 160px; max-width: 260px; line-height: 1.6; }

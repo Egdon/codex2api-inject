@@ -1410,6 +1410,64 @@ func TestPrepareResponsesBody_AlignsRequiredWithProperties(t *testing.T) {
 	}
 }
 
+func TestPrepareResponsesBody_PrunesRequiredOnNodesWithoutProperties(t *testing.T) {
+	// 生产实测：上游报 `Extra required key 'target' supplied`，而 alignRequiredWithProperties
+	// 原先只处理自带 properties 的节点，于是「required 有、properties 不在同一层」的三种
+	// 形态都把多余项原样发了出去。
+	cases := []struct {
+		name   string
+		schema string
+		path   string
+		want   []string // nil 表示 required 应被整个删除
+	}{
+		{
+			name:   "composition branch supplies the field names",
+			schema: `{"type":"object","properties":{"cands":{"type":"array","items":{"allOf":[{"type":"object","properties":{"action":{"type":"string"}}}],"required":["action","target"]}}}}`,
+			path:   "text.format.schema.properties.cands.items.required",
+			want:   []string{"action"},
+		},
+		{
+			name:   "no field source at all on a declared object",
+			schema: `{"type":"object","properties":{"cands":{"type":"array","items":{"type":"object","required":["target"]}}}}`,
+			path:   "text.format.schema.properties.cands.items.required",
+			want:   nil,
+		},
+		{
+			name:   "reference keeps its required untouched",
+			schema: `{"type":"object","$defs":{"Cand":{"type":"object","properties":{"action":{"type":"string"}}}},"properties":{"cands":{"type":"array","items":{"$ref":"#/$defs/Cand","required":["target"]}}}}`,
+			path:   "text.format.schema.properties.cands.items.required",
+			want:   []string{"target"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(`{"model":"gpt-5.4","input":"test","text":{"format":{"type":"json_schema","name":"s","strict":true,"schema":` + tc.schema + `}}}`)
+			got, _ := PrepareResponsesBody(raw)
+
+			required := gjson.GetBytes(got, tc.path)
+			if tc.want == nil {
+				if required.Exists() {
+					t.Fatalf("required should be removed, got %s; body=%s", required.Raw, got)
+				}
+				return
+			}
+			var names []string
+			for _, v := range required.Array() {
+				names = append(names, v.String())
+			}
+			if len(names) != len(tc.want) {
+				t.Fatalf("required = %v, want %v; body=%s", names, tc.want, got)
+			}
+			for i, want := range tc.want {
+				if names[i] != want {
+					t.Fatalf("required = %v, want %v; body=%s", names, tc.want, got)
+				}
+			}
+		})
+	}
+}
+
 func TestPrepareResponsesBody_JSONSchemaDoesNotInjectImageBridge(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-5.5",

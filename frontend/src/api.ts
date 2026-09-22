@@ -1,3 +1,4 @@
+import { turnStateHistoryQuery, type TurnStateHistoryFilter, type TurnStateHistoryPage } from './lib/turnStateHistory.ts'
 import { qualityTestFilterQuery, type QualityTestJob, type QualityTestJobsFilter, type QualityTestJobsResponse, type QualityTestPrompt } from './lib/qualityTest.ts'
 import type {
   AccountEventTrendPoint,
@@ -498,6 +499,7 @@ export type UsageLogQueryParams = {
   accountId?: string
   fast?: string
   ultra?: string
+  upstreamModelMismatch?: string
   stream?: string
   compact?: string
   hasCompactionHistory?: string
@@ -522,6 +524,7 @@ export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   if (params.accountId) search.set('account_id', params.accountId)
   if (params.fast) search.set('fast', params.fast)
   if (params.ultra) search.set('ultra', params.ultra)
+  if (params.upstreamModelMismatch) search.set('upstream_model_mismatch', params.upstreamModelMismatch)
   if (params.stream) search.set('stream', params.stream)
   if (params.compact) search.set('compact', params.compact)
   if (params.hasCompactionHistory) search.set('has_compaction_history', params.hasCompactionHistory)
@@ -563,13 +566,14 @@ export const api = {
   createPortalImageEditJob: (apiKey: string, data: CreateImageJobPayload) =>
     requestImageStudioPortal<ImageJobResponse>('/edit-jobs', apiKey, { method: 'POST', body: JSON.stringify(data) }),
   getPortalImageJobs: (apiKey: string, params: { page?: number; pageSize?: number } = {}) => {
-    const sp = new URLSearchParams()
+    const sp = new URLSearchParams({ summary: '1' })
     if (params.page) sp.set('page', String(params.page))
     if (params.pageSize) sp.set('page_size', String(params.pageSize))
     return requestImageStudioPortal<ImageJobsResponse>(`/jobs?${sp.toString()}`, apiKey)
   },
-  getPortalImageJob: (apiKey: string, id: number, params: { includeCache?: boolean } = {}) => {
+  getPortalImageJob: (apiKey: string, id: number, params: { includeCache?: boolean; summary?: boolean } = {}) => {
     const sp = new URLSearchParams()
+    if (params.summary === true || (params.summary !== false && !params.includeCache)) sp.set('summary', '1')
     if (params.includeCache) sp.set('include_cache', '1')
     const query = sp.toString()
     return requestImageStudioPortal<ImageJobResponse>(`/jobs/${id}${query ? `?${query}` : ''}`, apiKey)
@@ -1249,13 +1253,14 @@ export const api = {
   createImageEditJob: (data: CreateImageJobPayload) =>
     request<ImageJobResponse>('/images/edit-jobs', { method: 'POST', body: JSON.stringify(data) }),
   getImageJobs: (params: { page?: number; pageSize?: number } = {}) => {
-    const sp = new URLSearchParams()
+    const sp = new URLSearchParams({ summary: '1' })
     if (params.page) sp.set('page', String(params.page))
     if (params.pageSize) sp.set('page_size', String(params.pageSize))
     return request<ImageJobsResponse>(`/images/jobs?${sp.toString()}`)
   },
-  getImageJob: (id: number, params: { includeCache?: boolean } = {}) => {
+  getImageJob: (id: number, params: { includeCache?: boolean; summary?: boolean } = {}) => {
     const sp = new URLSearchParams()
+    if (params.summary === true || (params.summary !== false && !params.includeCache)) sp.set('summary', '1')
     if (params.includeCache) sp.set('include_cache', '1')
     const query = sp.toString()
     return request<ImageJobResponse>(`/images/jobs/${id}${query ? `?${query}` : ''}`)
@@ -1484,6 +1489,8 @@ export const api = {
     request<{ message: string }>(`/quality-test-prompts/${id}`, { method: 'DELETE' }),
   createQualityTest: (accountId: number, body: { model: string; reasoning_effort: string; prompt: string; prompt_id?: number; preset_key?: string; preset_name?: string }) =>
     request<{ job: QualityTestJob }>(`/accounts/${accountId}/quality-test`, { method: 'POST', body: JSON.stringify(body) }),
+  getTurnStateHistory: (page: number, filter: TurnStateHistoryFilter = {}, signal?: AbortSignal) =>
+    request<TurnStateHistoryPage>(`/codex-turn-state/renewals?${turnStateHistoryQuery(page, filter)}`, { signal }),
   getQualityTests: (page = 1, filter: QualityTestJobsFilter = {}, signal?: AbortSignal) =>
     request<QualityTestJobsResponse>(`/quality-tests?${qualityTestFilterQuery(page, filter)}`, { signal }),
   getQualityTest: (id: number, signal?: AbortSignal) =>
@@ -1618,7 +1625,7 @@ export const api = {
     request<{ message: string; deleted: number }>('/proxies/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
   cleanErrorProxies: () =>
     request<{ message: string; cleaned: number; unbound: number }>('/proxies/clean-error', { method: 'POST' }),
-  autoBalanceProxies: (data: { channel?: 'codex' | 'grok' | 'claude'; mode?: 'unbound' | 'all'; max_per_proxy?: number; proxy_ids?: number[] }) =>
+  autoBalanceProxies: (data: { channel?: UpstreamChannel; mode?: 'unbound' | 'all'; max_per_proxy?: number; proxy_ids?: number[] }) =>
     request<AutoBalanceProxiesResult>('/proxies/auto-balance', { method: 'POST', body: JSON.stringify(data) }),
   listProxyRiskScoringProfiles: () =>
     request<{ profiles: ProxyRiskScoringProfile[] }>('/proxy-risk-scoring/profiles'),

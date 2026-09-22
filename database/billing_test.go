@@ -441,6 +441,8 @@ func TestGrokPricingUsesXAIRates(t *testing.T) {
 		wantOutput float64
 		wantCache  float64
 	}{
+		{model: "grok-4.7", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
+		{model: "grok-4.7-beta", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
 		{model: "grok-4.6", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
 		{model: "grok-4.6-beta", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
 		{model: "grok-4.5", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.3},
@@ -465,7 +467,7 @@ func TestGrokPricingUsesXAIRates(t *testing.T) {
 	}
 }
 
-// grok-4.6 / grok-4.5 更专用的规则必须压过 grok-4，否则 $2/$6 会被当成 $3/$15。
+// grok-4.7 / grok-4.6 / grok-4.5 更专用的规则必须压过 grok-4，否则 $2/$6 会被当成 $3/$15。
 func TestAntigravityGeminiEstimatedPricing(t *testing.T) {
 	tests := []struct {
 		model      string
@@ -487,6 +489,8 @@ func TestAntigravityGeminiEstimatedPricing(t *testing.T) {
 }
 
 func TestGrokMoreSpecificRuleWinsOverShorterPrefix(t *testing.T) {
+	assertPricing(t, GetModelPricing("grok-4.7"), 2.0, 6.0)
+	assertFloatEqual(t, GetModelPricing("grok-4.7").CacheReadPricePerMToken, 0.5)
 	assertPricing(t, GetModelPricing("grok-4.6"), 2.0, 6.0)
 	assertFloatEqual(t, GetModelPricing("grok-4.6").CacheReadPricePerMToken, 0.5)
 	assertPricing(t, GetModelPricing("grok-4.5"), 2.0, 6.0)
@@ -529,6 +533,22 @@ func TestGrokLongContextThresholdIs200K(t *testing.T) {
 	assertFloatEqual(t, long46.CacheReadPricePerMToken, 1.0)
 	if !long46.LongContext {
 		t.Fatal("LongContext = false at 200K for grok-4.6, want true")
+	}
+
+	// grok-4.7 与 grok-4.6 同价同分档线（models.dev xai/grok-4.7）。
+	std47 := CalculateCostBreakdown(199999, 1000, 500, "grok-4.7", "")
+	assertFloatEqual(t, std47.InputPricePerMToken, 2.0)
+	assertFloatEqual(t, std47.OutputPricePerMToken, 6.0)
+	assertFloatEqual(t, std47.CacheReadPricePerMToken, 0.5)
+	if std47.LongContext {
+		t.Fatal("LongContext = true below 200K for grok-4.7, want false")
+	}
+	long47 := CalculateCostBreakdown(200000, 1000, 500, "grok-4.7", "")
+	assertFloatEqual(t, long47.InputPricePerMToken, 4.0)
+	assertFloatEqual(t, long47.OutputPricePerMToken, 12.0)
+	assertFloatEqual(t, long47.CacheReadPricePerMToken, 1.0)
+	if !long47.LongContext {
+		t.Fatal("LongContext = false at 200K for grok-4.7, want true")
 	}
 
 	// Codex 模型不受影响，仍是 272K（官方短档为 <272K）。

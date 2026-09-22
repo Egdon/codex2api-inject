@@ -127,11 +127,11 @@ func dispatchPolicyForModel(model string) auth.DispatchPolicy {
 	return auth.DispatchPolicyStandard
 }
 
-func (h *Handler) withModelCooldownFilter(model string, filter auth.AccountFilter) auth.AccountFilter {
+func (h *Handler) withModelCooldownFilter(ctx context.Context, model string, filter auth.AccountFilter) auth.AccountFilter {
 	if h == nil || h.store == nil {
 		return filter
 	}
-	return h.store.WithModelCooldownFilter(model, filter)
+	return h.store.WithModelCooldownFilterContext(ctx, model, filter)
 }
 
 func (h *Handler) shouldUseWebsocketForHTTP() bool {
@@ -1522,6 +1522,7 @@ func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInp
 	populateInternalUsageMetaFromContext(c, input)
 	populateClientIPFromRequest(c, input)
 	populateUserAgentMetaFromRequest(c, input)
+	populateTurnStateTemplateMetaFromRequest(c, input)
 	populateWsAcquireFromRequest(c, input)
 	populateUpstreamTrace(c, input)
 	populateCompactUsageMetaFromRequest(c, input)
@@ -3139,6 +3140,7 @@ func (h *Handler) authMiddlewareWithQuotaRead(allowQuotaRead bool) gin.HandlerFu
 	allowAnonymous := h.cfg != nil && h.cfg.AllowAnonymousV1
 	return func(c *gin.Context) {
 		attachUserAgentAudit(c)
+		attachTurnStateTemplateAudit(c)
 		attachWsAcquireAudit(c)
 		attachUpstreamTrace(c, h.store)
 		// 如果没有配置任何密钥
@@ -3942,7 +3944,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	} else {
 		accountFilter = accountFilterForResponsesModelWithOriginal(logModel, effectiveModel, allowCodexAccounts)
 	}
-	accountFilter = h.withModelCooldownFilter(effectiveModel, accountFilter)
+	accountFilter = h.withModelCooldownFilter(c.Request.Context(), effectiveModel, accountFilter)
 	if continuationUnavailable {
 		accountFilter = relayOnlyAccountFilter(accountFilter)
 	}
@@ -4399,7 +4401,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			// account-bound turn-state token from an attempt that is not yet known
 			// to be successful.
 			if (!isStream || !continuousRetryBuffersAttempts(continuousRetryPolicy)) && !continuousRetryDeadlineActive(c.Request.Context()) {
-				relayCodexTurnStateResponseHeader(c, affinityKey, account, resp.Header)
+				relayCodexTurnStateResponseHeader(c, affinityKey, account, attemptEffectiveModel, resp.Header)
 			}
 			if isGrokNativeRouteResponse(resp) {
 				downstreamFlusher, _ := c.Writer.(http.Flusher)
@@ -4430,7 +4432,7 @@ func (h *Handler) Responses(c *gin.Context) {
 						return
 					}
 					copyGrokNativeResponseHeaders(c, resp.Header)
-					if commitErr := h.commitResponsesStreamAttempt(c, streamAttempt, affinityKey, account, resp.Header); commitErr != nil {
+					if commitErr := h.commitResponsesStreamAttempt(c, streamAttempt, affinityKey, account, attemptEffectiveModel, resp.Header); commitErr != nil {
 						if isContinuousRetryLocalFailure(commitErr) {
 							outcome = overlayContinuousRetryLocalFailure(outcome, commitErr)
 						} else {
@@ -4496,6 +4498,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			var firstTokenMs int
 			var usage *UsageInfo
 			var actualServiceTier string
+			responseModelObserver := &upstreamResponseModelObserver{}
 			ttftRecorded := false
 			// contentTokenSeen is deliberately strict and independent from the
 			// operator's TTFT mode. In loose mode, preflight metadata records TTFT
@@ -4575,6 +4578,7 @@ func (h *Handler) Responses(c *gin.Context) {
 						deltaCharCount += len(parsed.Get("delta").String())
 					}
 					eventType, data, parsed = rewriteEmptyIncompleteTerminal(emptyIncomplete, eventType, data, parsed)
+					observeUpstreamResponseModelFrame(responseModelObserver, parsed, eventType)
 					if isResponsesSuccessTerminalEvent(eventType) {
 						usage = extractUsageFromResult(parsed.Get("response.usage"))
 						if tier := parsed.Get("response.service_tier").String(); tier != "" {
@@ -4669,6 +4673,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					nonStreamResponseBody = append([]byte(nil), respBody...)
 					usage = extractUsageFromResult(gjson.GetBytes(respBody, "usage"))
 					actualServiceTier = gjson.GetBytes(respBody, "service_tier").String()
+					observeUpstreamResponseModelBody(responseModelObserver, respBody)
 					imageLogInfo = imageUsageLogInfoFromResponseJSON(respBody)
 					gotTerminal = true
 					if contentType := resp.Header.Get("Content-Type"); contentType != "" {
@@ -4768,7 +4773,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					return
 				}
 				copyGrokNativeResponseHeaders(c, resp.Header)
-				if commitErr := h.commitResponsesStreamAttempt(c, streamAttempt, affinityKey, account, resp.Header); commitErr != nil {
+				if commitErr := h.commitResponsesStreamAttempt(c, streamAttempt, affinityKey, account, attemptEffectiveModel, resp.Header); commitErr != nil {
 					if isContinuousRetryLocalFailure(commitErr) {
 						outcome = overlayContinuousRetryLocalFailure(outcome, commitErr)
 					} else {
@@ -4881,6 +4886,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 			}
 			applyImageUsageLogInfo(logInput, imageLogInfo)
+			applyUpstreamResponseModelObservation(logInput, responseModelObserver, upstreamSentModelForAudit(attemptEffectiveModel, logModel), account.ID())
 			h.logUsageForRequest(c, logInput)
 
 			resp.Body.Close()
@@ -4928,6 +4934,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		// 按尝试重算：不同尝试的生效模型/账号可能不同，规则按模型或账号门匹配则结果随之变化。
 		serviceTier = EffectiveRequestedServiceTier(upstreamBody, attemptEffectiveModel, downstreamHeaders, attemptIdentity)
 		// 换号后剥离旧账号铸造的 turn-state 回带,防止跨账号矛盾信号打到上游。
+		upstreamCtx = WithCodexTurnStateAffinityKey(upstreamCtx, affinityKey)
 		guardCodexTurnStateEcho(affinityKey, account, downstreamHeaders)
 		resp, reqErr := executeHTTPWithContinuousRetryKeepalive(upstreamCtx, func() (*http.Response, error) {
 			return ExecuteRequest(upstreamCtx, account, upstreamBody, upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
@@ -5133,7 +5140,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		}
 
 		if !isStream || !continuousRetryBuffersAttempts(continuousRetryPolicy) {
-			relayCodexTurnStateResponseHeader(c, affinityKey, account, resp.Header)
+			relayCodexTurnStateResponseHeader(c, affinityKey, account, attemptEffectiveModel, resp.Header)
 		}
 		SyncCodexUsageState(h.store, account, resp)
 		// 成功！透传响应并跟踪 TTFT / usage
@@ -5146,6 +5153,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		var firstTokenMs int
 		var usage *UsageInfo
 		var actualServiceTier string
+		responseModelObserver := &upstreamResponseModelObserver{}
 		ttftRecorded := false
 		gotTerminal := false // 是否收到 response.completed 或 response.failed
 		deltaCharCount := 0  // 累计 delta 字符数（用于断流时估算 token）
@@ -5257,7 +5265,8 @@ func (h *Handler) Responses(c *gin.Context) {
 				outputCollector.Add(data)
 				eventType, data, parsed = rewriteEmptyIncompleteTerminal(emptyIncomplete, eventType, data, parsed)
 
-				// 提取 usage + service_tier
+				// 提取 usage + service_tier + 上游自报模型
+				observeUpstreamResponseModelFrame(responseModelObserver, parsed, eventType)
 				if isResponsesSuccessTerminalEvent(eventType) {
 					// 某些网关的终态 response.output 为空或只含部分项，但此前
 					// output_item.done 已完整到达。流式透传前就地补齐，确保 SSE 与
@@ -5502,6 +5511,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					deltaCharCount += len(parsed.Get("delta").String())
 				}
 				eventType, data, parsed = rewriteEmptyIncompleteTerminal(emptyIncomplete, eventType, data, parsed)
+				observeUpstreamResponseModelFrame(responseModelObserver, parsed, eventType)
 				if isResponsesSuccessTerminalEvent(eventType) {
 					usage = extractUsageFromResult(parsed.Get("response.usage"))
 					if tier := parsed.Get("response.service_tier").String(); tier != "" {
@@ -5627,7 +5637,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				h.store.Release(account)
 				return
 			}
-			if commitErr := h.commitResponsesStreamAttempt(c, streamAttempt, affinityKey, account, resp.Header); commitErr != nil {
+			if commitErr := h.commitResponsesStreamAttempt(c, streamAttempt, affinityKey, account, attemptEffectiveModel, resp.Header); commitErr != nil {
 				if isContinuousRetryLocalFailure(commitErr) {
 					outcome = overlayContinuousRetryLocalFailure(outcome, commitErr)
 				} else {
@@ -5771,6 +5781,9 @@ func (h *Handler) Responses(c *gin.Context) {
 			logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 		}
 		applyImageUsageLogInfo(logInput, imageLogInfo)
+		// sentModel 优先取 attempt 实发模型（账号级映射可能改写 attemptEffectiveModel），
+		// 兜底客户端请求模型；上游未自报时 applyUpstreamResponseModelObservation 不做任何事。
+		applyUpstreamResponseModelObservation(logInput, responseModelObserver, upstreamSentModelForAudit(attemptEffectiveModel, logModel), account.ID())
 		h.logUsageForRequest(c, logInput)
 
 		if !accountReleasedForOverflow {
@@ -5913,7 +5926,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	// compact 同时允许官方 Codex OAuth 账号与中转（OpenAI Responses API）账号：
 	// 中转账号会命中上游自身的 /responses/compact，使仅接入中转的用户也能压缩（issue #174）。
 	accountFilter := accountFilterForCompactResponsesModelWithOriginal(routingModel, effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
-	accountFilter = h.withModelCooldownFilter(effectiveModel, accountFilter)
+	accountFilter = h.withModelCooldownFilter(c.Request.Context(), effectiveModel, accountFilter)
 	accountFilter = excludeClaudeAccountsFilter(accountFilter)
 	if continuationUnavailable {
 		accountFilter = relayOnlyAccountFilter(accountFilter)
@@ -6236,7 +6249,9 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			c.Set("x-reasoning-effort", reasoningEffort)
 			c.Set("x-service-tier", usageTiers.ServiceTier)
 
-			h.logUsageForRequest(c, &database.UsageLogInput{
+			compactRelayObserver := &upstreamResponseModelObserver{}
+			observeUpstreamResponseModelBody(compactRelayObserver, respBody)
+			compactRelayLogInput := &database.UsageLogInput{
 				AccountID:            account.ID(),
 				Endpoint:             "/v1/responses/compact",
 				Model:                logModel,
@@ -6257,7 +6272,9 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				RequestedServiceTier: usageTiers.RequestedServiceTier,
 				ActualServiceTier:    usageTiers.ActualServiceTier,
 				BillingServiceTier:   usageTiers.BillingServiceTier,
-			})
+			}
+			applyUpstreamResponseModelObservation(compactRelayLogInput, compactRelayObserver, upstreamSentModelForAudit(attemptEffectiveModel, logModel), account.ID())
+			h.logUsageForRequest(c, compactRelayLogInput)
 
 			h.store.ReleaseForSessionWithGuard(account, affinityKey, affinityGuard)
 			contentType := resp.Header.Get("Content-Type")
@@ -6279,6 +6296,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		upstreamEndpointLabel := "/v1/responses/compact"
 		var resp *http.Response
 		var reqErr error
+		guardCodexTurnStateEcho(affinityKey, account, downstreamHeaders)
 		if compactViaResponses {
 			upstreamEndpointLabel = "/v1/responses"
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(c.Request.Context(), func() (*http.Response, error) {
@@ -6611,7 +6629,9 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		usageTiers := resolveUsageServiceTiers(actualServiceTier, serviceTier)
 
 		totalDuration := int(time.Since(start).Milliseconds())
-		h.logUsageForRequest(c, &database.UsageLogInput{
+		compactObserver := &upstreamResponseModelObserver{}
+		observeUpstreamResponseModelBody(compactObserver, respBody)
+		compactLogInput := &database.UsageLogInput{
 			AccountID:            account.ID(),
 			Endpoint:             "/v1/responses/compact",
 			Model:                logModel,
@@ -6632,7 +6652,9 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			RequestedServiceTier: usageTiers.RequestedServiceTier,
 			ActualServiceTier:    usageTiers.ActualServiceTier,
 			BillingServiceTier:   usageTiers.BillingServiceTier,
-		})
+		}
+		applyUpstreamResponseModelObservation(compactLogInput, compactObserver, upstreamSentModelForAudit(attemptEffectiveModel, logModel), account.ID())
+		h.logUsageForRequest(c, compactLogInput)
 
 		h.store.ReportRequestSuccess(account, time.Duration(totalDuration)*time.Millisecond)
 		h.store.ReleaseForSessionWithGuard(account, affinityKey, affinityGuard)
@@ -6739,7 +6761,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	// /v1/chat/completions 同时允许官方 Codex OAuth 账号与中转（OpenAI Responses API）账号：
 	// 翻译后的请求体本身就是 Responses 形态，中转账号直接以 HTTP 转发（issue #181）。
 	accountFilter := accountFilterForResponsesModelWithOriginal(logModel, effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
-	accountFilter = h.withModelCooldownFilter(effectiveModel, accountFilter)
+	accountFilter = h.withModelCooldownFilter(c.Request.Context(), effectiveModel, accountFilter)
 	accountFilter = h.applyUpstreamChannelFilter(c, effectiveModel, accountFilter)
 	accountFilter = excludeClaudeAccountsFilter(accountFilter)
 	accountFilter = h.applyScopeBudgetFilter(c, accountFilter)
@@ -6922,6 +6944,8 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			if useWebsocket {
 				upstreamBody = stripResponsesImageGenerationTool(codexBody)
 			}
+			upstreamCtx = WithCodexTurnStateAffinityKey(upstreamCtx, affinityKey)
+			guardCodexTurnStateEcho(affinityKey, account, downstreamHeaders)
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(upstreamCtx, func() (*http.Response, error) {
 				return ExecuteRequest(upstreamCtx, account, upstreamBody, upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
 			})
@@ -7206,6 +7230,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		var firstTokenMs int
 		var usage *UsageInfo
 		var actualServiceTier string
+		responseModelObserver := &upstreamResponseModelObserver{}
 		ttftRecorded := false
 		// TTFT may use loose structural progress, but retry safety is based on
 		// actual content. Chat translation drops many structural events, so
@@ -7292,6 +7317,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 					deltaCharCount += len(parsed.Get("delta").String())
 				}
 				eventType, data, parsed = rewriteEmptyIncompleteTerminal(emptyIncomplete, eventType, data, parsed)
+				observeUpstreamResponseModelFrame(responseModelObserver, parsed, eventType)
 				if isResponsesSuccessTerminalEvent(eventType) {
 					usage = extractUsageFromResult(parsed.Get("response.usage"))
 					if tier := parsed.Get("response.service_tier").String(); tier != "" {
@@ -7444,6 +7470,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 				case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 					deltaCharCount += len(parsed.Get("delta").String())
 				case "response.completed", "response.incomplete":
+					observeUpstreamResponseModelFrame(responseModelObserver, parsed, eventType)
 					usage = extractUsageFromResult(parsed.Get("response.usage"))
 					if tier := parsed.Get("response.service_tier").String(); tier != "" {
 						actualServiceTier = tier
@@ -7674,6 +7701,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			logInput.CachedTokens = usage.CachedTokens
 			logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 		}
+		applyUpstreamResponseModelObservation(logInput, responseModelObserver, upstreamSentModelForAudit(attemptEffectiveModel, logModel), account.ID())
 		h.logUsageForRequest(c, logInput)
 
 		resp.Body.Close()

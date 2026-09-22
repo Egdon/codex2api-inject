@@ -46,6 +46,7 @@ import (
 
 // Handler 管理后台 API 处理器
 type Handler struct {
+	imageQueue         *imageJobQueue
 	qualityTestContext context.Context
 	qualityTestWG      sync.WaitGroup
 	store              *auth.Store
@@ -167,21 +168,23 @@ type Handler struct {
 
 	// 「主动重置次数」消耗操作的工作区级互斥锁（workspace -> *sync.Mutex），
 	// 串行化同一上游工作区的并发重置，避免重复消耗与次数计数竞态。
-	resetCreditLocks          sync.Map
-	resetCreditLastSuccess    sync.Map
-	resetCreditSuccessfulIDs  sync.Map
-	autoResetCreditsWake      chan struct{}
-	autoResetCreditsStartOnce sync.Once
-	autoResetCreditsWG        sync.WaitGroup
-	autoActivate5hWake        chan struct{}
-	autoActivate5hStartOnce   sync.Once
-	autoActivate5hWG          sync.WaitGroup
-	resetCreditPostMu         sync.Mutex
-	resetCreditPostWG         sync.WaitGroup
-	resetCreditPostCtx        context.Context
-	resetCreditPostCancel     context.CancelFunc
-	resetCreditPostClosed     bool
-	settingsUpdateMu          sync.Mutex
+	resetCreditLocks               sync.Map
+	resetCreditLastSuccess         sync.Map
+	resetCreditSuccessfulIDs       sync.Map
+	autoResetCreditsWake           chan struct{}
+	codexTurnStateRenewalStartOnce sync.Once
+	codexTurnStateRenewalWG        sync.WaitGroup
+	autoResetCreditsStartOnce      sync.Once
+	autoResetCreditsWG             sync.WaitGroup
+	autoActivate5hWake             chan struct{}
+	autoActivate5hStartOnce        sync.Once
+	autoActivate5hWG               sync.WaitGroup
+	resetCreditPostMu              sync.Mutex
+	resetCreditPostWG              sync.WaitGroup
+	resetCreditPostCtx             context.Context
+	resetCreditPostCancel          context.CancelFunc
+	resetCreditPostClosed          bool
+	settingsUpdateMu               sync.Mutex
 
 	// 重复账号合并互斥锁：串行化 mergeRefreshedDuplicateIntoExisting，
 	// 防止并发导入同一身份的多个账号时互相合并、把双方都软删（账号丢失）。
@@ -1050,8 +1053,10 @@ func NewHandler(store *auth.Store, db *database.DB, tc cache.TokenCache, rl *pro
 	handler.autoActivate5hWake = make(chan struct{}, 1)
 	if db != nil {
 		handler.recordAccountEvent = db.InsertAccountEventAsync
-		if err := db.MarkInterruptedImageJobs(context.Background()); err != nil {
-			log.Printf("标记中断生图任务失败: %v", err)
+		if workers, _ := ImageJobWorkerCount(); workers == 0 {
+			if err := db.MarkInterruptedImageJobs(context.Background()); err != nil {
+				log.Printf("标记中断生图任务失败: %v", err)
+			}
 		}
 	}
 	return handler
@@ -1169,6 +1174,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.PATCH("/accounts/:id/models", h.UpdateAccountModels)
 	api.POST("/accounts/:id/models/sync-upstream", h.SyncAccountUpstreamModels)
 	api.POST("/accounts/:id/models/probe", h.ProbeAccountModels)
+	api.POST("/accounts/:id/turn-state/refresh", h.RefreshCodexTurnStateTemplates)
+	api.GET("/codex-turn-state/renewals", h.ListCodexTurnStateHistory)
 	api.PATCH("/accounts/:id/scheduler", h.UpdateAccountScheduler)
 	api.DELETE("/accounts/:id", h.DeleteAccount)
 	api.GET("/accounts/health-bars", h.GetAccountHealthBars)
@@ -1700,6 +1707,8 @@ type accountResponse struct {
 	ClaudeVersionPolicyOverride   string                      `json:"claude_version_policy_override,omitempty"`
 	ClaudeClientVersionOverride   string                      `json:"claude_client_version_override,omitempty"`
 	Timezone                      string                      `json:"timezone,omitempty"`
+	CodexTurnStateProxyURL        string                      `json:"codex_turn_state_proxy_url,omitempty"`
+	CodexTurnStateDisabled        bool                        `json:"codex_turn_state_disabled"`
 	CodexTurnState                string                      `json:"codex_turn_state,omitempty"`
 	CodexTurnStateModels          string                      `json:"codex_turn_state_models,omitempty"`
 	CodexTurnStateSetAt           string                      `json:"codex_turn_state_set_at,omitempty"`
@@ -2161,6 +2170,8 @@ type updateAccountSchedulerReq struct {
 	ClaudeVersionPolicy     json.RawMessage `json:"claude_version_policy"`
 	ClaudeClientVersion     json.RawMessage `json:"claude_client_version"`
 	Timezone                json.RawMessage `json:"timezone"`
+	CodexTurnStateProxyURL  json.RawMessage `json:"codex_turn_state_proxy_url"`
+	CodexTurnStateDisabled  json.RawMessage `json:"codex_turn_state_disabled"`
 	CodexTurnState          json.RawMessage `json:"codex_turn_state"`
 	CodexTurnStateModels    json.RawMessage `json:"codex_turn_state_models"`
 }
@@ -2187,6 +2198,8 @@ type accountSchedulerUpdate struct {
 	ClaudeVersionPolicy     database.OptionalString
 	ClaudeClientVersion     database.OptionalString
 	Timezone                database.OptionalString
+	CodexTurnStateProxyURL  database.OptionalString
+	CodexTurnStateDisabled  database.OptionalBool
 	CodexTurnState          database.OptionalString
 	CodexTurnStateModels    database.OptionalString
 	CredentialUpdates       map[string]interface{}
@@ -2295,6 +2308,20 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	if err != nil {
 		return accountSchedulerUpdate{}, err
 	}
+	codexTurnStateProxyURL, err := parseOptionalStringField(req.CodexTurnStateProxyURL, "codex_turn_state_proxy_url", func(value string) error {
+		if value == "" {
+			return nil
+		}
+		_, err := normalizeManagedProxyURL(value)
+		return err
+	})
+	if err != nil {
+		return accountSchedulerUpdate{}, err
+	}
+	codexTurnStateDisabled, err := parseOptionalBoolField(req.CodexTurnStateDisabled, "codex_turn_state_disabled")
+	if err != nil {
+		return accountSchedulerUpdate{}, err
+	}
 	codexTurnStateField, err := parseOptionalStringField(req.CodexTurnState, "codex_turn_state", auth.ValidateCodexTurnState)
 	if err != nil {
 		return accountSchedulerUpdate{}, err
@@ -2337,6 +2364,12 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	}
 	if timezoneField.Set {
 		credentialUpdates[auth.AccountTimezoneCredentialKey] = strings.TrimSpace(timezoneField.Value)
+	}
+	if codexTurnStateProxyURL.Set {
+		credentialUpdates[auth.CodexTurnStateProxyURLCredentialKey] = codexTurnStateProxyURL.Value
+	}
+	if codexTurnStateDisabled.Set {
+		credentialUpdates[auth.CodexTurnStateDisabledCredentialKey] = codexTurnStateDisabled.Value
 	}
 	if codexTurnStateField.Set {
 		credentialUpdates[auth.CodexTurnStateCredentialKey] = codexTurnStateField.Value
@@ -2410,6 +2443,8 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 		ClaudeVersionPolicy:     claudeVersionPolicy,
 		ClaudeClientVersion:     claudeClientVersion,
 		Timezone:                timezoneField,
+		CodexTurnStateProxyURL:  codexTurnStateProxyURL,
+		CodexTurnStateDisabled:  codexTurnStateDisabled,
 		CodexTurnState:          codexTurnStateField,
 		CodexTurnStateModels:    codexTurnStateModelsField,
 		CredentialUpdates:       credentialUpdates,
@@ -2487,6 +2522,8 @@ func refineCodexTurnStateSetAt(row *database.AccountRow, update accountScheduler
 
 func (u accountSchedulerUpdate) hasChanges() bool {
 	return u.ScoreBiasOverride.Set ||
+		u.CodexTurnStateProxyURL.Set ||
+		u.CodexTurnStateDisabled.Set ||
 		u.CodexTurnState.Set ||
 		u.CodexTurnStateModels.Set ||
 		u.BaseConcurrencyOverride.Set ||
@@ -2794,6 +2831,12 @@ func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSch
 	}
 	if value, ok := update.CredentialUpdates[auth.UpstreamRequestIDHeaderCredentialKey].(string); ok {
 		h.store.ApplyAccountUpstreamRequestIDHeader(id, value)
+	}
+	if update.CodexTurnStateProxyURL.Set {
+		h.store.ApplyAccountCodexTurnStateProxyURL(id, update.CodexTurnStateProxyURL.Value)
+	}
+	if update.CodexTurnStateDisabled.Set {
+		h.store.ApplyAccountCodexTurnStateDisabled(id, update.CodexTurnStateDisabled.Value)
 	}
 	if update.CodexTurnState.Set || update.CodexTurnStateModels.Set {
 		if account := h.store.FindByID(id); account != nil {
@@ -8321,6 +8364,10 @@ func parseUsageLogsFilter(c *gin.Context, startTime, endTime time.Time) (databas
 	if !ok {
 		return database.UsageLogFilter{}, false
 	}
+	filter.UpstreamModelMismatchOnly, ok = parseUsageLogBoolFilter(c, "upstream_model_mismatch")
+	if !ok {
+		return database.UsageLogFilter{}, false
+	}
 
 	errorOnly, ok := parseUsageLogBoolFilter(c, "error_only")
 	if !ok {
@@ -9309,6 +9356,8 @@ type settingsResponse struct {
 	CodexMinCLIVersion                 string                           `json:"codex_min_cli_version"`
 	CodexUserAgentConfig               string                           `json:"codex_user_agent_config"`
 	CodexTelemetryEnabled              bool                             `json:"codex_telemetry_enabled"`
+	CodexTurnStateTemplateCacheEnabled bool                             `json:"codex_turn_state_template_cache_enabled"`
+	CodexTurnStateAccountMode          string                           `json:"codex_turn_state_account_mode"`
 	CodexTelemetryTimingDebug          bool                             `json:"codex_telemetry_timing_debug"`
 	UsageLogMode                       string                           `json:"usage_log_mode"`
 	UsageLogBatchSize                  int                              `json:"usage_log_batch_size"`
@@ -9478,6 +9527,8 @@ type updateSettingsReq struct {
 	CodexMinCLIVersion                  *string                          `json:"codex_min_cli_version"`
 	CodexUserAgentConfig                *string                          `json:"codex_user_agent_config"`
 	CodexTelemetryEnabled               *bool                            `json:"codex_telemetry_enabled"`
+	CodexTurnStateTemplateCacheEnabled  *bool                            `json:"codex_turn_state_template_cache_enabled"`
+	CodexTurnStateAccountMode           *string                          `json:"codex_turn_state_account_mode"`
 	CodexTelemetryTimingDebug           *bool                            `json:"codex_telemetry_timing_debug"`
 	UsageLogMode                        *string                          `json:"usage_log_mode"`
 	UsageLogBatchSize                   *int                             `json:"usage_log_batch_size"`
@@ -10315,6 +10366,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
 		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
 		CodexTelemetryEnabled:               runtimeCfg.CodexTelemetryEnabled,
+		CodexTurnStateTemplateCacheEnabled:  runtimeCfg.CodexTurnStateTemplateCache,
+		CodexTurnStateAccountMode:           runtimeCfg.CodexTurnStateAccountMode,
 		CodexTelemetryTimingDebug:           runtimeCfg.CodexTelemetryTimingDebug,
 		UsageLogMode:                        h.db.GetUsageLogMode(),
 		UsageLogBatchSize:                   h.db.GetUsageLogBatchSize(),
@@ -10628,6 +10681,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	persistedAutoResetCreditsEnabled := false
 	persistedAutoResetCreditsBeforeExpiryMin := 60
 	persistedAutoActivate5hWindowEnabled := false
+	persistedCodexTurnStateTemplateCache := false
+	persistedCodexTurnStateAccountMode := proxy.CodexTurnStateAccountModeAuto
 	codexImagesMainModel := ""
 	persistedUTLSShutdownTimeoutMinutes := database.NormalizeUTLSShutdownTimeoutMinutes(0)
 	modelsListReadMaxBytes := database.DefaultModelsListReadMaxBytes
@@ -10652,6 +10707,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		persistedAutoResetCreditsEnabled = existingSettings.AutoResetCreditsEnabled
 		persistedAutoResetCreditsBeforeExpiryMin = existingSettings.AutoResetCreditsBeforeExpiryMin
 		persistedAutoActivate5hWindowEnabled = existingSettings.AutoActivate5hWindowEnabled
+		persistedCodexTurnStateTemplateCache = existingSettings.CodexTurnStateTemplateCacheEnabled
+		persistedCodexTurnStateAccountMode = proxy.NormalizeCodexTurnStateAccountMode(existingSettings.CodexTurnStateAccountMode)
 		codexImagesMainModel = existingSettings.CodexImagesMainModel
 		persistedUTLSShutdownTimeoutMinutes = database.NormalizeUTLSShutdownTimeoutMinutes(existingSettings.UTLSShutdownTimeoutMinutes)
 		modelsListReadMaxBytes = database.NormalizeModelsListReadMaxBytes(existingSettings.ModelsListReadMaxBytes)
@@ -10726,11 +10783,15 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	previousAutoResetCreditsEnabled := runtimeCfg.AutoResetCreditsEnabled
 	previousAutoResetCreditsBeforeExpiryMin := runtimeCfg.AutoResetCreditsBeforeExpiryMin
 	previousAutoActivate5hWindowEnabled := runtimeCfg.AutoActivate5hWindowEnabled
+	previousCodexTurnStateTemplateCache := runtimeCfg.CodexTurnStateTemplateCache
+	previousCodexTurnStateAccountMode := runtimeCfg.CodexTurnStateAccountMode
 	// 数据库是多实例下的权威来源；用持久值作为本次 partial update 的基线，
 	// 避免旧实例保存无关字段时把自动消费配置回滚成自己的陈旧快照。
 	runtimeCfg.AutoResetCreditsEnabled = persistedAutoResetCreditsEnabled
 	runtimeCfg.AutoResetCreditsBeforeExpiryMin = persistedAutoResetCreditsBeforeExpiryMin
 	runtimeCfg.AutoActivate5hWindowEnabled = persistedAutoActivate5hWindowEnabled
+	runtimeCfg.CodexTurnStateTemplateCache = persistedCodexTurnStateTemplateCache
+	runtimeCfg.CodexTurnStateAccountMode = persistedCodexTurnStateAccountMode
 	runtimeCfg.UTLSShutdownTimeoutMin = persistedUTLSShutdownTimeoutMinutes
 	runtimeCfg.ModelsListReadMaxBytes = modelsListReadMaxBytes
 	continuousRetryPolicy := h.store.GetContinuousRetryPolicy()
@@ -10747,6 +10808,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	autoResetCreditsChanged := (req.AutoResetCreditsEnabled != nil && *req.AutoResetCreditsEnabled != persistedAutoResetCreditsEnabled) ||
 		(req.AutoResetCreditsBeforeExpiryMin != nil && *req.AutoResetCreditsBeforeExpiryMin != persistedAutoResetCreditsBeforeExpiryMin)
 	autoActivate5hChanged := req.AutoActivate5hWindowEnabled != nil && *req.AutoActivate5hWindowEnabled != persistedAutoActivate5hWindowEnabled
+	turnStateTemplateSettingsChanged := (req.CodexTurnStateTemplateCacheEnabled != nil && *req.CodexTurnStateTemplateCacheEnabled != persistedCodexTurnStateTemplateCache) ||
+		(req.CodexTurnStateAccountMode != nil && proxy.NormalizeCodexTurnStateAccountMode(*req.CodexTurnStateAccountMode) != persistedCodexTurnStateAccountMode)
 	usageLogMode := h.db.GetUsageLogMode()
 	usageLogBatchSize := h.db.GetUsageLogBatchSize()
 	usageLogFlushIntervalSeconds := h.db.GetUsageLogFlushIntervalSeconds()
@@ -11386,6 +11449,14 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.CodexTelemetryEnabled = *req.CodexTelemetryEnabled
 		log.Printf("设置已更新: codex_telemetry_enabled = %t", runtimeCfg.CodexTelemetryEnabled)
 	}
+	if req.CodexTurnStateTemplateCacheEnabled != nil {
+		runtimeCfg.CodexTurnStateTemplateCache = *req.CodexTurnStateTemplateCacheEnabled
+		log.Printf("设置已更新: codex_turn_state_template_cache_enabled = %t", runtimeCfg.CodexTurnStateTemplateCache)
+	}
+	if req.CodexTurnStateAccountMode != nil {
+		runtimeCfg.CodexTurnStateAccountMode = proxy.NormalizeCodexTurnStateAccountMode(*req.CodexTurnStateAccountMode)
+		log.Printf("设置已更新: codex_turn_state_account_mode = %s", runtimeCfg.CodexTurnStateAccountMode)
+	}
 	if req.CodexTelemetryTimingDebug != nil {
 		runtimeCfg.CodexTelemetryTimingDebug = *req.CodexTelemetryTimingDebug
 		log.Printf("设置已更新: codex_telemetry_timing_debug = %t", runtimeCfg.CodexTelemetryTimingDebug)
@@ -11484,6 +11555,11 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if autoActivate5hChanged {
 		effectiveRuntimeCfg.AutoActivate5hWindowEnabled = previousAutoActivate5hWindowEnabled
+	}
+	if turnStateTemplateSettingsChanged {
+		// Hold back until UpdateSystemSettings succeeds (same pattern as auto-reset).
+		effectiveRuntimeCfg.CodexTurnStateTemplateCache = previousCodexTurnStateTemplateCache
+		effectiveRuntimeCfg.CodexTurnStateAccountMode = previousCodexTurnStateAccountMode
 	}
 	effectiveRuntimeCfg = proxy.UpdateRuntimeSettings(func(current proxy.RuntimeSettings) proxy.RuntimeSettings {
 		// CodexSyncedCLIVersion 由后台同步任务独立维护；管理员保存其他设置时
@@ -11807,6 +11883,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
 		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
 		CodexTelemetryEnabled:               runtimeCfg.CodexTelemetryEnabled,
+		CodexTurnStateTemplateCacheEnabled:  runtimeCfg.CodexTurnStateTemplateCache,
+		CodexTurnStateAccountMode:           runtimeCfg.CodexTurnStateAccountMode,
 		CodexTelemetryTimingDebug:           runtimeCfg.CodexTelemetryTimingDebug,
 		UsageLogMode:                        usageLogMode,
 		UsageLogBatchSize:                   usageLogBatchSize,
@@ -11868,6 +11946,11 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		if autoActivate5hChanged {
 			runtimeCfg = effectiveRuntimeCfg
 			writeError(c, http.StatusInternalServerError, "保存 5h 窗口自动激活设置失败，设置未生效")
+			return
+		}
+		if turnStateTemplateSettingsChanged {
+			runtimeCfg = effectiveRuntimeCfg
+			writeError(c, http.StatusInternalServerError, "保存 turn-state 模板缓存设置失败，设置未生效")
 			return
 		}
 		if continuousRetryChanged {
@@ -11943,6 +12026,12 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 				return runtimeCfg
 			})
 			h.triggerAutoActivate5hScan()
+		}
+		if turnStateTemplateSettingsChanged {
+			runtimeCfg = proxy.UpdateRuntimeSettings(func(current proxy.RuntimeSettings) proxy.RuntimeSettings {
+				runtimeCfg.CodexSyncedCLIVersion = current.CodexSyncedCLIVersion
+				return runtimeCfg
+			})
 		}
 		if modelsListReadLimitChanged {
 			if updateErr := h.db.UpdateModelsListReadMaxBytes(c.Request.Context(), *req.ModelsListReadMaxBytes); updateErr != nil {
@@ -12159,6 +12248,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
 		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
 		CodexTelemetryEnabled:               runtimeCfg.CodexTelemetryEnabled,
+		CodexTurnStateTemplateCacheEnabled:  runtimeCfg.CodexTurnStateTemplateCache,
+		CodexTurnStateAccountMode:           runtimeCfg.CodexTurnStateAccountMode,
 		CodexTelemetryTimingDebug:           runtimeCfg.CodexTelemetryTimingDebug,
 		UsageLogMode:                        usageLogMode,
 		UsageLogBatchSize:                   usageLogBatchSize,

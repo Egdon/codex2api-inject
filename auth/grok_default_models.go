@@ -8,7 +8,7 @@ package auth
 //
 // 两条通道的目录并不相同,必须分开取:
 //   - OAuth 走 cli-chat-proxy,目录由 CLI 通道决定。实测 supergrok_heavy 与 free
-//     两种套餐原先只返回 grok-4.5;grok-4.6 作为当前旗舰一并列入兜底,不含 grok-3 / grok-2。
+//     两种套餐原先只返回 grok-4.5;grok-4.6 / grok-4.7 作为近两代旗舰一并列入兜底,不含 grok-3 / grok-2。
 //   - API Key 走 xAI 公开 API,目录更宽。
 //
 // 默认集只是探测不到时的兜底:账号导入或连通性测试跑过 FetchGrokModelIDs 后,
@@ -16,12 +16,12 @@ package auth
 
 // GrokOAuthDefaultModelIDs 返回 OAuth 凭据账号的默认可用文本模型集。
 func GrokOAuthDefaultModelIDs() []string {
-	return []string{"grok-4.6", "grok-4.5"}
+	return []string{"grok-4.7", "grok-4.6", "grok-4.5"}
 }
 
 // GrokAPIKeyDefaultModelIDs 返回 API Key 凭据账号的默认可用文本模型集。
 func GrokAPIKeyDefaultModelIDs() []string {
-	return []string{"grok-4.6", "grok-4.5", "grok-4", "grok-3-fast", "grok-3", "grok-2"}
+	return []string{"grok-4.7", "grok-4.6", "grok-4.5", "grok-4", "grok-3-fast", "grok-3", "grok-2"}
 }
 
 // 媒体（生图/生视频）模型集与文本模型集刻意分开:文本调度准入

@@ -11,6 +11,8 @@ func TestGrokSupportsXHighReasoningEffort(t *testing.T) {
 		model string
 		want  bool
 	}{
+		{"grok-4.7", true},
+		{"grok-4.7-beta", true},
 		{"grok-4.6", true},
 		{"GROK-4.6", true},
 		{"grok-4.6-beta", true},
@@ -47,6 +49,8 @@ func TestClampGrokReasoningEffort(t *testing.T) {
 		{"4.5 xhigh→high", `{"model":"grok-4.5","reasoning":{"effort":"xhigh"}}`, "reasoning.effort", "high"},
 		{"4.5 max→high", `{"model":"grok-4.5","reasoning":{"effort":"max"}}`, "reasoning.effort", "high"},
 		{"4.6 xhigh stays", `{"model":"grok-4.6","reasoning":{"effort":"xhigh"}}`, "reasoning.effort", "xhigh"},
+		{"4.7 xhigh stays", `{"model":"grok-4.7","reasoning":{"effort":"xhigh"}}`, "reasoning.effort", "xhigh"},
+		{"4.7 max→xhigh", `{"model":"grok-4.7","reasoning":{"effort":"max"}}`, "reasoning.effort", "xhigh"},
 		{"4.6-beta xhigh stays", `{"model":"grok-4.6-beta","reasoning":{"effort":"xhigh"}}`, "reasoning.effort", "xhigh"},
 		{"4.6-build xhigh stays", `{"model":"grok-4.6-build","reasoning":{"effort":"xhigh"}}`, "reasoning.effort", "xhigh"},
 		{"4.20-multi-agent xhigh stays", `{"model":"grok-4.20-multi-agent","reasoning":{"effort":"xhigh"}}`, "reasoning.effort", "xhigh"},

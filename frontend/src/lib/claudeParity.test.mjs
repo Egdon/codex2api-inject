@@ -38,7 +38,7 @@ test('usage and management filters keep Claude provider identity', () => {
   assert.match(usage, /channel === 'claude'/)
   assert.match(apiKeys, /claudeModelOptions/)
   assert.match(apiKeys, /key: "claude"/)
-  assert.match(proxies, /BindKindFilter = "all" \| "codex" \| "grok" \| "claude"/)
+  assert.match(proxies, /BindKindFilter = "all" \| "codex" \| "grok" \| "antigravity" \| "claude"/)
   assert.match(proxies, /bindKindClaude/)
   assert.match(scheduler, /channel.*claude|claude.*channel/)
   assert.match(scheduler, /selectedAvailable|summary\?\.active/)

@@ -397,7 +397,7 @@ func dropGrokToolChoiceWithoutTools(body []byte) []byte {
 }
 
 // mapGrokReasoningEffort 把思考强度映射到当前 Grok 模型支持的档位。
-// grok-4.6 起（含 grok-4.20-multi-agent）支持 xhigh；更旧的 build 只有 low/medium/high。
+// grok-4.6 起（grok-4.7 与 grok-4.20-multi-agent 同样）支持 xhigh；更旧的 build 只有 low/medium/high。
 // Codex 的 max 在支持 xhigh 的模型上落到 xhigh，否则落到 high；minimal 一律落到 low。
 // 无模型上下文时按旧 build 处理，避免 grok-4.5 / grok-3 收到不认的档位。
 func mapGrokReasoningEffort(effort, model string) (string, bool) {
@@ -420,7 +420,7 @@ func mapGrokReasoningEffort(effort, model string) (string, bool) {
 }
 
 // grokSupportsXHighReasoningEffort 判断模型是否接受 reasoning.effort=xhigh。
-// xAI 文档：grok-4.6 支持；grok-4.5 等不支持的模型会把 xhigh 当成 high。
+// xAI 文档：grok-4.6 / grok-4.7 支持；grok-4.5 等不支持的模型会把 xhigh 当成 high。
 // 版本线按 grok-4.6 起放行（grok-4.6-beta / grok-4.6-build / grok-4.20-multi-agent 同样识别）。
 func grokSupportsXHighReasoningEffort(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))

@@ -178,9 +178,11 @@ type Account struct {
 	Timezone string
 	// CodexTurnState* 见 codex_turn_state.go：凭据级 X-Codex-Turn-State 强制注入的值、
 	// 模型名单与设置时刻。空值 = 不注入。
-	CodexTurnState       string
-	CodexTurnStateModels string
-	CodexTurnStateSetAt  time.Time
+	CodexTurnStateProxyURL string
+	CodexTurnStateDisabled bool
+	CodexTurnState         string
+	CodexTurnStateModels   string
+	CodexTurnStateSetAt    time.Time
 	// ClaudeFingerprintMode 见 claude_fingerprint_mode.go:Claude Code 出站身份头
 	// 收敛模式(preserve/force;空=跟随全局默认)。
 	ClaudeFingerprintMode string
@@ -3955,21 +3957,27 @@ func (s *Store) setCachedModelCooldown(accountID int64, cooldown ModelCooldown) 
 }
 
 func (s *Store) getCachedModelCooldown(accountID int64, model string) (runtimeCooldownRecord, bool) {
-	if s == nil || s.tokenCache == nil || accountID == 0 {
+	return s.getCachedModelCooldownContext(context.Background(), accountID, model)
+}
+
+func (s *Store) getCachedModelCooldownContext(parent context.Context, accountID int64, model string) (runtimeCooldownRecord, bool) {
+	if s == nil || s.tokenCache == nil || accountID == 0 || parent.Err() != nil {
 		return runtimeCooldownRecord{}, false
 	}
 	key := normalizeModelCooldownKey(model)
 	if key == "" {
 		return runtimeCooldownRecord{}, false
 	}
-	ctx, cancel := cooldownRuntimeContext()
+	ctx, cancel := context.WithTimeout(parent, runtimeCooldownCacheTimeout)
 	defer cancel()
 	if s.schedulerMetrics != nil {
 		s.schedulerMetrics.modelCooldownCacheReads.Add(1)
 	}
 	payload, ok, err := s.tokenCache.GetRuntime(ctx, modelCooldownCacheNamespace, modelCooldownRuntimeKey(accountID, key))
 	if err != nil {
-		log.Printf("[账号 %d] 读取模型冷却缓存失败 model=%s: %v", accountID, key, err)
+		if parent.Err() == nil {
+			log.Printf("[账号 %d] 读取模型冷却缓存失败 model=%s: %v", accountID, key, err)
+		}
 		return runtimeCooldownRecord{}, false
 	}
 	if !ok || len(payload) == 0 {
@@ -3978,11 +3986,11 @@ func (s *Store) getCachedModelCooldown(accountID int64, model string) (runtimeCo
 	var record runtimeCooldownRecord
 	if err := json.Unmarshal(payload, &record); err != nil {
 		log.Printf("[账号 %d] 解析模型冷却缓存失败 model=%s: %v", accountID, key, err)
-		s.deleteCachedModelCooldown(accountID, key)
+		s.deleteCachedModelCooldownContext(parent, accountID, key)
 		return runtimeCooldownRecord{}, false
 	}
 	if !record.ResetAt.After(time.Now()) {
-		s.deleteCachedModelCooldown(accountID, key)
+		s.deleteCachedModelCooldownContext(parent, accountID, key)
 		return runtimeCooldownRecord{}, false
 	}
 	record.Model = key
@@ -3991,17 +3999,23 @@ func (s *Store) getCachedModelCooldown(accountID int64, model string) (runtimeCo
 }
 
 func (s *Store) deleteCachedModelCooldown(accountID int64, model string) {
-	if s == nil || s.tokenCache == nil || accountID == 0 {
+	s.deleteCachedModelCooldownContext(context.Background(), accountID, model)
+}
+
+func (s *Store) deleteCachedModelCooldownContext(parent context.Context, accountID int64, model string) {
+	if s == nil || s.tokenCache == nil || accountID == 0 || parent.Err() != nil {
 		return
 	}
 	key := normalizeModelCooldownKey(model)
 	if key == "" {
 		return
 	}
-	ctx, cancel := cooldownRuntimeContext()
+	ctx, cancel := context.WithTimeout(parent, runtimeCooldownCacheTimeout)
 	defer cancel()
 	if err := s.tokenCache.DeleteRuntime(ctx, modelCooldownCacheNamespace, modelCooldownRuntimeKey(accountID, key)); err != nil {
-		log.Printf("[账号 %d] 删除模型冷却缓存失败 model=%s: %v", accountID, key, err)
+		if parent.Err() == nil {
+			log.Printf("[账号 %d] 删除模型冷却缓存失败 model=%s: %v", accountID, key, err)
+		}
 	}
 }
 
@@ -4035,6 +4049,10 @@ func (s *Store) applyCachedModelCooldown(acc *Account, model string, record runt
 }
 
 func (s *Store) accountHasCachedModelCooldown(acc *Account, model string) bool {
+	return s.accountHasCachedModelCooldownContext(context.Background(), acc, model)
+}
+
+func (s *Store) accountHasCachedModelCooldownContext(ctx context.Context, acc *Account, model string) bool {
 	if acc == nil {
 		return false
 	}
@@ -4045,7 +4063,7 @@ func (s *Store) accountHasCachedModelCooldown(acc *Account, model string) bool {
 	if acc.IsModelRateLimited(key) {
 		return true
 	}
-	record, ok := s.getCachedModelCooldown(acc.DBID, key)
+	record, ok := s.getCachedModelCooldownContext(ctx, acc.DBID, key)
 	if !ok {
 		return false
 	}
@@ -4055,18 +4073,35 @@ func (s *Store) accountHasCachedModelCooldown(acc *Account, model string) bool {
 
 // WithModelCooldownFilter wraps a request model filter with Redis-backed model cooldown checks.
 func (s *Store) WithModelCooldownFilter(model string, filter AccountFilter) AccountFilter {
-	key := normalizeModelCooldownKey(model)
-	if s == nil || key == "" {
+	if s == nil || normalizeModelCooldownKey(model) == "" {
 		return filter
 	}
+	return s.WithModelCooldownFilterContext(context.Background(), model, filter)
+}
+
+// WithModelCooldownFilterContext stops Redis reads when the downstream request
+// is canceled. A canceled read must reject the candidate, not fail open into a
+// fresh upstream request after the client has already disconnected.
+func (s *Store) WithModelCooldownFilterContext(ctx context.Context, model string, filter AccountFilter) AccountFilter {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	key := normalizeModelCooldownKey(model)
 	return func(acc *Account) bool {
-		if acc == nil {
+		if acc == nil || ctx.Err() != nil {
 			return false
 		}
 		if filter != nil && !filter(acc) {
 			return false
 		}
-		return !s.accountHasCachedModelCooldown(acc, key)
+		if ctx.Err() != nil {
+			return false
+		}
+		if s == nil || key == "" {
+			return true
+		}
+		blocked := s.accountHasCachedModelCooldownContext(ctx, acc, key)
+		return ctx.Err() == nil && !blocked
 	}
 }
 
@@ -5503,6 +5538,8 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		CodexPassthroughMode:         codexPassthroughMode,
 		CodexFingerprintMode:         codexFingerprintMode,
 		Timezone:                     accountTimezone,
+		CodexTurnStateProxyURL:       strings.TrimSpace(row.GetCredential(CodexTurnStateProxyURLCredentialKey)),
+		CodexTurnStateDisabled:       row.GetCredentialBool(CodexTurnStateDisabledCredentialKey),
 		CodexTurnState:               strings.TrimSpace(row.GetCredential(CodexTurnStateCredentialKey)),
 		CodexTurnStateModels:         NormalizeCodexTurnStateModels(row.GetCredential(CodexTurnStateModelsCredentialKey)),
 		CodexTurnStateSetAt:          ParseCodexTurnStateSetAt(row.GetCredential(CodexTurnStateSetAtCredentialKey)),

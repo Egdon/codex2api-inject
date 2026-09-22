@@ -7,6 +7,7 @@ import type { ProxyRow } from "../api";
 import { ProxyField } from "../components/ProxyField";
 import AccountProxyBadge from "../components/AccountProxyBadge";
 import AccountProxyQuickEditor from "../components/AccountProxyQuickEditor";
+import CodexTurnStateBadge, { isCodexTurnStateAccount } from "../components/CodexTurnStateBadge";
 import SubscriptionBadge from "../components/SubscriptionBadge";
 import {
   buildProxyBindingContext,
@@ -1280,7 +1281,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                       t={t}
                                     />
                                   )}
-                                  {(account.at_only ||
+                                  {(isCodexTurnStateAccount(account) || account.at_only ||
                                     account.openai_responses_api ||
                                     account.grok_api ||
                                     account.agent_identity ||
@@ -1337,6 +1338,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                           {account.rate_limit_reset_credits ?? 0}
                                         </button>
                                       )}
+                                      <CodexTurnStateBadge account={account} />
                                       {getCreditBalanceDisplay(account) !==
                                         null && (
                                         <button
@@ -1904,6 +1906,8 @@ export default function Accounts() {
   const [editTimezone, setEditTimezone] = useState("");
   const [editTimezoneCustom, setEditTimezoneCustom] = useState(false);
   // Turn State 强制注入:注入值 + 限定模型(逗号分隔)。仅 Codex 官方账号下发。
+  const [editCodexTurnStateProxyUrl, setEditCodexTurnStateProxyUrl] = useState("");
+  const [editCodexTurnStateDisabled, setEditCodexTurnStateDisabled] = useState(false);
   const [editCodexTurnState, setEditCodexTurnState] = useState("");
   const [editCodexTurnStateModels, setEditCodexTurnStateModels] = useState("");
   // 时效倒计时的时钟源:编辑弹窗打开期间每秒推进一次,关闭即停。
@@ -5639,6 +5643,8 @@ export default function Accounts() {
       Boolean(account.timezone && !findClaudeTimezoneOption(account.timezone)),
     );
     setEditCodexTurnState(account.codex_turn_state ?? "");
+    setEditCodexTurnStateProxyUrl(account.codex_turn_state_proxy_url ?? "");
+    setEditCodexTurnStateDisabled(account.codex_turn_state_disabled ?? false);
     setEditCodexTurnStateModels(account.codex_turn_state_models ?? "");
     setEditTags(account.tags ?? []);
     setEditGroupIds(account.group_ids ?? []);
@@ -5862,6 +5868,8 @@ export default function Accounts() {
           ? {
               codex_fingerprint_mode: editCodexFingerprintMode,
               timezone: editTimezone.trim(),
+              codex_turn_state_proxy_url: editCodexTurnStateProxyUrl.trim() || null,
+              codex_turn_state_disabled: editCodexTurnStateDisabled,
               codex_turn_state: editCodexTurnState.trim(),
               codex_turn_state_models: editCodexTurnStateModels.trim(),
             }
@@ -9953,6 +9961,36 @@ export default function Accounts() {
                               {t("accounts.codexTurnStateHint")}
                             </p>
                             <div className="mt-3">
+                              <label className="block text-sm font-semibold text-muted-foreground mb-2">
+                                {t("accounts.codexTurnStateSwitchLabel")}
+                              </label>
+                              <Select
+                                value={editCodexTurnStateDisabled ? "off" : "follow"}
+                                onValueChange={(value) => setEditCodexTurnStateDisabled(value === "off")}
+                                options={[
+                                  { value: "follow", label: t("accounts.codexTurnStateFollowGlobal") },
+                                  { value: "off", label: t("accounts.codexTurnStateOff") },
+                                ]}
+                              />
+                              <p className="mt-1.5 text-xs text-muted-foreground">
+                                {t("accounts.codexTurnStateSwitchHint")}
+                              </p>
+                            </div>
+                            <div className="mt-3">
+                              <ProxyField
+                                value={editCodexTurnStateProxyUrl}
+                                onChange={setEditCodexTurnStateProxyUrl}
+                                proxies={proxyPool}
+                                label={t("accounts.codexTurnStateProxyLabel")}
+                                labelClassName="text-sm"
+                                linkedHint={t("accounts.codexTurnStateProxyPoolHint")}
+                                placeholder={t("accounts.proxyUrlPlaceholder")}
+                              />
+                              <p className="mt-1.5 text-xs text-muted-foreground">
+                                {t("accounts.codexTurnStateProxyHint")}
+                              </p>
+                            </div>
+                            <div className="mt-3">
                               <div className="flex items-center justify-between mb-2">
                                 <label className="block text-sm font-semibold text-muted-foreground">
                                   {t("accounts.codexTurnStateValueLabel")}
@@ -13734,6 +13772,7 @@ function AccountMobileCard({
               </span>
             )}
             <div className="codex-account-card__flags">
+              <CodexTurnStateBadge account={account} />
               <SubscriptionBadge
                 accountId={account.id}
                 subscription={account.subscription}

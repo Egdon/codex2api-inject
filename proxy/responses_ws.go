@@ -362,6 +362,9 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	resetPromptRequestSecurityFrame(c)
 	resetPromptPolicyRequestCorrelationID(c)
 	resetUpstreamRequestTrace(c)
+	// Turn-state audit is request-scoped via HTTP middleware; multi-turn WS reuses
+	// the same gin.Context/request, so install a fresh slot per response.create.
+	attachFreshTurnStateTemplateAudit(c)
 	quotaParentRequest := c.Request
 	if err := h.refreshAPIKeyModelRequestQuotaTurn(c); err != nil {
 		return writeResponsesWSError(conn, apiKeyModelRequestError(err).apiErr)
@@ -506,7 +509,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	}
 
 	accountFilter := accountFilterForModel(effectiveModel)
-	accountFilter = h.withModelCooldownFilter(effectiveModel, accountFilter)
+	accountFilter = h.withModelCooldownFilter(c.Request.Context(), effectiveModel, accountFilter)
 	accountFilter = applyAffinityGroupRouting(c, sessionIdentity, accountFilter)
 	accountFilter = h.applyScopeBudgetFilter(c, accountFilter)
 	// resolveCompactionAffinity 只在已知来源相互冲突时报错；缓存故障按未知
@@ -645,8 +648,8 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 			if c.Request.Context().Err() != nil {
 				return errResponsesWSClientGone
 			}
-			if errors.Is(selectionErr, auth.ErrSchedulerQueueFull) {
-				apiErr = schedulerQueueFullAPIError()
+			if selectionAPIError := schedulerSelectionAPIError(selectionErr); selectionAPIError != nil {
+				apiErr = selectionAPIError
 			} else if compactionAffinity.Known {
 				apiErr = compactionUpstreamUnavailableAPIError()
 			} else if lastRetryableUpstreamErr != nil {
@@ -745,6 +748,8 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		// Responses/ChatCompletions 路径一致——无显式会话默认每请求隔离上游身份，
 		// WS 路径交给 ExecuteRequest 的 stateless 槽位池处理。
 		upstreamCtx = context.WithValue(upstreamCtx, encryptedContentSessionKey{}, sessionIdentity.affinityID)
+		upstreamCtx = WithCodexTurnStateAffinityKey(upstreamCtx, affinityKey)
+		guardCodexTurnStateEcho(affinityKey, account, downstreamHeaders)
 		upstreamSessionID := resolveUpstreamSessionID(apiKeyID, sessionIdentity.upstreamSeed, sessionIdentity.explicitUpstreamID, useWebsocket)
 		resp, reqErr := executeHTTPWithContinuousRetryKeepalive(upstreamCtx, func() (*http.Response, error) {
 			return ExecuteRequest(upstreamCtx, account, upstreamBody, upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
@@ -1130,6 +1135,7 @@ func (h *Handler) streamResponsesWSUpstream(
 	var terminalFailureClientPayload []byte
 	var preContentErrorCandidate []byte
 	var completedResponsePayload []byte
+	responseModelObserver := &upstreamResponseModelObserver{}
 	outputCollector := newResponseOutputCollector()
 	emptyIncomplete := &emptyIncompleteTracker{}
 	terminalFailureEventType := ""
@@ -1210,6 +1216,7 @@ func (h *Handler) streamResponsesWSUpstream(
 		if image, ok := extractImageFromOutputItemDone(data, model); ok {
 			imageLogInfo = mergeImageUsageLogInfo(imageLogInfo, imageUsageLogInfoFromImage(image))
 		}
+		observeUpstreamResponseModelFrame(responseModelObserver, parsed, eventType)
 		if isResponsesSuccessTerminalEvent(eventType) {
 			usage = extractUsageFromResult(parsed.Get("response.usage"))
 			if tier := parsed.Get("response.service_tier").String(); tier != "" {
@@ -1533,6 +1540,8 @@ func (h *Handler) streamResponsesWSUpstream(
 		logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 	}
 	applyImageUsageLogInfo(logInput, imageLogInfo)
+	// WS 轮终态记账：attempt 实发模型优先（effectiveModel），兜底客户端请求模型。
+	applyUpstreamResponseModelObservation(logInput, responseModelObserver, upstreamSentModelForAudit(effectiveModel, model), account.ID())
 	h.logUsageForRequest(c, logInput)
 
 	resp.Body.Close()
