@@ -1689,8 +1689,9 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 				return
 			}
 			waitFilter := applyAffinityGroupRouting(c, sessionIdentity, h.withModelCooldownFilter(c.Request.Context(), requestModel, imageCapableAccountFilter))
+			selectionFilter := h.applyScopeBudgetFilter(c, waitFilter)
 			var selectionErr error
-			account, stickyProxyURL, selectionErr = h.waitForRetryAccountAvailable(c.Request.Context(), "", apiKeyID, retryExclusions.ForSelection(), h.applyScopeBudgetFilter(c, waitFilter), false, dispatchPolicyForModel(requestModel))
+			account, stickyProxyURL, selectionErr = h.waitForRetryAccountAvailable(c.Request.Context(), "", apiKeyID, retryExclusions.ForSelection(), selectionFilter, false, dispatchPolicyForModel(requestModel))
 			if writeSchedulerQueueError(c, selectionErr, continuousRetryProtocolResponses) {
 				return
 			}
@@ -1717,6 +1718,14 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 						return
 					}
 					SendAPIKeyLimitError(c, http.StatusTooManyRequests, msg)
+					return
+				}
+				if h.accountPoolConcurrencySaturated(apiKeyID, retryExclusions.ForSelection(), selectionFilter, dispatchPolicyForModel(requestModel)) {
+					setConcurrencySaturatedRetryAfter(c)
+					if stream && writeCommittedResponsesRetryError(c, concurrencySaturatedMessageZH) {
+						return
+					}
+					c.JSON(http.StatusServiceUnavailable, concurrencySaturatedError())
 					return
 				}
 				if stream && writeCommittedResponsesRetryError(c, noAvailableAccountMessage("")) {
@@ -2131,6 +2140,16 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 			return
 		}
 		h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
+		return
+	}
+	imageFilter := applyAffinityGroupRouting(c, sessionIdentity, h.withModelCooldownFilter(c.Request.Context(), requestModel, imageCapableAccountFilter))
+	imageFilter = h.applyScopeBudgetFilter(c, imageFilter)
+	if h.accountPoolConcurrencySaturated(apiKeyID, retryExclusions.ForSelection(), imageFilter, dispatchPolicyForModel(requestModel)) {
+		setConcurrencySaturatedRetryAfter(c)
+		if stream && writeCommittedResponsesRetryError(c, concurrencySaturatedMessageZH) {
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, concurrencySaturatedError())
 		return
 	}
 	if stream && writeCommittedResponsesRetryError(c, noAvailableAccountMessage("")) {

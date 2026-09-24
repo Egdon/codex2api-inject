@@ -188,8 +188,16 @@ func (h *Handler) nextGrokMediaAccount(c *gin.Context, apiKeyID int64, exclude m
 	if account, stickyProxyURL := h.nextAccountForSessionWithFilter("", apiKeyID, exclude, h.applyScopeBudgetFilter(c, preferred)); account != nil {
 		return account, stickyProxyURL
 	}
+	return h.nextAccountForSessionWithFilter("", apiKeyID, exclude, h.grokMediaDispatchFilter(c, model, identity))
+}
+
+func (h *Handler) grokMediaDispatchFilter(c *gin.Context, model string, identity requestSessionIdentity) auth.AccountFilter {
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
 	fallback := applyAffinityGroupRouting(c, identity, h.withModelCooldownFilter(ctx, model, grokMediaAccountFilter(model)))
-	return h.nextAccountForSessionWithFilter("", apiKeyID, exclude, h.applyScopeBudgetFilter(c, fallback))
+	return h.applyScopeBudgetFilter(c, fallback)
 }
 
 // ==================== 上游 profile 与请求投递 ====================
@@ -307,7 +315,7 @@ func stripGrokCLIIdentityHeaders(header http.Header) {
 	for _, key := range []string{
 		"x-grok-client-version", "x-grok-client-identifier", "x-grok-client-mode",
 		"x-xai-token-auth", "x-authenticateresponse", "x-compaction-at",
-		"x-grok-agent-id", "x-grok-session-id", "x-grok-conv-id", "x-grok-req-id",
+		"x-grok-agent-id", "x-grok-session-id", "x-grok-conv-id", "x-grok-conv-group-id", "x-grok-req-id",
 		"x-grok-turn-idx", "x-grok-model-override", "x-userid", "x-grok-user-id",
 		"x-grok-doom-loop-check", "x-compactions-remaining",
 	} {
@@ -574,6 +582,11 @@ func (h *Handler) forwardGrokImagesRequest(c *gin.Context, inboundEndpoint, imag
 				SendAPIKeyLimitError(c, http.StatusTooManyRequests, msg)
 				return
 			}
+			if h.accountPoolConcurrencySaturated(apiKeyID, retryExclusions.ForSelection(), h.grokMediaDispatchFilter(c, imageModel, identity), auth.DispatchPolicyStandard) {
+				setConcurrencySaturatedRetryAfter(c)
+				c.JSON(http.StatusServiceUnavailable, concurrencySaturatedError())
+				return
+			}
 			c.JSON(http.StatusServiceUnavailable, noAvailableAccountError(""))
 			return
 		}
@@ -731,6 +744,11 @@ func (h *Handler) forwardGrokImagesRequest(c *gin.Context, inboundEndpoint, imag
 	}
 	if lastStatusCode > 0 && len(lastBody) > 0 {
 		h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
+		return
+	}
+	if h.accountPoolConcurrencySaturated(apiKeyID, retryExclusions.ForSelection(), h.grokMediaDispatchFilter(c, imageModel, identity), auth.DispatchPolicyStandard) {
+		setConcurrencySaturatedRetryAfter(c)
+		c.JSON(http.StatusServiceUnavailable, concurrencySaturatedError())
 		return
 	}
 	c.JSON(http.StatusServiceUnavailable, noAvailableAccountError(""))
@@ -942,6 +960,11 @@ func (h *Handler) grokVideoCreate(c *gin.Context, operation string) {
 				SendAPIKeyLimitError(c, http.StatusTooManyRequests, msg)
 				return
 			}
+			if h.accountPoolConcurrencySaturated(apiKeyID, retryExclusions.ForSelection(), h.grokMediaDispatchFilter(c, model, identity), auth.DispatchPolicyStandard) {
+				setConcurrencySaturatedRetryAfter(c)
+				c.JSON(http.StatusServiceUnavailable, concurrencySaturatedError())
+				return
+			}
 			c.JSON(http.StatusServiceUnavailable, noAvailableAccountError(""))
 			return
 		}
@@ -1103,6 +1126,11 @@ func (h *Handler) grokVideoCreate(c *gin.Context, operation string) {
 	}
 	if lastStatusCode > 0 && len(lastBody) > 0 {
 		h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
+		return
+	}
+	if h.accountPoolConcurrencySaturated(apiKeyID, retryExclusions.ForSelection(), h.grokMediaDispatchFilter(c, model, identity), auth.DispatchPolicyStandard) {
+		setConcurrencySaturatedRetryAfter(c)
+		c.JSON(http.StatusServiceUnavailable, concurrencySaturatedError())
 		return
 	}
 	c.JSON(http.StatusServiceUnavailable, noAvailableAccountError(""))

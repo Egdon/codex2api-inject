@@ -154,7 +154,7 @@ func TestObserveCodexTurnStateFrame(t *testing.T) {
 
 func TestPrepareCodexTurnStateInjectionOffIsNoop(t *testing.T) {
 	turnstate.SetConfig(turnstate.DefaultConfig())
-	account := &auth.Account{DBID: 9, CodexTurnState: "should-not-inject"}
+	account := &auth.Account{DBID: 9}
 	ctx, body, headers := prepareCodexTurnStateInjection(context.Background(), account, []byte(`{"model":"gpt-6-astra"}`), http.Header{"X-Codex-Turn-State": {"client"}}, true)
 	if CodexTurnStateInjectionFromContext(ctx) != "" {
 		t.Fatal("inject switch off must not inject")
@@ -183,7 +183,7 @@ func TestPrepareCodexTurnStateInjectionHarvestCacheByModel(t *testing.T) {
 		AccountID: 11, Model: "gpt-5.6-sol", Token: "sol-expired",
 		IssuedUnix: now - 4000, Length: 292, Blocks: 10,
 	})
-	account := &auth.Account{DBID: 11, CodexTurnState: "credential-fallback"}
+	account := &auth.Account{DBID: 11}
 	_, body, headers := prepareCodexTurnStateInjection(context.Background(), account, []byte(`{"model":"gpt-6-astra"}`), nil, true)
 	if headers.Get("X-Codex-Turn-State") != astra {
 		t.Fatalf("astra harvest ticket not used: %q", headers.Get("X-Codex-Turn-State"))

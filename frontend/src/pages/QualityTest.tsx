@@ -23,7 +23,6 @@ import { useHighlightedHtml } from '../hooks/useHighlighter'
 import { formatQualitySource } from '../lib/qualityTestFormat'
 import { formatBeijingTime } from '../utils/time'
 import Pagination from '../components/Pagination'
-import TurnStateHistory from '../components/TurnStateHistory'
 import './quality-test.css'
 
 function PlanBadge({ plan }: { plan: string }) {
@@ -287,7 +286,7 @@ export default function QualityTest() {
   const presetValue = activePreset ? String(activePreset.id) : activeBuiltin ? `builtin:${activeBuiltin.key}` : 'custom'
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedPane = searchParams.get('view')
-  const pane: 'studio' | 'presets' | 'history' | 'renewals' = requestedPane === 'renewals' ? 'renewals' : requestedPane === 'history' ? 'history' : requestedPane === 'presets' ? 'presets' : 'studio'
+  const pane: 'studio' | 'presets' | 'history' = requestedPane === 'history' ? 'history' : requestedPane === 'presets' ? 'presets' : 'studio'
   const [recordPage, setRecordPage] = useState(1)
   const [recordFilter, setRecordFilter] = useState<QualityTestJobsFilter>({})
   const filterActive = Boolean(recordFilter.plan || recordFilter.model || recordFilter.effort || recordFilter.account_id || recordFilter.preset)
@@ -466,7 +465,7 @@ export default function QualityTest() {
         titleAdornment={<span className="quality-test-tag"><FlaskConical className="size-3.5" /> HTML / SVG</span>}
         actionMeta={<span className="quality-test-capacity"><span className={records.active_jobs.length ? 'is-active' : ''} />{t('qualityTest.capacity', { count: records.active_jobs.length, limit: records.concurrency_limit })}</span>}
         actions={<SegmentedPillGroup value={pane} label={t('qualityTest.title')} onChange={(value) => setSearchParams((previous) => { const next = new URLSearchParams(previous); next.set('view', value); return next })}
-          options={[{ value: 'studio', label: t('qualityTest.studioTab'), icon: <FlaskConical className="size-4" /> }, { value: 'presets', label: t('qualityTest.presetsTab'), icon: <BookmarkPlus className="size-4" /> }, { value: 'history', label: t('qualityTest.recordsTab'), icon: <History className="size-4" /> }, { value: 'renewals', label: t('turnStateHistory.title'), icon: <RefreshCw className="size-4" /> }]} />} />
+          options={[{ value: 'studio', label: t('qualityTest.studioTab'), icon: <FlaskConical className="size-4" /> }, { value: 'presets', label: t('qualityTest.presetsTab'), icon: <BookmarkPlus className="size-4" /> }, { value: 'history', label: t('qualityTest.recordsTab'), icon: <History className="size-4" /> }]} />} />
       {records.error || detail.error ? <div role="alert" className="quality-test-error">{records.error || detail.error}<Button size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>{t('common.retry')}</Button></div> : null}
       {records.active_jobs.length > 0 ? <section className="quality-test-active" aria-label={t('qualityTest.activeTasks')}>
         <div className="quality-test-active-heading"><span><RefreshCw className="size-3.5 animate-spin" />{t('qualityTest.activeTasks')}</span><p>{t('qualityTest.backgroundHint')}</p></div>
@@ -476,7 +475,7 @@ export default function QualityTest() {
           <span className="quality-test-active-meta">#{job.id} · {t(`qualityTest.status.${job.status}`)}<span>{formatTime(job.duration_ms)}<ArrowUpRight className="size-3.5" /></span></span>
         </Button>)}</div>
       </section> : null}
-      {pane === 'renewals' ? <TurnStateHistory /> : pane === 'presets' ? <section className="quality-test-records quality-test-presets" aria-labelledby="quality-presets-title">
+      {pane === 'presets' ? <section className="quality-test-records quality-test-presets" aria-labelledby="quality-presets-title">
         <div className="quality-test-records-heading">
           <div><h3 id="quality-presets-title">{t('qualityTest.presets.title')}</h3><p>{t('qualityTest.presets.hint')}</p></div>
           <div className="quality-test-records-tools">{presets.length > 0 ? <span className="quality-test-records-count">{presets.length}</span> : null}<Button size="sm" onClick={() => setPresetDraft({ name: '', prompt: '' })}><Plus className="size-3.5" />{t('qualityTest.presets.new')}</Button></div>

@@ -147,6 +147,7 @@ func applyGrokPersistentState(account *Account, state *database.GrokAccountState
 				APIBackend: NormalizeGrokProtocol(item.APIBackend), ExtraHeaders: item.ExtraHeaders,
 				SupportedInAPI: supported, Hidden: item.Hidden, ContextWindow: item.ContextWindow,
 				MaxCompletionTokens: item.MaxOutputTokens, SupportsReasoningEffort: item.SupportsReasoningEffort,
+				ReasoningEffort: item.ReasoningEffort, ReasoningEfforts: NormalizeGrokReasoningMenu(item.ReasoningEfforts),
 				SupportsBackendSearch: item.SupportsBackendSearch, StreamToolCalls: item.StreamToolCalls,
 				FirstSeenAt: item.FirstSeenAt,
 			})

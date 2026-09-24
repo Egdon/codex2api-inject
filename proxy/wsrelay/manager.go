@@ -1223,9 +1223,6 @@ func (m *Manager) createConnection(
 	// (传入的 wsURL 已是 Resin 反代地址);poolKey 仍按第 2 层代理分池,保持既有键不变。
 	proxyURL := effectiveProxyURL(account, proxyOverride)
 	dialProxy := proxy.CodexDialProxyURL(account, proxyURL)
-	if dedicated := proxy.CodexTurnStateRefreshProxy(ctx, account); dedicated != "" {
-		dialProxy = dedicated
-	}
 	if dialProxy != "" {
 		if err := configureWebsocketDialerProxy(dialer, dialProxy); err != nil {
 			return nil, err

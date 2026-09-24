@@ -107,6 +107,36 @@ func IsValidCodexPassthroughMode(value string) bool {
 }
 
 const (
+	OpenAIResponsesTransportHTTP      = "http"
+	OpenAIResponsesTransportWebsocket = "websocket"
+	// OpenAIResponsesUpstreamTransportCredentialKey 存在 OpenAI Responses 中转账号凭据里。
+	// 缺省和 http 保持原有 HTTP POST；websocket 才拨该账号自己的 Responses WebSocket。
+	OpenAIResponsesUpstreamTransportCredentialKey = "responses_upstream_transport"
+)
+
+// NormalizeOpenAIResponsesUpstreamTransport 把传输档位归一成 http 或 websocket。
+// 空值和无法识别的存量值都回落到 http，升级后行为不变。
+func NormalizeOpenAIResponsesUpstreamTransport(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case OpenAIResponsesTransportWebsocket:
+		return OpenAIResponsesTransportWebsocket
+	default:
+		return OpenAIResponsesTransportHTTP
+	}
+}
+
+// IsValidOpenAIResponsesUpstreamTransport 校验管理接口写入的传输档位。
+// 空串按 http 接受，由调用方归一。
+func IsValidOpenAIResponsesUpstreamTransport(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", OpenAIResponsesTransportHTTP, OpenAIResponsesTransportWebsocket:
+		return true
+	default:
+		return false
+	}
+}
+
+const (
 	DefaultTestContent = "hi"
 	// DefaultTestModel 是连通性测试的出厂默认模型;须是当前上游仍在线、free/plus/pro
 	// 三档都可用的模型(gpt-5.4 已于 2026-09 下线)。
@@ -169,6 +199,10 @@ type Account struct {
 	// CodexPassthroughMode 是 OpenAI Responses 中转账号的 Codex 身份透传档位
 	// （off / auto / always），见 codex passthrough 常量定义。
 	CodexPassthroughMode string
+	// ResponsesUpstreamTransport 是 OpenAI Responses 中转账号的上游传输
+	// （http / websocket）。空值和 http 都走 HTTP；websocket 只在该账号上拨
+	// Responses WebSocket，与全局 codex_force_websocket 无关。
+	ResponsesUpstreamTransport string
 	// CodexFingerprintMode 见 codex_fingerprint_mode.go：Codex 官方出站请求的
 	// 设备指纹收敛档位（off / device / session / full），默认 off。
 	CodexFingerprintMode string
@@ -176,13 +210,6 @@ type Account struct {
 	// 改写请求体 environment_context 里的时区与日期（见 proxy/codex_environment_context.go）；
 	// 空 = 不绑定、透传下游值。Claude 账号沿用同一凭据键做身份标签。
 	Timezone string
-	// CodexTurnState* 见 codex_turn_state.go：凭据级 X-Codex-Turn-State 强制注入的值、
-	// 模型名单与设置时刻。空值 = 不注入。
-	CodexTurnStateProxyURL string
-	CodexTurnStateDisabled bool
-	CodexTurnState         string
-	CodexTurnStateModels   string
-	CodexTurnStateSetAt    time.Time
 	// ClaudeFingerprintMode 见 claude_fingerprint_mode.go:Claude Code 出站身份头
 	// 收敛模式(preserve/force;空=跟随全局默认)。
 	ClaudeFingerprintMode string
@@ -661,6 +688,22 @@ func (a *Account) OpenAIResponsesCodexPassthroughMode() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return NormalizeCodexPassthroughMode(a.CodexPassthroughMode)
+}
+
+// OpenAIResponsesUpstreamTransport 返回中转账号的上游传输档位。非此类账号返回空串。
+func (a *Account) OpenAIResponsesUpstreamTransport() string {
+	if a == nil || !a.IsOpenAIResponsesAPI() {
+		return ""
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return NormalizeOpenAIResponsesUpstreamTransport(a.ResponsesUpstreamTransport)
+}
+
+// OpenAIResponsesUsesUpstreamWebsocket 判断该中转账号是否要拨 Responses WebSocket。
+// 只对 OpenAI Responses 中转账号为真，Grok / Antigravity / Claude 恒为假。
+func (a *Account) OpenAIResponsesUsesUpstreamWebsocket() bool {
+	return a.OpenAIResponsesUpstreamTransport() == OpenAIResponsesTransportWebsocket
 }
 
 func (a *Account) OpenAIResponsesCredentials() (baseURL, apiKey string) {
@@ -5506,6 +5549,10 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		claudeAuthKind = InferClaudeAuthKind(row.GetCredential(ClaudeAuthKindCredentialKey), at, rt)
 	}
 	isOpenAIResponsesAccount := strings.EqualFold(strings.TrimSpace(upstreamType), UpstreamOpenAIResponses) && strings.TrimSpace(baseURL) != "" && strings.TrimSpace(apiKey) != ""
+	responsesUpstreamTransport := ""
+	if isOpenAIResponsesAccount {
+		responsesUpstreamTransport = NormalizeOpenAIResponsesUpstreamTransport(row.GetCredential(OpenAIResponsesUpstreamTransportCredentialKey))
+	}
 	isGrokAccount := strings.EqualFold(strings.TrimSpace(upstreamType), UpstreamGrok) && (strings.TrimSpace(apiKey) != "" || rt != "" || at != "")
 	isAntigravityAccount := strings.EqualFold(strings.TrimSpace(upstreamType), UpstreamAntigravity) && (strings.TrimSpace(apiKey) != "" || rt != "" || at != "")
 	// Agent Identity：无 AT/RT，凭 agent_private_key 动态签名，不能被下面的空凭据 guard 拒绝。
@@ -5536,13 +5583,9 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		ModelMapping:                 modelMapping,
 		CodexClientMetadataMode:      codexClientMetadataMode,
 		CodexPassthroughMode:         codexPassthroughMode,
+		ResponsesUpstreamTransport:   responsesUpstreamTransport,
 		CodexFingerprintMode:         codexFingerprintMode,
 		Timezone:                     accountTimezone,
-		CodexTurnStateProxyURL:       strings.TrimSpace(row.GetCredential(CodexTurnStateProxyURLCredentialKey)),
-		CodexTurnStateDisabled:       row.GetCredentialBool(CodexTurnStateDisabledCredentialKey),
-		CodexTurnState:               strings.TrimSpace(row.GetCredential(CodexTurnStateCredentialKey)),
-		CodexTurnStateModels:         NormalizeCodexTurnStateModels(row.GetCredential(CodexTurnStateModelsCredentialKey)),
-		CodexTurnStateSetAt:          ParseCodexTurnStateSetAt(row.GetCredential(CodexTurnStateSetAtCredentialKey)),
 		ClaudeFingerprintMode:        claudeFingerprintMode,
 		ClaudeAuthKind:               claudeAuthKind,
 		ClaudeBaseURL:                row.GetCredential(ClaudeBaseURLCredentialKey),
@@ -5892,6 +5935,7 @@ func openAIResponsesRuntimeConfigDiffers(acc *Account, row *database.AccountRow)
 		!stringSliceEqual(acc.Models, normalizeModelList(row.GetCredentialStringSlice("models"))) ||
 		strings.TrimSpace(acc.ModelMapping) != strings.TrimSpace(row.GetCredential("model_mapping")) ||
 		NormalizeCodexClientMetadataMode(acc.CodexClientMetadataMode) != NormalizeCodexClientMetadataMode(row.GetCredential("codex_client_metadata_mode")) ||
+		NormalizeOpenAIResponsesUpstreamTransport(acc.ResponsesUpstreamTransport) != NormalizeOpenAIResponsesUpstreamTransport(row.GetCredential(OpenAIResponsesUpstreamTransportCredentialKey)) ||
 		strings.TrimSpace(acc.ProxyURL) != strings.TrimSpace(row.ProxyURL) ||
 		!stringMapEqual(acc.CustomHeaders, row.GetCredentialStringMap("custom_headers"))
 }
@@ -5971,7 +6015,6 @@ func (s *Store) reconcileDispatchState(ctx context.Context) (bool, error) {
 			allowedAPIKeyIDs := normalizeAllowedAPIKeyIDs(row.GetCredentialInt64Slice("allowed_api_key_ids"))
 			acc.mu.Lock()
 			acc.UpstreamRequestIDHeader = row.GetCredential(UpstreamRequestIDHeaderCredentialKey)
-			acc.setCodexTurnStateFromRowLocked(row)
 			accountMetadataChanged := !int64SliceEqual(normalizeAllowedGroupIDs(acc.GroupIDs), groupIDs) ||
 				!int64SliceEqual(normalizeAllowedAPIKeyIDs(acc.AllowedAPIKeyIDs), allowedAPIKeyIDs)
 			if accountMetadataChanged {
@@ -7614,6 +7657,55 @@ func (s *Store) UsageLimitedCandidateSummary(apiKeyID int64, exclude map[int64]b
 	} else {
 		summary.RetryAfter = 0
 	}
+	return summary
+}
+
+// CapacitySaturatedCandidateSummary reports a pool that still has matching
+// accounts, but every one of them is already at its concurrency limit.
+// Disabled, cooling, filtered-out and zero-limit accounts are ignored, so a
+// genuinely empty pool stays a no-available-account failure.
+type CapacitySaturatedCandidateSummary struct {
+	Found bool
+}
+
+func (s *Store) CapacitySaturatedCandidateSummary(apiKeyID int64, exclude map[int64]bool, filter AccountFilter, policy DispatchPolicy) CapacitySaturatedCandidateSummary {
+	var summary CapacitySaturatedCandidateSummary
+	if s == nil {
+		return summary
+	}
+	filter = s.withUsableEgressFilter(filter)
+	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+	saturated := 0
+	for _, acc := range s.accountSnapshotAccounts() {
+		if acc == nil || (exclude != nil && exclude[acc.DBID]) {
+			continue
+		}
+		if !acc.dispatchableForPolicy(policy) {
+			continue
+		}
+		if policy == DispatchPolicyStandard && s.GetLazyMode() && !s.accountLazySelectable(acc) {
+			continue
+		}
+		if s.accountHasBlockingCachedCooldown(acc, policy) {
+			continue
+		}
+		if !s.accountAllowedForAPIKey(acc, apiKeyID) {
+			continue
+		}
+		if filter != nil && !filter(acc) {
+			continue
+		}
+		_, _, _, limit := acc.schedulerSnapshotForPolicy(maxConcurrency, policy)
+		if limit <= 0 {
+			continue
+		}
+		// A free slot means selection failed for some other reason.
+		if accountOccupiedRequests(acc) < limit {
+			return summary
+		}
+		saturated++
+	}
+	summary.Found = saturated > 0
 	return summary
 }
 
@@ -9640,6 +9732,9 @@ func (s *Store) applyOpenAIResponsesConfig(ctx context.Context, row *database.Ac
 	acc.ModelMapping = strings.TrimSpace(modelMapping)
 	acc.CodexClientMetadataMode = NormalizeCodexClientMetadataMode(codexClientMetadataMode)
 	acc.CodexPassthroughMode = NormalizeCodexPassthroughMode(codexPassthroughMode)
+	if loadedPersistedConfig {
+		acc.ResponsesUpstreamTransport = NormalizeOpenAIResponsesUpstreamTransport(row.GetCredential(OpenAIResponsesUpstreamTransportCredentialKey))
+	}
 	acc.ProxyURL = strings.TrimSpace(proxyURL)
 	acc.Email = acc.BaseURL
 	acc.PlanType = "api"

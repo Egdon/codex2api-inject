@@ -416,6 +416,10 @@ func waitForContinuousPoolRetry(ctx context.Context) bool {
 	}
 }
 
+// dispatchAccountWaitTimeout is one queue admission. Tests shorten it so a
+// saturated pool can fail without sleeping the production interval.
+var dispatchAccountWaitTimeout = 30 * time.Second
+
 // waitForRetryAccountAvailable keeps one queue admission for the normal
 // 30-second wait, including continuous-retry SSE/WebSocket heartbeats.
 func (h *Handler) waitForRetryAccountAvailable(ctx context.Context, affinityKey string, apiKeyID int64, exclude map[int64]bool, filter auth.AccountFilter, preserveBinding bool, policy auth.DispatchPolicy) (*auth.Account, string, error) {
@@ -445,7 +449,7 @@ func (h *Handler) waitForRetryAccountAvailableWithGuard(ctx context.Context, aff
 			return step, nil
 		}
 	}
-	account, proxyURL, guard, err := h.store.WaitForDispatchAvailable(ctx, affinityKey, 30*time.Second, apiKeyID, exclude, filter, preserveBinding, policy, heartbeat)
+	account, proxyURL, guard, err := h.store.WaitForDispatchAvailable(ctx, affinityKey, dispatchAccountWaitTimeout, apiKeyID, exclude, filter, preserveBinding, policy, heartbeat)
 	account, proxyURL = guardRetryAccountContext(ctx, h.store.Release, account, proxyURL)
 	if account == nil {
 		guard = auth.SessionAffinityGuard{}

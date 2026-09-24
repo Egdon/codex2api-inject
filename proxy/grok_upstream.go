@@ -118,6 +118,15 @@ func resolveGrokConversationID(headers http.Header, body []byte) string {
 	return uuid.New().String()
 }
 
+// grokConversationGroupNamespace 对应 xai-grok-shell 的 CONVERSATION_GROUP_NAMESPACE。
+const grokConversationGroupNamespace = "xai:grok-build:conversation-group:"
+
+// grokConversationGroupID 复现 grok-build derive_conversation_group_id：
+// UUIDv5(NAMESPACE_OID, "xai:grok-build:conversation-group:" + root_session_id)。
+func grokConversationGroupID(rootSessionID string) string {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(grokConversationGroupNamespace+rootSessionID)).String()
+}
+
 func grokDownstreamAPIKey(headers http.Header) string {
 	if headers == nil {
 		return ""
@@ -178,6 +187,9 @@ func applyGrokRequestHeaders(req *http.Request, account *auth.Account, bearer st
 	sessionID := resolveGrokConversationID(downstreamHeaders, inboundBody)
 	req.Header.Set("x-grok-session-id", sessionID)
 	req.Header.Set("x-grok-conv-id", sessionID)
+	// grok-build 用根会话派生 conv-group，把主对话和子代理归到同一组。
+	// 只在已经发出 conv-id 时附带；算法与 xai-grok-shell derive_conversation_group_id 一致。
+	req.Header.Set("x-grok-conv-group-id", grokConversationGroupID(sessionID))
 	req.Header.Set("x-grok-req-id", grokRandomHexID())
 
 	if userID := account.GrokUserID(); userID != "" && !isAPIKey {
@@ -219,7 +231,7 @@ func ExecuteGrokRequest(ctx context.Context, account *auth.Account, requestBody 
 	// 反解回 {name, namespace}）、web_search 降级为最小形态、历史项按 Grok 原生契约重建、
 	// Codex 专属字段剥离、思考强度钳制，顺带算出轮次序号与模型名。
 	conversationBody := requestBody
-	preflight := prepareGrokUpstreamBody(requestBody)
+	preflight := prepareGrokUpstreamBodyWithCompaction(requestBody, nil, account.GrokReasoningMenu(gjson.GetBytes(requestBody, "model").String()))
 	requestBody = preflight.Body
 	nsAliases := preflight.Aliases
 	logGrokPrefixFingerprint(requestBody, preflight.TurnIndex, preflight.Model)
@@ -397,11 +409,31 @@ func dropGrokToolChoiceWithoutTools(body []byte) []byte {
 }
 
 // mapGrokReasoningEffort 把思考强度映射到当前 Grok 模型支持的档位。
-// grok-4.6 起（grok-4.7 与 grok-4.20-multi-agent 同样）支持 xhigh；更旧的 build 只有 low/medium/high。
-// Codex 的 max 在支持 xhigh 的模型上落到 xhigh，否则落到 high；minimal 一律落到 low。
-// 无模型上下文时按旧 build 处理，避免 grok-4.5 / grok-3 收到不认的档位。
-func mapGrokReasoningEffort(effort, model string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
+// menu 非空时以该账号 /v1/models 菜单为准：菜单里有的档原样转发，
+// 没有的按 minimal→low、max→xhigh→high 折叠。
+// menu 为空时退回版本启发式：grok-4.6 起（grok-4.7 与 grok-4.20-multi-agent 同样）
+// 支持 xhigh；更旧的 build 只有 low/medium/high。Codex 的 max 在支持 xhigh 的模型上
+// 落到 xhigh，否则落到 high；minimal 一律落到 low。无模型上下文时按旧 build 处理。
+func mapGrokReasoningEffort(effort, model string, menu []string) (string, bool) {
+	requested := strings.ToLower(strings.TrimSpace(effort))
+	if len(menu) > 0 {
+		var folded string
+		switch requested {
+		case "minimal":
+			folded = foldGrokCatalogReasoningEffort(menu, "minimal", "low")
+		case "xhigh":
+			folded = foldGrokCatalogReasoningEffort(menu, "xhigh", "high")
+		case "max":
+			folded = foldGrokCatalogReasoningEffort(menu, "max", "xhigh", "high")
+		default:
+			return effort, false
+		}
+		if strings.TrimSpace(effort) == folded {
+			return effort, false
+		}
+		return folded, true
+	}
+	switch requested {
 	case "xhigh":
 		if grokSupportsXHighReasoningEffort(model) {
 			return effort, false
@@ -417,6 +449,19 @@ func mapGrokReasoningEffort(effort, model string) (string, bool) {
 	default:
 		return effort, false
 	}
+}
+
+// foldGrokCatalogReasoningEffort 返回菜单里第一个存在的候选档。
+// 候选从请求档排到已验证的安全档，一个都没有时用最后一个。
+func foldGrokCatalogReasoningEffort(menu []string, candidates ...string) string {
+	for _, candidate := range candidates {
+		for _, offered := range menu {
+			if strings.EqualFold(strings.TrimSpace(offered), candidate) {
+				return candidate
+			}
+		}
+	}
+	return candidates[len(candidates)-1]
 }
 
 // grokSupportsXHighReasoningEffort 判断模型是否接受 reasoning.effort=xhigh。
@@ -451,14 +496,19 @@ func grokSupportsXHighReasoningEffort(model string) bool {
 
 // clampGrokReasoningEffort 规范化发给 Grok 上游的思考强度：同时覆盖 Responses
 // （reasoning.effort）与 Chat（reasoning_effort）两种形态，避免旧 Grok 不认的档位报错。
+// 没有目录菜单时使用版本启发式。
 func clampGrokReasoningEffort(body []byte) []byte {
+	return clampGrokReasoningEffortWithMenu(body, nil)
+}
+
+func clampGrokReasoningEffortWithMenu(body []byte, menu []string) []byte {
 	model := gjson.GetBytes(body, "model").String()
 	for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
 		v := gjson.GetBytes(body, path)
 		if !v.Exists() {
 			continue
 		}
-		mapped, changed := mapGrokReasoningEffort(v.String(), model)
+		mapped, changed := mapGrokReasoningEffort(v.String(), model, menu)
 		if !changed {
 			continue
 		}

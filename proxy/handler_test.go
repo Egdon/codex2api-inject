@@ -2269,6 +2269,54 @@ func assertNoAvailableAccountResponse(t *testing.T, body []byte) {
 	}
 }
 
+func TestConcurrencySaturatedPoolReturnsDistinctError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalWait := dispatchAccountWaitTimeout
+	dispatchAccountWaitTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { dispatchAccountWaitTimeout = originalWait })
+
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 1, TestModel: "gpt-5.5"})
+	account := &auth.Account{DBID: 1, AccessToken: "at-1", PlanType: "plus", AccountID: "acct-1", Status: auth.StatusReady}
+	store.AddAccount(account)
+	atomic.StoreInt64(&account.ActiveRequests, 1)
+	atomic.StoreInt64(&account.OccupiedRequests, 1)
+	handler := NewHandler(store, nil, nil, nil)
+
+	tests := []struct {
+		name    string
+		path    string
+		body    string
+		handler gin.HandlerFunc
+	}{
+		{name: "responses", path: "/v1/responses", body: `{"model":"gpt-5.5","input":"hello"}`, handler: handler.Responses},
+		{name: "chat", path: "/v1/chat/completions", body: `{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}]}`, handler: handler.ChatCompletions},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			req.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(recorder)
+			ginCtx.Request = req
+
+			test.handler(ginCtx)
+
+			if recorder.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503; body=%s", recorder.Code, recorder.Body.String())
+			}
+			if code := gjson.Get(recorder.Body.String(), "error.code").String(); code != ErrorCodeAccountPoolConcurrencySaturated {
+				t.Fatalf("code = %q, want %q; body=%s", code, ErrorCodeAccountPoolConcurrencySaturated, recorder.Body.String())
+			}
+			if message := gjson.Get(recorder.Body.String(), "error.message").String(); !strings.Contains(message, "并发窗口已满") {
+				t.Fatalf("message = %q, want concurrency window text", message)
+			}
+			if retryAfter := recorder.Header().Get("Retry-After"); retryAfter != "1" {
+				t.Fatalf("Retry-After = %q, want 1", retryAfter)
+			}
+		})
+	}
+}
+
 func TestUsageLogErrorMessageExtractsStructuredError(t *testing.T) {
 	body := []byte(`{"error":{"code":"rate_limit_exceeded","type":"server_error","message":"Too many requests"}}`)
 

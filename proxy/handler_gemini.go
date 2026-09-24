@@ -403,6 +403,11 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 				SendAPIKeyLimitError(c, http.StatusTooManyRequests, msg)
 				return
 			}
+			if h.accountPoolConcurrencySaturated(apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy) {
+				setConcurrencySaturatedRetryAfter(c)
+				c.JSON(http.StatusServiceUnavailable, concurrencySaturatedError())
+				return
+			}
 			c.JSON(http.StatusServiceUnavailable, noAvailableAccountError(model))
 			return
 		}

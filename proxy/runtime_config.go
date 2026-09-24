@@ -17,10 +17,6 @@ const (
 	ClientCompatModeAuto     = "auto"
 	ClientCompatModeForce    = "force"
 
-	CodexTurnStateAccountModePersonal = "personal"
-	CodexTurnStateAccountModeTeam     = "team"
-	CodexTurnStateAccountModeAuto     = "auto"
-
 	StreamFlushPolicyImmediate = "immediate"
 	StreamFlushPolicyCoalesce  = "coalesce"
 
@@ -74,10 +70,6 @@ type RuntimeSettings struct {
 	CodexMinCLIVersion    string
 	CodexUserAgentConfig  string
 	CodexTelemetryEnabled bool
-	// CodexTurnStateTemplateCache enables X-Codex-Turn-State Fernet template cache (experimental, default false).
-	CodexTurnStateTemplateCache bool
-	// CodexTurnStateAccountMode selects personal|team|auto length/block policy (default auto).
-	CodexTurnStateAccountMode string
 	// CodexTelemetryTimingDebug 打开模拟遥测的临时计时探针（仅打日志，默认关闭）。
 	CodexTelemetryTimingDebug bool
 	// CodexImagesMainModel 为空时沿用环境变量或内置生图文本驱动模型。
@@ -186,8 +178,6 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		CodexMinCLIVersion:               defaultCodexMinCLIVersion,
 		CodexUserAgentConfig:             DefaultCodexUserAgentConfigJSON(),
 		CodexTelemetryEnabled:            false,
-		CodexTurnStateTemplateCache:      false,
-		CodexTurnStateAccountMode:        CodexTurnStateAccountModeAuto,
 		CodexTelemetryTimingDebug:        false,
 		StreamFlushPolicy:                defaultStreamFlushPolicy,
 		StreamFlushIntervalMS:            defaultStreamFlushIntervalMS,
@@ -246,20 +236,6 @@ func NormalizeClientCompatMode(mode string) string {
 	}
 }
 
-// NormalizeCodexTurnStateAccountMode returns personal|team|auto (default auto).
-func NormalizeCodexTurnStateAccountMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case CodexTurnStateAccountModePersonal:
-		return CodexTurnStateAccountModePersonal
-	case CodexTurnStateAccountModeTeam:
-		return CodexTurnStateAccountModeTeam
-	case "", CodexTurnStateAccountModeAuto:
-		return CodexTurnStateAccountModeAuto
-	default:
-		return CodexTurnStateAccountModeAuto
-	}
-}
-
 func NormalizeStreamFlushPolicy(policy string) string {
 	switch strings.ToLower(strings.TrimSpace(policy)) {
 	case "", StreamFlushPolicyImmediate:
@@ -291,7 +267,6 @@ func NormalizeBillingTierPolicy(policy string) string {
 func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	defaults := DefaultRuntimeSettings()
 	settings.ClientCompatMode = NormalizeClientCompatMode(settings.ClientCompatMode)
-	settings.CodexTurnStateAccountMode = NormalizeCodexTurnStateAccountMode(settings.CodexTurnStateAccountMode)
 	settings.StreamFlushPolicy = NormalizeStreamFlushPolicy(settings.StreamFlushPolicy)
 	settings.FirstTokenMode = NormalizeFirstTokenMode(settings.FirstTokenMode)
 	settings.BillingTierPolicy = NormalizeBillingTierPolicy(settings.BillingTierPolicy)
@@ -369,8 +344,6 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.CodexMinCLIVersion = settings.CodexMinCLIVersion
 		next.CodexUserAgentConfig = settings.CodexUserAgentConfig
 		next.CodexTelemetryEnabled = settings.CodexTelemetryEnabled
-		next.CodexTurnStateTemplateCache = settings.CodexTurnStateTemplateCacheEnabled
-		next.CodexTurnStateAccountMode = settings.CodexTurnStateAccountMode
 		next.CodexTelemetryTimingDebug = settings.CodexTelemetryTimingDebug
 		next.CodexImagesMainModel = settings.CodexImagesMainModel
 		next.StreamFlushPolicy = settings.StreamFlushPolicy

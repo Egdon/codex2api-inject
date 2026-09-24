@@ -231,7 +231,6 @@ func (h *Handler) logConnectionTestUsage(c *gin.Context, account *auth.Account, 
 		}
 		proxy.PopulateUpstreamTrace(c, input)
 	}
-	proxy.PopulateCodexTurnStateProbeUsage(c, input)
 	_ = h.db.InsertUsageLog(context.Background(), input)
 }
 

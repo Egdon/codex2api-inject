@@ -493,6 +493,9 @@ func (h *Handler) refreshGrokChannelModels(ctx context.Context, emit modelRefres
 			if syncResult.capabilityGeneration > 0 {
 				h.triggerGrokCapabilityProbeForGeneration(id, syncResult.capabilityGeneration)
 			}
+			if modelErr := syncResult.Errors["models"]; modelErr != "" {
+				return len(syncResult.Models), nil, fmt.Errorf("模型目录刷新失败: %s", modelErr)
+			}
 			return len(syncResult.Models), nil, nil
 		})
 	result.Added = newlyAddedModels(before, grokModels())

@@ -28,6 +28,8 @@ type GrokUpstreamRoute struct {
 	Endpoint     string
 	ExtraHeaders http.Header
 	Native       bool
+	// ReasoningMenu 是该账号目录为本次模型公布的档位。nil 表示沿用版本启发式。
+	ReasoningMenu []string
 }
 
 const grokNativeRouteHeader = "X-Codex2api-Grok-Native-Route"
@@ -91,6 +93,7 @@ func ResolveGrokUpstreamRoute(account *auth.Account, model string, inbound GrokP
 		resolved.ExtraHeaders = routeHeaders(route.ExtraHeaders)
 		resolved.Native = route.Native
 	}
+	resolved.ReasoningMenu = account.GrokReasoningMenu(resolved.Model)
 	resolved.Endpoint = auth.OpenAIResponsesEndpoint(resolved.BaseURL, grokProtocolSuffix(resolved.Protocol))
 	return resolved
 }
@@ -1776,7 +1779,7 @@ func prepareRoutedGrokProtocolRequestWithCompaction(route GrokUpstreamRoute, inb
 		return grokPreflightResult{}, fmt.Errorf("Grok compaction requires a Responses upstream; %s cannot carry its state or trigger", route.Protocol)
 	}
 	prepareResponses := func(body []byte) grokPreflightResult {
-		result := prepareGrokUpstreamBodyWithCompaction(body, preservedCompaction)
+		result := prepareGrokUpstreamBodyWithCompaction(body, preservedCompaction, route.ReasoningMenu)
 		// Same-protocol Grok uses the original input, which bypasses the Codex
 		// normalizer. Keep the trigger final after every Grok preflight rewrite.
 		if requestBodyHasCompactionTrigger(result.Body) {
@@ -1831,7 +1834,7 @@ func prepareRoutedGrokProtocolRequestWithCompaction(route GrokUpstreamRoute, inb
 		if route.Protocol == GrokProtocolResponses {
 			return prepareResponses(body), nil
 		}
-		return grokPreflightResult{Body: clampGrokReasoningEffort(body), TurnIndex: 1, Model: gjson.GetBytes(body, "model").String()}, nil
+		return grokPreflightResult{Body: clampGrokReasoningEffortWithMenu(body, route.ReasoningMenu), TurnIndex: 1, Model: gjson.GetBytes(body, "model").String()}, nil
 	}
 
 	canonical, err := canonicalGrokResponsesBody(inbound, inboundBody, responsesBody)
@@ -1847,7 +1850,7 @@ func prepareRoutedGrokProtocolRequestWithCompaction(route GrokUpstreamRoute, inb
 		return grokPreflightResult{}, err
 	}
 	if route.Protocol != GrokProtocolResponses {
-		converted = clampGrokReasoningEffort(converted)
+		converted = clampGrokReasoningEffortWithMenu(converted, route.ReasoningMenu)
 	}
 	preflight.Body = converted
 	return preflight, nil

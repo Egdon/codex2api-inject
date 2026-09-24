@@ -146,7 +146,7 @@ func CodexTurnStateAffinityKeyFromContext(ctx context.Context) string {
 
 // GuardCodexTurnStateEcho strips client-echoed turn-state known to have been
 // minted by a different account for this session. Safe no-op when affinityKey
-// is empty or provenance is missing. Call before ApplyCodexTurnStateTemplate.
+// is empty or provenance is missing.
 func GuardCodexTurnStateEcho(affinityKey string, account *auth.Account, headers http.Header) {
 	guardCodexTurnStateEcho(affinityKey, account, headers)
 }

@@ -10,6 +10,7 @@ import { buildVersionLabel } from '../lib/buildVersion'
 import { useTheme } from '../hooks/useTheme'
 import SystemUpdateModal from './SystemUpdateModal'
 import SecurityBanner from './SecurityBanner'
+import GrokImportProgressHost from './GrokImportProgressHost'
 import { cn } from '@/lib/utils'
 import { CinematicThemeSwitcher } from '@/components/ui/cinematic-theme-switcher'
 
@@ -211,6 +212,7 @@ export default function Layout({ children }: PropsWithChildren) {
 
   return (
     <div className="relative min-h-dvh">
+      <GrokImportProgressHost />
       {backgroundImage ? (
         <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
           {isBackgroundVideo ? (

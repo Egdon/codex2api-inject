@@ -13,7 +13,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// 凭据级 X-Codex-Turn-State 强制注入（配置见 auth/codex_turn_state.go）。
+// 凭据级 X-Codex-Turn-State 强制注入（开关见 turnstate.GetConfig().InjectEnabled）。
 //
 // 注入发生在 ExecuteRequest 内部、传输方式与模型定稿之后：HTTP 路径写在账号自定义头
 // 之后（自定义头不该顶掉运维显式配的注入值），WebSocket 路径同时写握手头与
@@ -185,20 +185,13 @@ func codexTurnStateFromFrame(payload []byte) string {
 }
 
 // ObserveCodexTurnStateFrame 供 WS 中继在逐帧转发时调用：发现上游回带的 turn state
-// 就记到本次尝试的追踪里（用量日志据此显示"回带 Turn State"）。
-// 只有上游专用 metadata 事件可作为模板来源；response.created/completed
-// 可能回显客户端 metadata，不能将这种回显当成上游新铸造的模板。
+// 就记到本次尝试的追踪里（用量日志据此显示“回带 Turn State”）。
 func ObserveCodexTurnStateFrame(ctx context.Context, payload []byte) string {
 	state := codexTurnStateFromFrame(payload)
 	if state != "" {
 		noteUpstreamTurnState(ctx, state)
 	}
-	switch gjson.GetBytes(payload, "type").String() {
-	case "codex.response.metadata", "response.metadata":
-		return state
-	default:
-		return ""
-	}
+	return state
 }
 
 func firstNonEmptyModel(models ...string) string {

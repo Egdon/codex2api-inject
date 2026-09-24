@@ -146,8 +146,10 @@ export type AccountStatus = 'active' | 'ready' | 'cooldown' | 'error' | 'refresh
 export type CodexClientMetadataMode = 'auto' | 'always' | 'off'
 /** OpenAI Responses 中转账号的 Codex 身份透传档位，默认 off（不透传）。 */
 export type CodexPassthroughMode = 'off' | 'auto' | 'always'
+/** OpenAI Responses 中转账号的上游传输，默认 http。 */
+export type ResponsesUpstreamTransport = 'http' | 'websocket'
 /** Codex 官方出站请求的设备指纹收敛档位，默认 off（不收敛）。 */
-export type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+export type CodexFingerprintMode = 'off' | 'device' | 'session' | 'single_machine_multi_window' | 'full'
 export type ModelCooldownMode = 'off' | 'fixed' | 'adaptive'
 
 export type ResponseCacheWritePolicy = 'always' | 'on_demand'
@@ -301,6 +303,9 @@ export interface AccountRow {
   /** Safe, allowlisted User-Agent observed/generated for Claude upstream calls. */
   claude_user_agent?: string
   grok_plan?: GrokPlanInfo
+  grok_plan_display?: { plan: string; source: string; status: "fresh" | "stale" | "unknown"; observed_at?: string; expires_at?: string }
+  /** Upstream directory, separate from the editable models whitelist. */
+  grok_models?: { models: string[]; status: "fresh" | "stale" | "unknown"; updated_at?: string }
   grok_billing?: GrokBillingDetail
   // 上游逐请求返回的配额余量(x-ratelimit-* 头),运行时快照
   grok_rate_limit?: GrokRateLimitSnapshot
@@ -320,6 +325,7 @@ export interface AccountRow {
   model_mapping?: string
   codex_client_metadata_mode?: CodexClientMetadataMode
   codex_passthrough_mode?: CodexPassthroughMode
+  responses_upstream_transport?: ResponsesUpstreamTransport
   codex_fingerprint_mode?: CodexFingerprintMode
   claude_fingerprint_mode?: 'preserve' | 'force' | ''
   claude_client_platform?: 'any' | 'claude_code_cli_only'
@@ -335,15 +341,6 @@ export interface AccountRow {
   claude_usage_windows_probed?: boolean
   timezone?: string
   custom_headers?: Record<string, string> | null
-  codex_turn_state_status?: CodexTurnStateStatus
-  codex_turn_state_proxy_url?: string
-  codex_turn_state_disabled?: boolean
-  /** Forced X-Codex-Turn-State injected on every outbound Codex request; empty = off. */
-  codex_turn_state?: string
-  /** Comma-separated model scope for the injection; empty = all models. */
-  codex_turn_state_models?: string
-  /** RFC3339 timestamp of the last time the injected value changed; absent = unknown. */
-  codex_turn_state_set_at?: string
   health_tier?: string
   scheduler_score?: number
   dispatch_score?: number
@@ -527,28 +524,8 @@ export interface AccountPageStatsResponse {
   stats: Record<string, AccountPageStatsItem>
 }
 
-export type CodexTurnStatePhase = 'unknown' | 'ready' | 'healthy' | 'recovering' | 'degraded'
-
-export interface CodexTurnStateStatus {
-  injection_enabled?: boolean
-  state: CodexTurnStatePhase
-  mode: 'personal' | 'team'
-  template_length: number
-  replace_length: number
-  models: {
-    model: string
-    state: CodexTurnStatePhase
-    length: number
-    consecutive: number
-    observed_at: string
-    template_cached: boolean
-    template_expires_at?: string
-  }[]
-}
-
 export interface AccountLiveStateResponse {
   accounts: Record<string, {
-    codex_turn_state_status?: CodexTurnStateStatus
     active_requests: number
     occupied_requests: number
   }>
@@ -974,6 +951,7 @@ export interface AddOpenAIResponsesAccountRequest {
   model_mapping?: string
   codex_client_metadata_mode?: CodexClientMetadataMode
   codex_passthrough_mode?: CodexPassthroughMode
+  responses_upstream_transport?: ResponsesUpstreamTransport
   proxy_url: string
   custom_headers?: Record<string, string> | null
 }
@@ -987,6 +965,7 @@ export interface UpdateOpenAIResponsesAccountRequest {
   model_mapping?: string
   codex_client_metadata_mode?: CodexClientMetadataMode
   codex_passthrough_mode?: CodexPassthroughMode
+  responses_upstream_transport?: ResponsesUpstreamTransport
   proxy_url: string
   custom_headers?: Record<string, string> | null
 }
@@ -1488,10 +1467,6 @@ export interface UpdateAccountSchedulerRequest {
   claude_version_policy?: 'passthrough' | 'fixed' | 'minimum' | null
   claude_client_version?: string | null
   timezone?: string | null
-  codex_turn_state_proxy_url?: string | null
-  codex_turn_state_disabled?: boolean | null
-  codex_turn_state?: string | null
-  codex_turn_state_models?: string | null
 }
 
 export interface AntigravityBatchRefreshResponse {
@@ -2122,8 +2097,6 @@ export interface SystemSettings {
   scheduler_engine: 'legacy' | 'shadow' | 'indexed'
   codex_force_websocket: boolean
   codex_telemetry_enabled: boolean
-  codex_turn_state_template_cache_enabled: boolean
-  codex_turn_state_account_mode: 'personal' | 'team' | 'auto' 
   codex_telemetry_timing_debug: boolean
   codex_request_compression: boolean
   codex_ws_weak_network_mode: boolean

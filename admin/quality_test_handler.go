@@ -137,9 +137,6 @@ func (h *Handler) qualityTestOptionsForAccount(ctx context.Context, account *aut
 		}
 	}
 	for _, model := range candidates {
-		if !account.IsRelayStyle() && !proxy.CodexTurnStateModelAllowed(account, model) {
-			continue
-		}
 		model = strings.TrimSpace(model)
 		// Effort aliases are proxy routing shortcuts, not upstream model IDs.
 		if strings.EqualFold(model, "codex-auto-review") || !isTextConnectionModel(model) || strings.ContainsAny(model, "()") || slices.Contains(options.Models, model) {

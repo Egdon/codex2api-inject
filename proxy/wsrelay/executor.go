@@ -116,11 +116,6 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 		ctx = context.Background()
 	}
 
-	ctx = proxy.BeginCodexTurnStateTemplateAttempt(ctx)
-	if dedicated := proxy.CodexTurnStateRefreshProxy(ctx, account); dedicated != "" {
-		proxyOverride = dedicated
-	}
-
 	account.Mu().RLock()
 	accessToken := account.AccessToken
 	accountIDStr := account.AccountID
@@ -148,11 +143,9 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	wsURL = egress.URL
 
 	// 准备请求头
-	// Outbound turn-state order (WS handshake): Guard foreign echo → auto
-	// template Apply (if setting on) → manual credential inject last (ops override).
+	// 跨账号回声守卫在握手头装配末尾剥离已知来自其他账号的 turn state。
 	affinityKey := proxy.CodexTurnStateAffinityKeyFromContext(ctx)
 	headers := e.prepareWebsocketHeaders(ctx, accessToken, account, accountIDStr, headerSessionID, apiKey, deviceCfg, ginHeaders, wsBody, affinityKey)
-	// 凭据级 turn state 注入在 Guard/模板 Apply 与账号自定义头之后落定（帧体已由 proxy.ExecuteRequest 写入）。
 	proxy.ApplyCodexTurnStateInjectionHeader(ctx, headers)
 	// 握手头在复用连接上不会重发；每轮必须把最终状态同步到 response.create。
 	if state := headers.Get("X-Codex-Turn-State"); state != "" {
@@ -208,6 +201,9 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// comments above are unchanged.
 	baseKey = reusablePoolBaseKeyWithModel(baseKey, gjson.GetBytes(wsBody, "model").String())
 	if wc == nil {
+		// A pooled handshake must belong to the same mapped conversation/thread.
+		poolSessionID = proxy.ScopeCodexFingerprintTransportKey(poolSessionID, account, ginHeaders)
+		baseKey = proxy.ScopeCodexFingerprintTransportKey(baseKey, account, ginHeaders)
 		if proxy.IsStatelessWebsocketSessionID(sessionID) && baseKey != "" && !statelessOneShotEnabled() {
 			wc, pr, poolSessionID, err2 = e.manager.AcquireReusableConnection(ctx, account, wsURL, baseKey, sessionID, statelessConnectionSlots(), headers, proxyOverride)
 		} else {
@@ -270,17 +266,13 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// 启动心跳
 	e.manager.StartHeartbeat(wc)
 
-	proxy.ConfirmCodexTurnStateTemplate(ctx, headers, account, gjson.GetBytes(wsBody, "model").String())
 	return &WsResponse{
-		turnStateContext: ctx,
-		account:          account,
-		model:            gjson.GetBytes(wsBody, "model").String(),
-		conn:             wc,
-		pendingReq:       pr,
-		sessionID:        poolSessionID,
-		manager:          e.manager,
-		apiKey:           apiKey,
-		readErrChan:      make(chan error, 1),
+		conn:        wc,
+		pendingReq:  pr,
+		sessionID:   poolSessionID,
+		manager:     e.manager,
+		apiKey:      apiKey,
+		readErrChan: make(chan error, 1),
 	}, nil
 }
 
@@ -404,16 +396,12 @@ func (e *Executor) prepareWebsocketHeaders(ctx context.Context, accessToken stri
 			headers.Set(name, value)
 		}
 	}
-	// 帧内回带可作为待替换输入，绝不作为缓存来源。
 	if headers.Get("X-Codex-Turn-State") == "" {
 		if state := strings.TrimSpace(gjson.GetBytes(wsBody, "client_metadata.x-codex-turn-state").String()); state != "" {
 			headers.Set("X-Codex-Turn-State", state)
 		}
 	}
-	// 跨账号回声守卫必须在模板替换/注入之前。
 	proxy.GuardCodexTurnStateEcho(affinityKey, account, headers)
-	// 292 模板替换/注入：在透传+守卫之后、指纹收敛之前。
-	proxy.ApplyCodexTurnStateTemplate(ctx, headers, account, strings.TrimSpace(gjson.GetBytes(wsBody, "model").String()))
 	// 指纹收敛：在透传之后覆盖客户端原值，在账号自定义头之前保留运维覆盖优先级。
 	// 握手头是逐连接冻结的，复用连接沿用建连时的取值；收敛值按账号恒定，正好与
 	// 这一语义相容。off 档为空操作。
@@ -427,9 +415,7 @@ func (e *Executor) prepareWebsocketHeaders(ctx context.Context, accessToken stri
 	// （codex-rs/core/src/client.rs build_websocket_headers）与 HTTP /responses 同形，
 	// 都是 session-id / thread-id / x-client-request-id，也都不发 Conversation_id。
 	// legacy 档下该函数恢复旧的 Session_id + 清 Conversation_id 行为。
-	if sessionID = strings.TrimSpace(sessionID); sessionID != "" {
-		proxy.ApplyCodexSessionHeaders(headers, account, sessionID, ginHeaders, true)
-	}
+	proxy.ApplyCodexSessionHeaders(headers, account, sessionID, ginHeaders, true)
 	for name, value := range account.GetCustomHeaders() {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -460,15 +446,12 @@ func (e *Executor) sendRequest(wc *WsConnection, body []byte, requestID string) 
 
 // WsResponse WebSocket 响应包装器
 type WsResponse struct {
-	turnStateContext context.Context
-	account          *auth.Account
-	model            string
-	conn             *WsConnection
-	pendingReq       *PendingRequest
-	sessionID        string
-	manager          *Manager
-	readErrChan      chan error
-	closed           bool
+	conn        *WsConnection
+	pendingReq  *PendingRequest
+	sessionID   string
+	manager     *Manager
+	readErrChan chan error
+	closed      bool
 	// apiKey 发起本请求的下游 API Key，用于 response_id → 连接绑定的归属校验。
 	apiKey string
 	// connBroken 标记读流因上游 WS 异常(非正常关闭)或下游写入失败而终止；
@@ -844,25 +827,9 @@ func websocketResponseToHTTP(ctx context.Context, wsResp *WsResponse, statusCode
 		defer pw.Close()
 		defer wsResp.Close()
 
-		var turnState string
-		observed := false
-		observe := func() {
-			if !observed && turnState != "" {
-				observed = true
-				proxy.CaptureCodexTurnStateTemplate(wsResp.turnStateContext, wsResp.account, wsResp.model, http.Header{"X-Codex-Turn-State": []string{turnState}})
-			}
-		}
-		defer observe()
 		err := wsResp.ReadStream(func(data []byte) bool {
 			// 上游回带的 turn state 只在帧里（握手头是建连时的旧快照），逐帧观测记进追踪。
-			if state := proxy.ObserveCodexTurnStateFrame(ctx, data); state != "" {
-				turnState = state
-			}
-			// 同一轮可能多次携带 metadata，只按最终形态计一次；终止帧发布前入缓存。
-			switch gjson.GetBytes(data, "type").String() {
-			case "response.completed", "response.failed", "error":
-				observe()
-			}
+			proxy.ObserveCodexTurnStateFrame(ctx, data)
 			// SSE 的 data: 负载以换行为界，含换行的帧（如 pretty-printed JSON）
 			// 必须先压缩成单行，否则下游解析器只能读到第一行。
 			if bytes.IndexByte(data, '\n') >= 0 {
