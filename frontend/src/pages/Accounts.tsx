@@ -2993,6 +2993,12 @@ export default function Accounts() {
   // 用量弹窗里手动刷新官方统计后 bump 一次,强制重拉本页 stats——
   // 否则官方成本胶囊要等翻页/改筛选才出现,看起来像刷新没生效。
   const [pageStatsReloadToken, setPageStatsReloadToken] = useState(0);
+  // 顶部刷新同时要重拉 page-stats。列表和 page-stats 是两条独立请求链,
+  // 账号 ID 不变时仅 reload 列表不会触发 page-stats effect,今日统计就会留在旧快照。
+  const refreshAccountPage = useCallback(async () => {
+    await reload();
+    setPageStatsReloadToken((token) => token + 1);
+  }, [reload]);
   const handleOfficialUsageRefreshed = useCallback(
     (patch?: { accountId: number; officialUsd: number | null }) => {
       if (patch) {
@@ -6364,7 +6370,7 @@ export default function Accounts() {
           <PageHeader
             title={t("accounts.title")}
             description={t("accounts.description")}
-            onRefresh={() => void reload()}
+            onRefresh={() => void refreshAccountPage()}
             hideTitle
             actionsBelow
             autoRefresh={accountAutoRefresh}
