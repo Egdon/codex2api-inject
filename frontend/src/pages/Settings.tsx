@@ -2087,6 +2087,7 @@ export default function Settings() {
     { label: t('accounts.codexFingerprintModeOff'), value: 'off' },
     { label: t('accounts.codexFingerprintModeDevice'), value: 'device' },
     { label: t('accounts.codexFingerprintModeSession'), value: 'session' },
+    { label: t('accounts.codexFingerprintModeSessionIdentity'), value: 'single_machine_multi_window' },
     { label: t('accounts.codexFingerprintModeFull'), value: 'full' },
   ]
   const modelCooldownModeOptions = [
@@ -2123,11 +2124,6 @@ export default function Settings() {
     { label: t('settings.clientCompatAuto'), value: 'auto' },
     { label: t('settings.clientCompatForce'), value: 'force' },
   ]
-  const codexTurnStateAccountModeOptions = [
-    { label: t('settings.codexTurnStateAccountModeAuto'), value: 'auto' },
-    { label: t('settings.codexTurnStateAccountModePersonal'), value: 'personal' },
-    { label: t('settings.codexTurnStateAccountModeTeam'), value: 'team' },
-  ]
   const usageLogModeOptions = [
     { label: t('settings.usageLogFull'), value: 'full' },
     { label: t('settings.usageLogErrors'), value: 'errors' },
@@ -2151,8 +2147,6 @@ export default function Settings() {
       ...cacheNormalized,
       codex_images_main_model: cacheNormalized.codex_images_main_model ?? '',
       codex_telemetry_enabled: cacheNormalized.codex_telemetry_enabled ?? false,
-      codex_turn_state_template_cache_enabled: cacheNormalized.codex_turn_state_template_cache_enabled ?? false,
-      codex_turn_state_account_mode: (cacheNormalized.codex_turn_state_account_mode as SystemSettings['codex_turn_state_account_mode']) || 'auto',
       codex_telemetry_timing_debug: cacheNormalized.codex_telemetry_timing_debug ?? false,
       billing_tier_policy: normalizeBillingTierPolicyValue(cacheNormalized.billing_tier_policy),
       first_token_mode: 'loose',
@@ -2206,8 +2200,6 @@ export default function Settings() {
     auto_activate_5h_window_enabled: false,
     codex_force_websocket: false,
     codex_telemetry_enabled: false,
-    codex_turn_state_template_cache_enabled: false,
-    codex_turn_state_account_mode: 'auto',
     codex_telemetry_timing_debug: false,
     codex_request_compression: true,
     codex_ws_weak_network_mode: false,
@@ -2890,7 +2882,7 @@ export default function Settings() {
       category: id.includes('image') ? 'image' : 'codex',
       source: 'builtin',
       pro_only: id === 'gpt-5.3-codex-spark',
-      api_key_auth_available: !['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra'].includes(id),
+      api_key_auth_available: !['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].includes(id),
     }))
   }, [modelItems, modelList])
   const codexModelOptions = visibleModelItems
@@ -4062,25 +4054,6 @@ export default function Settings() {
                           <span className="font-mono text-xs text-muted-foreground">{syncedCliVersion}</span>
                         )}
                       </div>
-                    </SettingField>
-                    <SettingField
-                      label={t('settings.codexTurnStateTemplateCache')}
-                      description={t('settings.codexTurnStateTemplateCacheDesc')}
-                    >
-                      <Switch
-                        checked={settingsForm.codex_turn_state_template_cache_enabled}
-                        onCheckedChange={(checked) => autoSaveBooleanField('codex_turn_state_template_cache_enabled', checked)}
-                      />
-                    </SettingField>
-                    <SettingField
-                      label={t('settings.codexTurnStateAccountMode')}
-                      description={t('settings.codexTurnStateAccountModeDesc')}
-                    >
-                      <SegmentedPillGroup
-                        value={settingsForm.codex_turn_state_account_mode || 'auto'}
-                        onChange={(value) => autoSaveStringField('codex_turn_state_account_mode', value)}
-                        options={codexTurnStateAccountModeOptions}
-                      />
                     </SettingField>
                     <SettingField
                       label={t('settings.codexTelemetry')}

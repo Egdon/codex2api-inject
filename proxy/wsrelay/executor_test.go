@@ -687,3 +687,27 @@ func TestPrepareWebsocketHeadersGuardsForeignTurnState(t *testing.T) {
 		t.Fatalf("same-account turn-state stripped on WS path: %q", got)
 	}
 }
+
+func TestSingleMachineFingerprintWebsocketBodyAndHeaders(t *testing.T) {
+	t.Setenv("CODEX_SESSION_HEADER_MODE", "native")
+	t.Setenv("CODEX_SESSION_HEADER_ALIGN_CONVERGED", "false")
+	a := &auth.Account{DBID: 42, AccountID: "42", CodexFingerprintMode: auth.CodexFingerprintModeSingleMachineMultiWindow}
+	h := http.Header{}
+	h.Set("Session-Id", "root")
+	h.Set("Thread-Id", "child")
+	h.Set("X-Codex-Turn-Metadata", `{"session_id":"root","thread_id":"child","installation_id":"device","parent_thread_id":"root"}`)
+	body := []byte(`{"prompt_cache_key":"isolated-cache","client_metadata":{"session_id":"root","thread_id":"child"}}`)
+	rewritten := proxy.ApplyCodexFingerprintToBody(body, a, h)
+	e := NewExecutor()
+	out := e.prepareWebsocketHeaders(context.Background(), "token", a, "42", "isolated-cache", "key", nil, h, rewritten, "")
+	session, thread := proxy.ConvergedCodexSessionIdentity(a, h)
+	if out.Get("Session-Id") != session || out.Get("Thread-Id") != thread {
+		t.Fatal("WS identity mismatch", out)
+	}
+	if gjson.GetBytes(rewritten, "client_metadata.session_id").String() != session || gjson.GetBytes(rewritten, "client_metadata.thread_id").String() != thread {
+		t.Fatal("WS body mismatch")
+	}
+	if gjson.GetBytes(rewritten, "prompt_cache_key").String() != "isolated-cache" {
+		t.Fatal("WS cache partition changed")
+	}
+}

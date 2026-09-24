@@ -60,7 +60,7 @@ type ModelPricingOverride struct {
 // 旧覆盖、手工编辑和官方 API 定价同步都不能重新启用 Astra 的长档；
 // 标准价、priority 价及其他模型的覆盖保持原样。
 func NormalizeModelPricingOverride(model string, o ModelPricingOverride) ModelPricingOverride {
-	if CanonicalBillingModelKey(model) != "gpt-6-astra" {
+	if discoveredGPTPricingKey(model) != "" || CanonicalBillingModelKey(model) != "gpt-6-astra" {
 		return o
 	}
 	o.InputLong = 0
@@ -286,6 +286,9 @@ func CanonicalBillingModelKey(model string) string {
 // internal aliases have an independent override and therefore need their own
 // editable row instead of being deduplicated into the canonical model.
 func PricingManagementModelKey(model string) string {
+	if key := discoveredGPTPricingKey(model); key != "" {
+		return key
+	}
 	normalized := normalizeBillingModelName(model)
 	compact := strings.NewReplacer(" ", "-", "_", "-").Replace(normalized)
 	if compact == "codex-auto-review" {
@@ -297,6 +300,9 @@ func PricingManagementModelKey(model string) string {
 // PricingAliasTarget reports the canonical fallback for an independently
 // managed alias. An empty string means the model is already canonical.
 func PricingAliasTarget(model string) string {
+	if discoveredGPTPricingKey(model) != "" {
+		return ""
+	}
 	managed := PricingManagementModelKey(model)
 	canonical := CanonicalBillingModelKey(model)
 	if managed != canonical {

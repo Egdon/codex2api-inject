@@ -328,31 +328,6 @@
     }
   },
   "accounts": {
-    "codexTurnStateProxyLabel": "範本簽發代理（選填）",
-    "codexTurnStateProxyHint": "僅用於「重新取得範本」的取得與驗證請求；留空沿用帳號預設出口。一般對話、測試連線和智力檢測繼續使用原代理。",
-    "codexTurnStateProxyPoolHint": "簽發代理儲存此位址；代理池節點位址變更後，請重新選擇。",
-    "codexTurnStateSwitchLabel": "注入開關",
-    "codexTurnStateFollowGlobal": "跟隨全域（預設）",
-    "codexTurnStateOff": "關閉注入",
-    "codexTurnStateSwitchHint": "跟隨全域模板快取開關啟停自動與手動注入。關閉後保留模板和設定，智力偵測與測試連線仍會讀取各模型回傳的 Turn State。",
-    "turnStateStatus": {
-      "injectionDisabled": "注入已關閉，偵測正常進行",
-      "expires": "模板至 {{time}}",
-      "refreshResult": "已驗證並儲存 {{saved}}/{{total}} 個模型的模板",
-      "refreshFailed": "模板取得失敗",
-      "refreshing": "正在取得並驗證 {{model}}",
-      "refreshHint": "重新取得並驗證模板",
-      "refresh": "重新取得模板",
-      "ready": "待恢復",
-      "healthy": "智力正常",
-      "recovering": "智力恢復中",
-      "degraded": "降智中",
-      "unknown": "待觀察",
-      "noObservations": "尚無近期上游觀測",
-      "observation": "{{model}}：{{state}} · 長度 {{length}}",
-      "cached": "範本已快取",
-      "uncached": "無可用範本"
-    },
     "refreshAllUsage": "一鍵重新整理用量",
     "refreshAllUsageHint": "查詢執行池中所有支援 WHAM 的 Codex 帳號，更新 5 小時和週用量進度條。",
     "batchUsageRefreshing": "正在重新整理用量",
@@ -2013,51 +1988,6 @@
       "5": "週五",
       "6": "週六",
       "7": "週日"
-    }
-  },
-  "turnStateHistory": {
-    "title": "續簽記錄",
-    "hint": "記錄啟用後的每次背景續簽嘗試，保留當時的帳號、代理與結果。不同代理地址可能共用出口 IP；最近檢測 IP 不代表本次請求即時出口。",
-    "filters": "續簽記錄篩選",
-    "record": "記錄",
-    "account": "續簽帳號",
-    "model": "模型",
-    "attempt": "嘗試次數",
-    "proxy": "代理地址",
-    "started": "續簽時間",
-    "status": "狀態",
-    "duration": "總耗時",
-    "expiry": "範本到期時間",
-    "result": "結果說明",
-    "lastIP": "最近檢測 IP",
-    "before": "原到期",
-    "after": "新到期",
-    "inProgress": "正在取得並驗證範本",
-    "allStatuses": "全部狀態",
-    "allProxies": "全部代理",
-    "clear": "清除篩選",
-    "loading": "正在載入續簽記錄",
-    "empty": "暫無續簽記錄",
-    "emptyHint": "帳號範本進入臨期時段後自動記錄；過去未採集的嘗試不會補記為成功或失敗。",
-    "statuses": {
-      "running": "續簽中",
-      "success": "續簽成功",
-      "failed": "續簽失敗",
-      "interrupted": "已中斷"
-    },
-    "routes": {
-      "issuance": "簽發專用代理",
-      "account-default": "帳號預設出口",
-      "pool": "代理池",
-      "resin": "Resin 出口",
-      "direct": "直連"
-    },
-    "reasons": {
-      "renewed": "已驗證並儲存更新的範本",
-      "probe_failed": "取得或驗證請求未成功完成",
-      "no_new_verified_template": "未取得更新且通過驗證的範本",
-      "no_available_proxy_or_route_error": "無可用的新代理或代理資訊讀取失敗",
-      "worker_interrupted": "工作中斷，未確認續簽成功"
     }
   }
 }

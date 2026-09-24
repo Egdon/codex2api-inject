@@ -785,6 +785,13 @@ func (h *Handler) buildAccountListSnapshotItem(row *database.AccountRow, request
 			}
 		}
 	}
+	if isGrok && row.GrokPlanDisplay != nil {
+		item.PlanType = row.GrokPlanDisplay.Plan
+		item.GrokPlanCategory = "other"
+		if resolved, ok := auth.ResolveGrokPlan(item.PlanType); ok {
+			item.GrokPlanCategory = resolved.Key
+		}
+	}
 	if counts := requestCounts[row.ID]; counts != nil {
 		item.RequestCount = counts.SuccessCount + counts.ErrorCount
 	}
@@ -807,6 +814,9 @@ func (h *Handler) buildAccountListSnapshotItem(row *database.AccountRow, request
 	item.GroupSortKey = strings.Join(groupKeys, "\x00")
 	searchParts := []string{row.Name, email, strconv.FormatInt(row.ID, 10), item.EmailDomain}
 	if isGrok {
+		if row.GrokModels != nil {
+			searchParts = append(searchParts, strings.Join(row.GrokModels.Models, " "))
+		}
 		searchParts = append(searchParts,
 			strings.Join(row.GetCredentialStringSlice("models"), " "), row.GetCredential("base_url"),
 			item.PlanType, item.GrokPlanCategory, row.ErrorMessage, row.ProxyURL, strings.Join(groupLabels, " "))

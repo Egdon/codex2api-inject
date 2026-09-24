@@ -113,3 +113,11 @@ test("buildBatchMetadataUpdate binds a trimmed timezone only when enabled", () =
     { ids: [1] },
   );
 });
+
+for (const mode of ['single_machine_multi_window']) {
+  test(`batch fingerprint ${mode} is opt-in`, () => {
+    const base = { ids: [1, 2], updateTags: false, tags: [], updateGroups: false, groupIds: [], updateScoreBias: false, scoreBias: null, updateBaseConcurrency: false, baseConcurrency: null, updateSchedulerPriority: false, schedulerPriority: null, codexFingerprintMode: mode };
+    assert.deepEqual(buildBatchMetadataUpdate({ ...base, updateCodexFingerprintMode: true }), { ids: [1, 2], codex_fingerprint_mode: mode });
+    assert.deepEqual(buildBatchMetadataUpdate({ ...base, updateCodexFingerprintMode: false }), { ids: [1, 2] });
+  });
+}

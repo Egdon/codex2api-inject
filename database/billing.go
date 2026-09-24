@@ -64,6 +64,23 @@ var (
 	defaultModelPricing = &ModelPricing{InputPricePerMToken: 1.0, OutputPricePerMToken: 2.0}
 
 	modelPricingRules = []modelPricingRule{
+		// GPT-6 Sol/Luna 使用官方标准价和超过 272K 的长上下文价，fast 档沿用 2×。
+		{model: "gpt-6-sol", pricing: ModelPricing{
+			InputPricePerMToken:         2.0,
+			OutputPricePerMToken:        10.0,
+			CacheReadPricePerMToken:     0.2,
+			LongInputPricePerMToken:     4.0,
+			LongOutputPricePerMToken:    15.0,
+			LongCacheReadPricePerMToken: 0.4,
+		}},
+		{model: "gpt-6-luna", pricing: ModelPricing{
+			InputPricePerMToken:         0.1,
+			OutputPricePerMToken:        0.5,
+			CacheReadPricePerMToken:     0.01,
+			LongInputPricePerMToken:     0.2,
+			LongOutputPricePerMToken:    0.75,
+			LongCacheReadPricePerMToken: 0.02,
+		}},
 		// gpt-6-astra：Codex 长上下文例外，超过 272K 仍按 $10/$50、缓存 $1。
 		// 保留现有 fast（priority）2× 倍率，由 serviceTierCostMultiplier 兜底。
 		{model: "gpt-6-astra", pricing: ModelPricing{
@@ -265,6 +282,13 @@ func GetModelPricing(model string) *ModelPricing {
 		canonical = codexModel
 	}
 	base := baseModelPricing(normalized, canonical)
+	// 新型号沿用兜底基础价，但覆盖必须独立，不能继承另一个型号的手工价格。
+	if key := discoveredGPTPricingKey(normalized); key != "" {
+		canonical = key
+		if override, ok := lookupModelPricingOverride(key); ok && override.Input > 0 && override.Output > 0 {
+			base = &ModelPricing{}
+		}
+	}
 
 	// custom / synced 覆盖：以代码默认为底，合并非 0 字段（部分覆盖）。
 	// 覆盖表拷贝到本地副本再改，绝不改动共享的默认 pricing 指针。
@@ -475,7 +499,10 @@ func normalizeBillingModelName(model string) string {
 func normalizeCodexBillingModel(model string) (string, bool) {
 	compact := strings.NewReplacer(" ", "-", "_", "-").Replace(strings.ToLower(model))
 	switch {
-	// gpt-6 世代（官方定价页 2026-09）：目前只有 astra 一个公开型号，
+	case strings.HasPrefix(compact, "gpt-6-sol") || strings.HasPrefix(compact, "gpt6-sol"):
+		return "gpt-6-sol", true
+	case strings.HasPrefix(compact, "gpt-6-luna") || strings.HasPrefix(compact, "gpt6-luna"):
+		return "gpt-6-luna", true
 	// 未知 gpt-6 变体按 astra 兜底，避免掉进 $1/$2 的默认价严重低估。
 	// 只认 gpt-6- / gpt-6. / 裸 gpt-6 前缀，gpt-5.6 不含 "gpt-6" 不会误命中。
 	case strings.HasPrefix(compact, "gpt-6-") || strings.HasPrefix(compact, "gpt-6.") || compact == "gpt-6" ||

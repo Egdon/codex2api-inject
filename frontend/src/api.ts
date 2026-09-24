@@ -1,4 +1,3 @@
-import { turnStateHistoryQuery, type TurnStateHistoryFilter, type TurnStateHistoryPage } from './lib/turnStateHistory.ts'
 import { qualityTestFilterQuery, type QualityTestJob, type QualityTestJobsFilter, type QualityTestJobsResponse, type QualityTestPrompt } from './lib/qualityTest.ts'
 import type {
   AccountEventTrendPoint,
@@ -1489,8 +1488,6 @@ export const api = {
     request<{ message: string }>(`/quality-test-prompts/${id}`, { method: 'DELETE' }),
   createQualityTest: (accountId: number, body: { model: string; reasoning_effort: string; prompt: string; prompt_id?: number; preset_key?: string; preset_name?: string }) =>
     request<{ job: QualityTestJob }>(`/accounts/${accountId}/quality-test`, { method: 'POST', body: JSON.stringify(body) }),
-  getTurnStateHistory: (page: number, filter: TurnStateHistoryFilter = {}, signal?: AbortSignal) =>
-    request<TurnStateHistoryPage>(`/codex-turn-state/renewals?${turnStateHistoryQuery(page, filter)}`, { signal }),
   getQualityTests: (page = 1, filter: QualityTestJobsFilter = {}, signal?: AbortSignal) =>
     request<QualityTestJobsResponse>(`/quality-tests?${qualityTestFilterQuery(page, filter)}`, { signal }),
   getQualityTest: (id: number, signal?: AbortSignal) =>

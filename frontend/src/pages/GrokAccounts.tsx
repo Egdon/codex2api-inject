@@ -37,6 +37,7 @@ import {
   Clock,
 } from "lucide-react";
 import { api, getAdminKey } from "../api";
+import { grokDisplayModels, grokModelSummaryTitle } from "../lib/grokModelDisplay";
 import type { ProxyRow } from "../api";
 import { ProxyField } from "../components/ProxyField";
 import AccountProxyBadge from "../components/AccountProxyBadge";
@@ -109,6 +110,15 @@ import {
   usePersistedPageSize,
 } from "../hooks/usePersistedPageSize";
 import OperationProgressToast from "../components/OperationProgressToast";
+import {
+  getGrokImportJob,
+  isGrokImportRunning,
+  startGrokImportJob,
+  subscribeGrokImportJob,
+  type GrokImportChunkResult,
+  type GrokImportJobSnapshot,
+} from "../lib/grokImportJob";
+import { splitGrokSSOImport } from "../lib/grokSsoChunks";
 import { getErrorMessage } from "../utils/error";
 import { formatBeijingTime, formatRelativeTime } from "../utils/time";
 import {
@@ -367,16 +377,17 @@ function GrokPlanBadge({
   compact = false,
   className,
 }: {
-  account: Pick<AccountRow, "plan_type" | "grok_plan">;
+  account: Pick<AccountRow, "plan_type" | "grok_plan" | "grok_plan_display">;
   compact?: boolean;
   className?: string;
 }) {
   const plan = resolveAccountGrokPlan(account);
   if (!plan) {
     return compact ? null : (
-      <span className="text-[12px] text-muted-foreground">—</span>
+      <span className="text-[12px] text-muted-foreground">未知</span>
     );
   }
+  const stale = account.grok_plan_display?.status !== undefined && account.grok_plan_display.status !== "fresh";
   const tone = plan.paid
     ? "bg-amber-500/10 text-amber-700 ring-amber-600/20 dark:bg-amber-500/20 dark:text-amber-300 dark:ring-amber-400/20"
     : plan.key === "free"
@@ -384,6 +395,7 @@ function GrokPlanBadge({
       : "bg-muted text-muted-foreground ring-border";
   return (
     <span
+      title={[account.grok_plan_display?.source, account.grok_plan_display?.observed_at].filter(Boolean).join(" · ")}
       className={cn(
         "inline-flex items-center whitespace-nowrap rounded-md ring-1 ring-inset",
         compact
@@ -393,7 +405,7 @@ function GrokPlanBadge({
         className,
       )}
     >
-      {plan.display}
+      {plan.display}{stale ? " · 过期" : ""}
     </span>
   );
 }
@@ -454,7 +466,6 @@ function GrokAccounts({
     operationProgress,
     operationResults,
     runStreamingOperation,
-    reportOperationEvent,
     closeOperationProgress,
     closeOperationResults,
   } = useOperationProgress(showOperationResults);
@@ -542,9 +553,10 @@ function GrokAccounts({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // SSO 批量导入：粘贴 sso token（JSON 或每行一个），后端自动转 Build 账号
+  // SSO 批量导入：粘贴 sso token（JSON 或每行一个），后端自动转 Build 账号。
+  // 实际请求在模块级任务里跑，离开本页不会中断。
   const [ssoTokens, setSsoTokens] = useState("");
-  const [ssoImporting, setSsoImporting] = useState(false);
+  const ssoPastePending = useRef(false);
   const [ssoResult, setSsoResult] = useState<{
     total: number;
     imported: number;
@@ -560,12 +572,18 @@ function GrokAccounts({
   const authFileInputRef = useRef<HTMLInputElement | null>(null);
   const ssoFileInputRef = useRef<HTMLInputElement | null>(null);
   const refreshFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [importBusy, setImportBusy] = useState(false);
+  const [importBusy, setImportBusy] = useState(() => isGrokImportRunning());
   // 分片导入的进度（done/total 为分片数）；单片导入时为 null。
   const [importProgress, setImportProgress] = useState<{
     done: number;
     total: number;
-  } | null>(null);
+  } | null>(() => {
+    const job = getGrokImportJob();
+    if (job?.running && job.chunkTotal > 1) {
+      return { done: job.chunkDone, total: job.chunkTotal };
+    }
+    return null;
+  });
   const [importResult, setImportResult] = useState<{
     total: number;
     imported: number;
@@ -822,6 +840,94 @@ function GrokAccounts({
     },
     [],
   );
+
+  // 导入任务活在模块里。本页只负责把完成结果写回列表和明细；
+  // 切到别的页面后请求不会停，进度浮层由 Layout 继续显示。
+  const importFinishRef = useRef({
+    showToast,
+    reload,
+    scheduleUsageSettleReloads,
+    t,
+  });
+  importFinishRef.current = {
+    showToast,
+    reload,
+    scheduleUsageSettleReloads,
+    t,
+  };
+  const finishGrokImport = (job: GrokImportJobSnapshot) => {
+    const {
+      showToast: toast,
+      reload: refresh,
+      scheduleUsageSettleReloads: settle,
+      t: translate,
+    } = importFinishRef.current;
+    const summary = {
+      total: job.total,
+      imported: job.success,
+      failed: job.failed,
+      items: job.items,
+    };
+    if (job.source === "sso-paste") {
+      setSsoResult(summary);
+      if (
+        ssoPastePending.current &&
+        !job.error &&
+        job.failed === 0 &&
+        job.success === job.total
+      ) {
+        setSsoTokens("");
+      }
+      ssoPastePending.current = false;
+    } else if (
+      job.failed > 0 ||
+      job.items.some((item) => item.updated || item.revived) ||
+      (job.error && job.current > 0)
+    ) {
+      setImportResult(summary);
+    }
+    if (job.error) {
+      toast(job.error, "error");
+    } else if (job.success > 0) {
+      const done = translate(
+        job.source === "sso-paste" ? "grok.ssoImportDone" : "grok.fileImportDone",
+        { imported: job.success, total: job.total },
+      );
+      if (job.proxyCarried) {
+        const parts = [
+          done,
+          translate("accounts.importProxySummary", {
+            imported: job.proxyImported,
+            skipped: job.proxySkipped,
+          }),
+          ...job.proxyWarnings,
+        ];
+        toast(parts.join(" "), job.proxyWarnings.length > 0 ? "error" : "success");
+      } else {
+        toast(done);
+      }
+    }
+    if (job.success > 0) {
+      void refresh();
+      settle();
+    }
+  };
+  useEffect(() => {
+    let handledFinishedAt = getGrokImportJob()?.done
+      ? getGrokImportJob()!.finishedAt
+      : 0;
+    return subscribeGrokImportJob((job) => {
+      setImportBusy(Boolean(job?.running));
+      setImportProgress(
+        job?.running && job.chunkTotal > 1
+          ? { done: job.chunkDone, total: job.chunkTotal }
+          : null,
+      );
+      if (!job?.done || job.finishedAt === handledFinishedAt) return;
+      handledFinishedAt = job.finishedAt;
+      finishGrokImport(job);
+    });
+  }, []);
 
   const stats = {
     total: serverSummary?.total ?? totalAccounts,
@@ -1146,7 +1252,6 @@ function GrokAccounts({
     setDeviceStarting(false);
     setSsoTokens("");
     setSsoResult(null);
-    setSsoImporting(false);
   };
 
   useEffect(() => () => stopDevicePoll(), [stopDevicePoll]);
@@ -1327,173 +1432,68 @@ function GrokAccounts({
     }
   };
 
-  const handleImportSSO = async () => {
+  const handleImportSSO = () => {
     if (!ssoTokens.trim()) return;
-    setSsoImporting(true);
-    setSsoResult(null);
+    if (isGrokImportRunning()) {
+      showToast(t("grok.importAlreadyRunning"), "error");
+      return;
+    }
+    let split;
     try {
-      const res = await api.importGrokSSO({
-        tokens: ssoTokens,
-        base_url: form.base_url?.trim() || undefined,
-        models: form.models?.length ? form.models : undefined,
-        proxy_url: form.proxy_url?.trim() || undefined,
-        group_ids: importGroupIds,
-      });
-      setSsoResult(res);
-      if (res.imported > 0) {
-        showToast(t("grok.ssoImportDone", { imported: res.imported, total: res.total }));
-        void reload();
-        scheduleUsageSettleReloads();
-      }
-      if (res.imported === res.total) {
-        // 全部成功：清空输入，方便继续导入下一批
-        setSsoTokens("");
-      }
+      split = splitGrokSSOImport(ssoTokens);
     } catch (err) {
       showToast(getErrorMessage(err), "error");
-    } finally {
-      setSsoImporting(false);
+      return;
+    }
+    const payload = {
+      base_url: form.base_url?.trim() || undefined,
+      models: form.models?.length ? form.models : undefined,
+      proxy_url: form.proxy_url?.trim() || undefined,
+      group_ids: importGroupIds,
+    };
+    const chunks =
+      split.total === 0
+        ? [() => api.importGrokSSO({ tokens: ssoTokens, ...payload })]
+        : split.payloads.map(
+            (part) => () => api.importGrokSSO({ tokens: part, ...payload }),
+          );
+    setSsoResult(null);
+    ssoPastePending.current = true;
+    if (!runImportChunks(chunks, split.total, "sso-paste")) {
+      ssoPastePending.current = false;
     }
   };
 
-  // GrokImportChunkResult 覆盖三个导入端点的共同响应形态。代理三项只有 JSON 凭据
-  // 文件那条链路会返回（且必须开了「采用文件内代理」），其余端点恒为 undefined。
-  type GrokImportChunkResult = {
-    total: number;
-    imported: number;
-    failed: number;
-    items: GrokSSOImportItem[];
-    proxies_imported?: number;
-    proxies_skipped?: number;
-    proxy_warning?: string;
-  };
-
-  // runImport 统一跑一次导入调用：置忙、展示结果、成功后刷新列表。
-  const runImport = async (
+  // runImport 统一调度一次导入。任务本身挂在模块级，离开本页后仍会继续。
+  const runImport = (
     fn: () => Promise<GrokImportChunkResult>,
     totalItems = 0,
-  ) => runImportChunks([fn], totalItems);
+    source: "sso-paste" | "pool" = "pool",
+  ) => runImportChunks([fn], totalItems, source);
 
-  // runImportChunks 按分片顺序调用导入接口并合并结果。
-  // 分片是为了避开中间层超时：后端单次上限已放宽到 5000，但一个请求要串行落库
-  // 几千条，墙钟时间会长到浏览器/反代先断开，用户既看不到进度也不知道进了多少。
-  // 每片结束就把已合并的结果写回去，中途失败也能看到前面那些片的明细。
-  // totalItems 是全部待导入条数(调用方按文件/行数预先算好),用于右上角进度浮层
-  // (与 Codex 账号页批量操作同款);传 0 则进度条按分片完成时的累计条数走。
-  const runImportChunks = async (
+  // runImportChunks 按分片顺序调用导入接口。分片是为了避开单次上限和中间层超时。
+  // 进度写到常驻浮层，不跟 Grok 账号页的生命周期走。
+  const runImportChunks = (
     chunks: Array<() => Promise<GrokImportChunkResult>>,
     totalItems = 0,
+    source: "sso-paste" | "pool" = "pool",
   ) => {
-    if (chunks.length === 0) return;
-    setImportBusy(true);
+    if (chunks.length === 0) return false;
+    if (isGrokImportRunning()) {
+      showToast(t("grok.importAlreadyRunning"), "error");
+      return false;
+    }
     setImportResult(null);
     setShowImportPicker(false);
-    setImportProgress(
-      chunks.length > 1 ? { done: 0, total: chunks.length } : null,
-    );
-    const progressTitle = t("grok.importProgressTitle");
-    reportOperationEvent(progressTitle, {
-      type: "start",
-      action: "grok_import",
-      current: 0,
-      total: totalItems,
+    void startGrokImportJob({
+      title: t("grok.importProgressTitle"),
+      totalItems,
+      source,
+      chunks,
+    }).catch((err) => {
+      showToast(getErrorMessage(err), "error");
     });
-    const merged = {
-      total: 0,
-      imported: 0,
-      failed: 0,
-      items: [] as GrokSSOImportItem[],
-    };
-    // 代理注册结果按分片累加。carried 只有在后端确实处理了这个开关时才为真
-    // （响应里出现代理计数），据此决定收尾 toast 要不要带代理那段。
-    const proxySummary = {
-      carried: false,
-      imported: 0,
-      skipped: 0,
-      warnings: [] as string[],
-    };
-    const reportMerged = (type: "progress" | "complete", error?: string) =>
-      reportOperationEvent(progressTitle, {
-        type,
-        action: "grok_import",
-        current: merged.total,
-        total: Math.max(totalItems, merged.total),
-        success: merged.imported,
-        failed: merged.failed,
-        error,
-      });
-    try {
-      for (let i = 0; i < chunks.length; i++) {
-        const res = await chunks[i]();
-        merged.total += res.total ?? 0;
-        merged.imported += res.imported ?? 0;
-        merged.failed += res.failed ?? 0;
-        merged.items = merged.items.concat(res.items ?? []);
-        if (res.proxies_imported !== undefined) {
-          proxySummary.carried = true;
-          proxySummary.imported += res.proxies_imported;
-          proxySummary.skipped += res.proxies_skipped ?? 0;
-          // 分片之间的告警多半一模一样(同一批文件),去重后再拼。
-          const warning = res.proxy_warning?.trim();
-          if (warning && !proxySummary.warnings.includes(warning)) {
-            proxySummary.warnings.push(warning);
-          }
-        }
-        if (chunks.length > 1) {
-          setImportProgress({ done: i + 1, total: chunks.length });
-        }
-        reportMerged(i === chunks.length - 1 ? "complete" : "progress");
-      }
-      // 全部成功时不再弹明细弹窗(右上角进度浮层已给出结果);
-      // 有失败才弹,保留逐号失败原因供排查。命中既有身份被合并/复活的条目
-      // 也要弹明细——否则"导入成功却没多出新账号"会让人以为导入没生效。
-      if (
-        merged.failed > 0 ||
-        merged.items.some((item) => item.updated || item.revived)
-      ) {
-        setImportResult({ ...merged, items: [...merged.items] });
-      }
-      if (merged.imported > 0) {
-        const done = t("grok.fileImportDone", {
-          imported: merged.imported,
-          total: merged.total,
-        });
-        // Toast 只有一个槽位,连续调用会互相顶掉——代理结果和告警必须拼进同一条。
-        if (proxySummary.carried) {
-          const parts = [
-            done,
-            t("accounts.importProxySummary", {
-              imported: proxySummary.imported,
-              skipped: proxySummary.skipped,
-            }),
-            ...proxySummary.warnings,
-          ];
-          showToast(
-            parts.join(" "),
-            proxySummary.warnings.length > 0 ? "error" : "success",
-          );
-        } else {
-          showToast(done);
-        }
-        void reload();
-        scheduleUsageSettleReloads();
-      }
-    } catch (err) {
-      const message = getErrorMessage(err);
-      showToast(message, "error");
-      // 中途失败:浮层收尾并带上错误,已完成分片的结果留在弹窗里。
-      reportMerged("complete", message);
-      if (merged.total > 0) {
-        setImportResult({ ...merged, items: [...merged.items] });
-      }
-      if (merged.imported > 0) {
-        void reload();
-        scheduleUsageSettleReloads();
-      }
-    } finally {
-      setImportBusy(false);
-      setImportProgress(null);
-    }
+    return true;
   };
 
   // chunkList 把待导入项切成固定大小的分片。
@@ -1525,21 +1525,31 @@ function GrokAccounts({
     );
   };
 
-  // countImportLines 统计文本导入的有效行数(空行/注释行不算),供进度条总数。
-  const countImportLines = (text: string) =>
-    text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line !== "" && !line.startsWith("#")).length;
-
   // sso.txt（每行一个 sso token，自动转 Build 账号）
   const handleImportSsoFile = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const text = await fileList[0].text();
     if (ssoFileInputRef.current) ssoFileInputRef.current.value = "";
-    await runImport(
-      () => api.importGrokSSO({ tokens: text, group_ids: importGroupIds }),
-      countImportLines(text),
+    let split;
+    try {
+      split = splitGrokSSOImport(text);
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+      return;
+    }
+    if (split.payloads.length === 0) {
+      runImport(
+        () => api.importGrokSSO({ tokens: text, group_ids: importGroupIds }),
+        0,
+      );
+      return;
+    }
+    runImportChunks(
+      split.payloads.map(
+        (part) => () =>
+          api.importGrokSSO({ tokens: part, group_ids: importGroupIds }),
+      ),
+      split.total,
     );
   };
 
@@ -2774,9 +2784,9 @@ function GrokAccounts({
             ) : addMethod === "sso" ? (
               <Button
                 onClick={() => void handleImportSSO()}
-                disabled={ssoImporting || !ssoTokens.trim()}
+                disabled={importBusy || !ssoTokens.trim()}
               >
-                {ssoImporting ? (
+                {importBusy ? (
                   <>
                     <Loader2 className="size-3.5 animate-spin" />
                     {t("grok.ssoImporting")}
@@ -4060,7 +4070,7 @@ function GrokAccountCard({
   const { t } = useTranslation();
   const disabled = account.enabled === false;
   const isOAuth = account.grok_auth_kind === "oauth";
-  const models = account.models ?? [];
+  const models = grokDisplayModels(account);
   const host = shortHost(account.base_url);
   const label = accountLabel(account);
 
@@ -4208,6 +4218,7 @@ function GrokAccountCard({
             <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
               {t("grok.colModels")}
             </span>
+            <span className="text-[10px] text-muted-foreground" title={grokModelSummaryTitle(account)}>{account.models?.length ? "白名单" : "自动"}{account.grok_models?.status === "stale" ? " · 过期" : ""}{!account.grok_models || account.grok_models.status === "unknown" ? " · 未同步" : ""}</span>
             {models.length === 0 ? (
               <span className="text-[11px] text-muted-foreground/70">
                 {t("grok.noModels")}
@@ -4397,7 +4408,7 @@ function GrokAccountTableRow({
   const { t } = useTranslation();
   const disabled = account.enabled === false;
   const isOAuth = account.grok_auth_kind === "oauth";
-  const models = account.models ?? [];
+  const models = grokDisplayModels(account);
   const host = shortHost(account.base_url);
   const label = accountLabel(account);
   const tableOverlay = renderDisabledAccountOverlay(account, t, {
@@ -4545,7 +4556,8 @@ function GrokAccountTableRow({
         </TableCell>
       ) : null}
       {visibleColumns.models ? (
-        <TableCell>
+        <TableCell title={grokModelSummaryTitle(account)}>
+          <span className="text-[10px] text-muted-foreground">{account.models?.length ? "白名单" : "自动"}{account.grok_models?.status === "stale" ? " · 过期" : ""}{!account.grok_models || account.grok_models.status === "unknown" ? " · 未同步" : ""}</span>
           {models.length === 0 ? (
             <span className="text-[12px] text-muted-foreground/70">
               {t("grok.noModels")}
@@ -5473,17 +5485,17 @@ function GrokTestConnectionModal({
   }, []);
 
   useEffect(() => {
-    const accountModels = (account.models ?? []).filter(
+    const accountModels = grokDisplayModels(account).filter(
       (m) => m.trim() && !m.toLowerCase().includes("image"),
     );
     const next =
       accountModels.length > 0
         ? accountModels
-        : [...DEFAULT_GROK_TEST_MODELS];
+        : account.grok_models && account.grok_models.status !== "unknown" ? [] : [...DEFAULT_GROK_TEST_MODELS];
     setModelOptions(next);
     setSelectedModel(next[0] ?? "");
     setModelOptionsReady(true);
-  }, [account.models]);
+  }, [account.models, account.grok_models]);
 
   useEffect(() => {
     if (!modelOptionsReady || !selectedModel) return;

@@ -227,6 +227,8 @@ Messages 的 `tool_use.input` 必须使用对象，因此自由文本工具输�
 
 对于原生 WebSocket 的结构化输出，`gpt-6-astra` 和 `gpt-5.6-luna` 在显式启用 Responses Lite 时保留 JSON Schema 的 `minLength` / `maxLength`。Lite 信号可来自 `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite=true`、`X-OpenAI-Internal-Codex-Responses-Lite: true` 请求头，或由 Payload Rules 注入该元数据标记。该放行仅用于结构化输出；已有工具参数清洗继续使用保守规则。长度约束在入口准备阶段暂时保留，最终出站前才根据最终模型、规则改写后的 Lite 信号、账号 Lite 能力和实际传输统一处理。其他模型、最终未启用 Lite、HTTP 和 Compact 请求沿用原有清洗策略，HTTP 降级请求不会携带不适用的约束。
 
+OpenAI Responses 中转账号默认仍用 HTTP POST `/v1/responses`。账号设置 `responses_upstream_transport=websocket` 后，这个账号的 Responses 出站改为 WebSocket：地址由 Base URL 换成 `ws`/`wss`，路径仍是 `/v1/responses`，握手使用该账号的 API Key 和 `OpenAI-Beta: responses_websockets=2026-02-06`，上行帧为 `response.create`。这个开关只作用于 OpenAI Responses 中转账号，和全局 `codex_force_websocket` 无关；Grok、Antigravity、Claude 不会走这条连接。握手失败返回上游状态或传输错误，不会改回 HTTP。生图请求仍走 HTTP。连接按账号、Base URL 和 API Key 隔离；带 `previous_response_id` 时优先复用产出该响应的连接。客户端 `GET /v1/responses` 也会选中已打开该开关的中转账号。
+
 原生 WebSocket 入口为 `GET /v1/responses`。通过校验与 API Key 限制后，较新的同 API Key、同渠道/分组路由作用域、同会话请求会抢占仍在运行的旧请求，并先取消旧上游以释放账号与并发位。`stream_id` 是抢占键的一部分，因此多路复用的不同流互不影响；不同 API Key 或不同路由作用域也不会互相取消。只有 `prompt_cache_key`、显式会话头、`previous_response_id`、turn state、专用 affinity key 或可稳定派生的内容会话存在时才启用，纯 API Key 兜底身份不会把无关请求合并。Redis 模式支持跨实例抢占，Memory 模式仅在当前进程内生效。
 
 **响应示例:**
@@ -772,10 +774,6 @@ Codex 的流式 remote compact v2（`POST /v1/responses`，`stream:true`，`inpu
 | base_concurrency_override | integer/null   | 否   | 基础并发覆盖值，`≥1` 无上限，`null` 表示恢复全局默认                                                      |
 | skip_warm_tier            | boolean/null   | 否   | 是否跳过 warm 层级；`null` 等同 `false`，字段省略时保持原值                                                |
 | allowed_api_key_ids       | integer[]/null | 否   | 允许调用该账号的 API Key ID 列表，去重升序保存；字段省略时保持原值，传 `null` 或 `[]` 表示恢复为全部可调用 |
-| codex_turn_state_disabled | boolean        | 否   | `true` 关闭账号的自动与手动 Turn-State 注入；保留已有配置和模板，形态观测继续工作。默认 `false`，跟随全局模板开关 |
-| codex_turn_state_proxy_url | string/null    | 否   | 模板获取、验证和首次后台续签使用的独立代理 URL；空或 `null` 沿用账号默认出口。普通业务请求不受影响 |
-| codex_turn_state          | string/null    | 否   | 凭据级强制注入的 `X-Codex-Turn-State`：非空时该账号每个出站 Codex 请求（HTTP 头与 WebSocket 帧体 `client_metadata` 都覆盖）都强制携带该值，优先于客户端回带值与自定义请求头；只接受单行 ASCII 可见字符，最长 4096 字节；`null` 或空串表示关闭。换成新值时会重置 `codex_turn_state_set_at`（时效起点，实测约 1 小时失效），原样重提同一个值不重置，存量值没有起点时补一次 |
-| codex_turn_state_models   | string/null    | 否   | 把上述注入限定在指定模型：逗号分隔，大小写不敏感，结尾 `*` 做前缀匹配，客户端模型与上游模型任一命中即注入；空表示不限模型；识别不出模型名的请求照常注入 |
 
 **响应:**
 
@@ -911,20 +909,6 @@ Codex 的流式 remote compact v2（`POST /v1/responses`，`stream:true`，`inpu
 并发数遵循 `usage_probe_concurrency`，单个查询最多 15 秒。同一实例正在执行
 此批量操作时，再次调用返回 409；客户端断开后取消查询和待处理任务。完成事件
 发出前会使账号列表与分析缓存失效，随后读取即可更新用量进度条。
-
-#### 获取 Turn-State 模板
-
-`POST /api/admin/accounts/:id/turn-state/refresh` 使用管理员认证，返回 SSE 进度。仅支持运行时 Codex 原生账号，要求全局模板缓存开启且账号未关闭注入。已有同账号获取/续签任务时返回 409。
-
-事件依次为 `start`（`models`）、每模型的 `testing`（`model`）与 `result`（`result.model/saved/error`），最后为 `done`（`saved/total/status`）。每模型先获取候选，再携带候选完成验证，才保存模板；响应不包含模板正文。未重新签发时保持候选原始签发时间，不延长 TTL。具体模型范围与后台续签策略见 [配置说明](CONFIGURATION.md#turn-state-模板生命周期)。
-
-#### 查询 Turn-State 续签记录
-
-`GET /api/admin/codex-turn-state/renewals` 使用管理员认证。参数：`page`（默认 1）、`page_size`（默认 20、最大 50）、`account_id`、`plan`、`model`、`status`、`proxy_url`。`status` 为 `running/success/failed/interrupted`，筛选条件组合生效。
-
-响应包含 `records`、匹配记录数 `total` 和筛选选项 `facets`。每条记录提供账号/模型快照、`attempt/max_attempts`、代理 ID/名称/脱敏 URL/最近检测 IP、`started_at/finished_at/duration_ms`、状态、结果原因和 `expires_before/expires_after`。时间戳为 Unix 毫秒；URL 去除认证、路径及查询参数，不返回模板或访问令牌。代理 IP 是节点最近检测值，不是当次请求实时测量。
-
-该记录只覆盖后台临期续签，不回填旧结果，也不记录手动首次获取。账号 live 接口会附带 `codex_turn_state_status`，仅含近期形态、模型状态和模板有效期，不包含模板正文。
 
 ### Claude 凭据与原生 Messages
 
@@ -1734,9 +1718,7 @@ HTTP `/v1/*` 响应的 `X-Codex2API-Request-ID` 对应下方可检索的 `reques
 }
 ```
 
-`injected_turn_state` / `upstream_turn_state` 是本次尝试实际注入到出站请求上的、以及上游响应
-回带的 `X-Codex-Turn-State`（HTTP 取响应头，WebSocket 取流内 metadata 帧），空串表示没有；
-注入配置见 `PATCH /api/admin/accounts/:id/scheduler` 的 `codex_turn_state`。
+`upstream_turn_state` 是上游响应回带的 `X-Codex-Turn-State`（HTTP 取响应头，WebSocket 取流内 metadata 帧），空串表示没有。`injected_turn_state` 与 `turn_state_overridden` 只保留给更早版本写入的用量记录。
 
 #### GET /api/admin/usage/chart-data
 
@@ -2680,6 +2662,7 @@ curl -X DELETE http://localhost:8080/api/admin/images/jobs/1 \
 | server_error                     | 服务器错误       | 查看日志排查问题                 |
 | upstream_error                   | 上游服务错误     | 检查 Codex 服务状态              |
 | no_available_account             | 当前无可调度账号 | 稍后重试、启用账号或补充可用账号 |
+| account_pool_concurrency_saturated | 匹配账号的并发窗口已满 | 稍后重试，或提高单账号并发上限 |
 | account_pool_usage_limit_reached | 账号池额度耗尽   | 等待冷却或添加新账号             |
 | rate_limit_exceeded              | 限流触发         | 降低请求频率                     |
 | response_context_unavailable     | `previous_response_id` 所需上下文不可用 | 重新发送完整上下文或开始新的响应链 |
@@ -2796,6 +2779,18 @@ Responses WebSocket 升级后用对应错误帧返回拒绝信息，每个 `resp
     "message": "无可用账号，请稍后重试",
     "type": "server_error",
     "code": "no_available_account"
+  }
+}
+```
+
+匹配账号都在、只是并发槽位已经占满时，接口仍返回 `503`，但错误码改为 `account_pool_concurrency_saturated`，并带 `Retry-After: 1`。这和「池里没有可调度账号」不是同一种失败：提高并发上限，或等进行中的请求释放槽位后再试。
+
+```json
+{
+  "error": {
+    "message": "账号并发窗口已满，请稍后重试或提高并发上限",
+    "type": "server_error",
+    "code": "account_pool_concurrency_saturated"
   }
 }
 ```

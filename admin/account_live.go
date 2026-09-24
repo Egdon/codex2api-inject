@@ -3,19 +3,16 @@ package admin
 import (
 	"net/http"
 
-	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
 
 type accountLiveItem struct {
-	CodexTurnStateStatus *proxy.CodexTurnStateStatus `json:"codex_turn_state_status,omitempty"`
-	ActiveRequests       int64                       `json:"active_requests"`
-	OccupiedRequests     int64                       `json:"occupied_requests"`
+	ActiveRequests   int64 `json:"active_requests"`
+	OccupiedRequests int64 `json:"occupied_requests"`
 }
 
 // GetAccountLiveState returns request-local runtime counters for the visible
-// account page. Scheduler counters use in-memory atomics; Turn-State templates
-// are read from the database without rebuilding the paged snapshot.
+// account page. Scheduler counters use in-memory atomics.
 func (h *Handler) GetAccountLiveState(c *gin.Context) {
 	ids, err := parseAccountListIDs(c.Query("ids"))
 	if err != nil {
@@ -34,9 +31,8 @@ func (h *Handler) GetAccountLiveState(c *gin.Context) {
 			continue
 		}
 		live[id] = accountLiveItem{
-			CodexTurnStateStatus: proxy.GetCodexTurnStateStatus(account),
-			ActiveRequests:       account.GetActiveRequests(),
-			OccupiedRequests:     account.GetOccupiedRequests(),
+			ActiveRequests:   account.GetActiveRequests(),
+			OccupiedRequests: account.GetOccupiedRequests(),
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{

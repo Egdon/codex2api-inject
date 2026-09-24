@@ -111,6 +111,9 @@ func TestApplyGrokRequestHeadersReusesConversationID(t *testing.T) {
 	if req1.Header.Get("x-grok-session-id") != req1.Header.Get("x-grok-conv-id") {
 		t.Fatalf("session-id and conv-id should match, got %q / %q", req1.Header.Get("x-grok-session-id"), req1.Header.Get("x-grok-conv-id"))
 	}
+	if group := req1.Header.Get("x-grok-conv-group-id"); group == "" || group != req2.Header.Get("x-grok-conv-group-id") {
+		t.Fatalf("conv-group-id must stay stable with the session, got %q vs %q", group, req2.Header.Get("x-grok-conv-group-id"))
+	}
 	if req1.Header.Get("x-grok-req-id") == req2.Header.Get("x-grok-req-id") {
 		t.Fatal("req-id must stay unique per request")
 	}

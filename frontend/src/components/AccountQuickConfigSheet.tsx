@@ -180,6 +180,7 @@ export default function AccountQuickConfigSheet({
     { value: "off", label: t("accounts.codexFingerprintModeOff") },
     { value: "device", label: t("accounts.codexFingerprintModeDevice") },
     { value: "session", label: t("accounts.codexFingerprintModeSession") },
+    { value: "single_machine_multi_window", label: t("accounts.codexFingerprintModeSessionIdentity") },
     { value: "full", label: t("accounts.codexFingerprintModeFull") },
   ];
 
@@ -187,6 +188,7 @@ export default function AccountQuickConfigSheet({
     off: t("accounts.codexFingerprintModeOffDetail"),
     device: t("accounts.codexFingerprintModeDeviceDetail"),
     session: t("accounts.codexFingerprintModeSessionDetail"),
+    single_machine_multi_window: t("accounts.codexFingerprintModeSessionIdentityDetail"),
     full: t("accounts.codexFingerprintModeFullDetail"),
   };
 

@@ -196,12 +196,8 @@ func MaskResinBaseURL(raw string) string {
 	return masked
 }
 
-// ResolveCodexRequestEgress allows an explicit template refresh to use its own
-// exit, including when Resin is enabled. All other requests keep normal routing.
-func ResolveCodexRequestEgress(ctx context.Context, account *auth.Account, targetURL, proxyURL string, websocket bool) CodexEgress {
-	if dedicated := CodexTurnStateRefreshProxy(ctx, account); dedicated != "" {
-		return CodexEgress{Kind: CodexEgressProxy, URL: targetURL, ProxyURL: dedicated, DialProxyURL: dedicated, account: account}
-	}
+// ResolveCodexRequestEgress picks the websocket or HTTP egress for one request.
+func ResolveCodexRequestEgress(_ context.Context, account *auth.Account, targetURL, proxyURL string, websocket bool) CodexEgress {
 	if websocket {
 		return ResolveCodexWebsocketEgress(account, targetURL, proxyURL)
 	}
