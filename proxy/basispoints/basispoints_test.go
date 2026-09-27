@@ -768,3 +768,24 @@ func TestStreamFailsWhenOnlyCommentaryRemainsAfterDroppingCalls(t *testing.T) {
 		t.Fatalf("a final answer with a dropped call should still complete: %s", out)
 	}
 }
+
+func TestRewriteImagesReportsOnlyLatestTurnUploadFailures(t *testing.T) {
+	failing := func(InlineImage) (string, error) { return "", io.ErrUnexpectedEOF }
+	image := `{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgo="}`
+	history := `{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[` + image + `]},{"type":"message","role":"user","content":[{"type":"input_text","text":"and now?"}]}]}`
+	current := `{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},{"type":"message","role":"user","content":[` + image + `]}]}`
+	both := `{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[` + image + `]},{"type":"message","role":"user","content":[` + image + `]}]}`
+	for name, tc := range map[string]struct {
+		raw     string
+		current bool
+	}{"history only": {history, false}, "latest turn": {current, true}, "history failure skips latest": {both, true}} {
+		prepared, _, err := Prepare([]byte(tc.raw), "account:1", &ReplayCache{})
+		if err != nil {
+			t.Fatalf("%s: Prepare: %v", name, err)
+		}
+		_, report, err := RewriteImages(prepared, ImagesDefault, failing)
+		if err != nil || report.UploadErr == nil || (report.CurrentUploadErr != nil) != tc.current {
+			t.Fatalf("%s: report = %+v, %v", name, report, err)
+		}
+	}
+}

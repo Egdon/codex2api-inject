@@ -59,7 +59,7 @@ func TestForwardExcelBPSWritesOneTerminalFrame(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"hello","stream":true}`))
-	result, err := forwardExcelBPS(ctx, ctx, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"hello","stream":true}`), "account:91/key:1/thread:1", "thread:1", "", false, true)
+	result, err := forwardExcelBPS(ctx, ctx, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"hello","stream":true}`), "account:91/key:1/thread:1", "thread:1", "", false, true, false)
 	if err != nil {
 		t.Fatalf("forwardExcelBPS: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestForwardExcelBPSSanitizesFailureWithoutAppendingTerminal(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"hello","stream":true}`))
-	result, err := forwardExcelBPS(ctx, ctx, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"hello","stream":true}`), "account:91/key:1/thread:1", "thread:1", "", false, true)
+	result, err := forwardExcelBPS(ctx, ctx, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"hello","stream":true}`), "account:91/key:1/thread:1", "thread:1", "", false, true, false)
 	if err != nil {
 		t.Fatalf("forwardExcelBPS: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestForwardExcelBPSDoesNotTreatFailedCompletedAsSuccess(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"hello"}`))
-	result, err := forwardExcelBPS(ctx, ctx, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"hello"}`), "account:91/key:1/thread:1", "thread:1", "", false, true)
+	result, err := forwardExcelBPS(ctx, ctx, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"hello"}`), "account:91/key:1/thread:1", "thread:1", "", false, true, false)
 	if err != nil {
 		t.Fatalf("stream forwarding should preserve the terminal frame: %v", err)
 	}
@@ -177,13 +177,14 @@ func TestExcelBPSFailureInfoExplainsRejectedRequest(t *testing.T) {
 }
 
 type excelBPSImageStub struct {
-	t          *testing.T
-	uploads    int
-	refuse     int
-	refusal    int
-	refusalMsg string
-	bodies     []string
-	uploadID   func(n int) string
+	t            *testing.T
+	uploadStatus int
+	uploads      int
+	refuse       int
+	refusal      int
+	refusalMsg   string
+	bodies       []string
+	uploadID     func(n int) string
 }
 
 func (s *excelBPSImageStub) do(req *http.Request, _ *auth.Account, _ string) (*http.Response, error) {
@@ -200,6 +201,9 @@ func (s *excelBPSImageStub) do(req *http.Request, _ *auth.Account, _ string) (*h
 		}
 		if req.Header.Get("Authorization") != "Bearer synthetic-access-token" {
 			s.t.Fatalf("attachment upload is missing account auth")
+		}
+		if s.uploadStatus != 0 {
+			return &http.Response{StatusCode: s.uploadStatus, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"upload refused"}}`)), Header: make(http.Header)}, nil
 		}
 		body := `{"openai_file_id":"` + s.uploadID(s.uploads) + `"}`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
@@ -330,8 +334,52 @@ func TestForwardExcelBPSMarksSynthesizedCompletion(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	result, err := forwardExcelBPS(ctx, ctx, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"hello","stream":true}`), "account:91/key:1/thread:1", "thread:1", "", false, true)
+	result, err := forwardExcelBPS(ctx, ctx, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"hello","stream":true}`), "account:91/key:1/thread:1", "thread:1", "", false, true, false)
 	if err != nil || result.Terminal != "response.completed" || !result.Synthesized {
 		t.Fatalf("forwardExcelBPS = %+v, %v", result, err)
+	}
+}
+
+func TestExcelBPSFailsOnlyWhenLatestTurnImageCannotBeUploaded(t *testing.T) {
+	stub := &excelBPSImageStub{t: t, uploadStatus: http.StatusInternalServerError, uploadID: func(int) string { return "unused" }}
+	useExcelBPSImageStub(t, stub)
+	_, err := ExecuteExcelBPSRequest(t.Context(), testExcelBPSAccount(), excelBPSImageRequest("iVBORw0KGgoAAAABY3Vycg=="), "account:91/key:1/thread:1", "thread:1", "", false)
+	status, code, _ := excelBPSFailureInfo(err)
+	if status != http.StatusBadGateway || code != "basispoints_image_upload_failed" || len(stub.bodies) != 0 {
+		t.Fatalf("latest-turn upload failure = %d %q, sends=%d", status, code, len(stub.bodies))
+	}
+
+	history := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAABaGlzdA=="}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}]}`)
+	upstream, err := ExecuteExcelBPSRequest(t.Context(), testExcelBPSAccount(), history, "account:91/key:1/thread:1", "thread:1", "", false)
+	if err != nil {
+		t.Fatalf("history upload failure should degrade to a note: %v", err)
+	}
+	upstream.Response.Body.Close()
+	if len(stub.bodies) != 1 || !strings.Contains(stub.bodies[0], "image content omitted") {
+		t.Fatalf("history image was not replaced by a note: %v", stub.bodies)
+	}
+
+	bad := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/x\u0000y;base64,AAAA"}]}]}`)
+	_, err = ExecuteExcelBPSRequest(t.Context(), testExcelBPSAccount(), bad, "account:91/key:1/thread:1", "thread:1", "", false)
+	if status, code, message := excelBPSFailureInfo(err); status != http.StatusBadRequest || code != "basispoints_request_invalid" || !strings.Contains(message, "media type") {
+		t.Fatalf("invalid latest-turn image = %d %q %q", status, code, message)
+	}
+}
+
+func TestExcelBPSReplayPersistsOnlyForSessionScopedConversations(t *testing.T) {
+	headers := http.Header{}
+	if excelBPSConversationScoped(headers, requestSessionIdentity{}) {
+		t.Fatal("a request without a session header was treated as conversation-scoped")
+	}
+	headers.Set("Idempotency-Key", "req-1")
+	if excelBPSConversationScoped(headers, requestSessionIdentity{}) {
+		t.Fatal("an idempotency key was treated as a conversation identity")
+	}
+	headers.Set("Session-Id", "s-1")
+	if !excelBPSConversationScoped(headers, requestSessionIdentity{}) {
+		t.Fatal("a session header did not scope the conversation")
+	}
+	if excelBPSConversationScoped(headers, requestSessionIdentity{hasDownstreamAffinity: true}) {
+		t.Fatal("an affinity header replaced the scope but replay still persisted")
 	}
 }

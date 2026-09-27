@@ -26,7 +26,33 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-var excelBPSReplay basispoints.ReplayCache
+// excelBPSReplay may be backed by the shared runtime cache; it serves only
+// conversations named by a session header. excelBPSLocalReplay serves every
+// other scope and never leaves this process, because content-, cache-key- and
+// API-key-derived scopes can be shared by unrelated conversations.
+var (
+	excelBPSReplay      basispoints.ReplayCache
+	excelBPSLocalReplay basispoints.ReplayCache
+)
+
+// excelBPSConversationHeaders name one conversation, unlike Idempotency-Key
+// (one request) or affinity headers (a routing group).
+var excelBPSConversationHeaders = []string{"Session-Id", "Session_id", "Conversation-Id", "Conversation_id", "X-Session-Id"}
+
+// excelBPSConversationScoped reports whether the BPS replay scope identifies a
+// single conversation: a session header set it and no downstream affinity
+// header replaced it.
+func excelBPSConversationScoped(headers http.Header, identity requestSessionIdentity) bool {
+	if identity.hasDownstreamAffinity {
+		return false
+	}
+	for _, key := range excelBPSConversationHeaders {
+		if strings.TrimSpace(headers.Get(key)) != "" {
+			return true
+		}
+	}
+	return false
+}
 
 // excelBPSDo is kept as a narrow seam for focused adapter tests. Production
 // requests use the account-isolated Codex transport and the account proxy.
@@ -369,7 +395,12 @@ func setExcelBPSPromptCacheKey(raw []byte, threadKey string, compact bool) ([]by
 	return json.Marshal(source)
 }
 
-func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact bool) (*excelBPSUpstream, error) {
+// imageInputError marks an image the client sent that cannot be used at all
+// (bad media type, size, encoding); unlike an upload failure it is safe and
+// useful to report back verbatim.
+type imageInputError struct{ error }
+
+func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, persistReplay bool) (*excelBPSUpstream, error) {
 	if account == nil || !account.IsExcelBPSEnabled() {
 		return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "disabled"}
 	}
@@ -385,7 +416,11 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 	if err != nil {
 		return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "request_invalid", detail: err.Error()}
 	}
-	prepared, bridge, err := basispoints.Prepare(preparedInput, scope, &excelBPSReplay)
+	replay := &excelBPSLocalReplay
+	if persistReplay {
+		replay = &excelBPSReplay
+	}
+	prepared, bridge, err := basispoints.Prepare(preparedInput, scope, replay)
 	if err != nil {
 		log.Printf("[excel-bps] account=%d prepare rejected: %v", account.ID(), err)
 		return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "request_unsupported", detail: err.Error()}
@@ -398,7 +433,7 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		}
 		mediaType, data, err := image.Decode()
 		if err != nil {
-			return "", err
+			return "", imageInputError{err}
 		}
 		fileID, err := uploadExcelBPSImage(ctx, account, proxyURL, token, accountID, mediaType, data, image.Digest)
 		if err != nil {
@@ -414,8 +449,18 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		if err != nil {
 			return nil, &excelBPSFailure{status: http.StatusBadGateway, code: "request_build_failed"}
 		}
+		if err := images.CurrentUploadErr; err != nil {
+			log.Printf("[excel-bps] account=%d image in the latest turn was not uploaded: %v", account.ID(), err)
+			var input imageInputError
+			if errors.As(err, &input) {
+				return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "request_unsupported", detail: input.Error()}
+			}
+			// Upload errors can name the account proxy, so the client gets a
+			// generic message while the log keeps the cause.
+			return nil, &excelBPSFailure{status: http.StatusBadGateway, code: "image_upload_failed"}
+		}
 		if images.UploadErr != nil {
-			log.Printf("[excel-bps] account=%d image upload failed, sending a note instead: %v", account.ID(), images.UploadErr)
+			log.Printf("[excel-bps] account=%d history image upload failed, sending a note instead: %v", account.ID(), images.UploadErr)
 		}
 		request, err := newExcelBPSRequest(ctx, body, token, accountID)
 		if err != nil {
@@ -450,7 +495,8 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 // and other non-handler callers. It intentionally exposes only the response
 // stream and bridge; credentials and wire construction remain private.
 func ExecuteExcelBPSRequest(ctx context.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact bool) (*ExcelBPSResponse, error) {
-	upstream, err := prepareExcelBPSUpstream(ctx, account, raw, scope, threadKey, proxyURL, compact)
+	// Account tests use synthetic threads; their replay stays in memory.
+	upstream, err := prepareExcelBPSUpstream(ctx, account, raw, scope, threadKey, proxyURL, compact, false)
 	if err != nil {
 		return nil, err
 	}
@@ -517,10 +563,10 @@ func writeExcelBPSFrame(w io.Writer, event string, data []byte) error {
 // forwardExcelBPS writes exactly one terminal outcome. BPS is always requested
 // upstream as SSE, while non-stream Responses callers receive the completed
 // response object after the terminal event is validated.
-func forwardExcelBPS(ctx context.Context, c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact bool, stream bool) (excelBPSResult, error) {
+func forwardExcelBPS(ctx context.Context, c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream, persistReplay bool) (excelBPSResult, error) {
 	start := time.Now()
 	result := excelBPSResult{}
-	upstream, err := prepareExcelBPSUpstream(ctx, account, raw, scope, threadKey, proxyURL, compact)
+	upstream, err := prepareExcelBPSUpstream(ctx, account, raw, scope, threadKey, proxyURL, compact, persistReplay)
 	if err != nil {
 		return result, err
 	}
@@ -624,6 +670,8 @@ func excelBPSFailureInfo(err error) (int, string, string) {
 				message += ": " + failure.detail
 			}
 			return status, "basispoints_request_invalid", message
+		case "image_upload_failed":
+			return status, "basispoints_image_upload_failed", "Basispoints could not upload an image from the latest turn; retry the request"
 		case "account_identity_missing":
 			return status, "basispoints_account_id_missing", "The selected account has no Basispoints identity"
 		case "auth_unavailable":
@@ -659,8 +707,8 @@ func writeExcelBPSFailure(c *gin.Context, stream bool, status int, code, message
 // handleExcelBPS is the single handler branch shared by Responses and compact.
 // It deliberately does not report provider failures to the account scheduler:
 // BPS is an opt-in alternate provider surface, not a Codex health probe.
-func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream bool, endpoint, logModel, effectiveModel, reasoningEffort string, affinityKey string, affinityGuard auth.SessionAffinityGuard, start time.Time) {
-	result, err := forwardExcelBPS(c.Request.Context(), c, account, raw, scope, threadKey, proxyURL, compact, stream)
+func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream, persistReplay bool, endpoint, logModel, effectiveModel, reasoningEffort string, affinityKey string, affinityGuard auth.SessionAffinityGuard, start time.Time) {
+	result, err := forwardExcelBPS(c.Request.Context(), c, account, raw, scope, threadKey, proxyURL, compact, stream, persistReplay)
 	if result.DurationMs == 0 && !start.IsZero() {
 		result.DurationMs = int(max(int64(0), time.Since(start).Milliseconds()))
 	}

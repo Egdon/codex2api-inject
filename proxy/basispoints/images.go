@@ -88,6 +88,11 @@ type ImageReport struct {
 	FileIDs []string
 	// UploadErr is the first upload failure; the affected images were omitted.
 	UploadErr error
+	// CurrentUploadErr is set when an image of the latest user turn was not
+	// uploaded. Callers should fail the request: the user expects that image
+	// to be seen. Older history images degrade to notes so a conversation is
+	// never stuck on an image from an earlier turn.
+	CurrentUploadErr error
 }
 
 // Any reports whether the body still sends any image content upstream.
@@ -142,16 +147,23 @@ func RewriteImages(body []byte, mode ImageMode, upload Uploader) ([]byte, ImageR
 		return nil, report, fmt.Errorf("invalid prepared Basispoints body")
 	}
 	items, _ := source["input"].([]any)
-	for _, raw := range items {
+	lastUser := -1
+	for i, raw := range items {
+		if item, _ := raw.(object); text(item["type"]) == "message" && text(item["role"]) == "user" {
+			lastUser = i
+		}
+	}
+	for i, raw := range items {
 		item, _ := raw.(object)
+		current := i >= lastUser
 		switch text(item["type"]) {
 		case "message":
 			if content, ok := item["content"].([]any); ok {
-				rewriteImageParts(content, mode, true, upload, &report)
+				rewriteImageParts(content, mode, true, current, upload, &report)
 			}
 		case "function_call_output":
 			if output, ok := item["output"].([]any); ok {
-				rewriteImageParts(output, mode, mode == ImagesUploadAll, upload, &report)
+				rewriteImageParts(output, mode, mode == ImagesUploadAll, current, upload, &report)
 			}
 		}
 	}
@@ -162,8 +174,9 @@ func RewriteImages(body []byte, mode ImageMode, upload Uploader) ([]byte, ImageR
 // rewriteImageParts rewrites the inline images of one content array in place:
 // omitted as a note in ImagesOmit, left inline when uploadInline is false, or
 // uploaded and replaced by file_id. After the first upload failure the rest
-// of the images become notes, and report records what the body now carries.
-func rewriteImageParts(parts []any, mode ImageMode, uploadInline bool, upload Uploader, report *ImageReport) {
+// of the images become notes, and report records what the body now carries;
+// current marks parts of the latest user turn.
+func rewriteImageParts(parts []any, mode ImageMode, uploadInline, current bool, upload Uploader, report *ImageReport) {
 	for i, raw := range parts {
 		part, _ := raw.(object)
 		ref := text(part["image_url"])
@@ -179,10 +192,16 @@ func rewriteImageParts(parts []any, mode ImageMode, uploadInline bool, upload Up
 			// One failed upload usually means the endpoint is unavailable for
 			// this request; do not retry it for every remaining image.
 			parts[i] = omittedImage("it could not be uploaded")
+			if current && report.CurrentUploadErr == nil {
+				report.CurrentUploadErr = report.UploadErr
+			}
 		default:
 			fileID, err := uploadImage(ref, upload)
 			if err != nil {
 				report.UploadErr = err
+				if current {
+					report.CurrentUploadErr = err
+				}
 				parts[i] = omittedImage("it could not be uploaded")
 				continue
 			}
