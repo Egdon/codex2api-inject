@@ -362,6 +362,9 @@ type toolChoice struct {
 	allowed  map[string]bool
 }
 
+// parseToolChoice reads the Responses tool_choice forms: "none", "required",
+// a named function/custom/built-in tool, and allowed_tools. Anything else,
+// including forced hosted tools, behaves as auto.
 func parseToolChoice(value any) toolChoice {
 	switch v := value.(type) {
 	case string:
@@ -406,6 +409,9 @@ func parseToolChoice(value any) toolChoice {
 	return toolChoice{}
 }
 
+// requirement returns the prompt sentence enforcing the choice: a named tool
+// when it resolves to a catalog entry, otherwise any tool when one is
+// required, otherwise nothing.
 func (c toolChoice) requirement(tools map[string]tool) string {
 	if c.name != "" {
 		match := ""

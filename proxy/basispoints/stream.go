@@ -354,6 +354,8 @@ func TerminalErrorShape(payload object) string {
 	return fmt.Sprintf("code=%q type=%q", truncateRunes(text(source["code"]), 64), truncateRunes(text(source["type"]), 64))
 }
 
+// closedLocally reports read errors caused by this side closing the stream
+// (client disconnect or cancellation), as opposed to the upstream dropping it.
 func closedLocally(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, http.ErrBodyReadAfterClose) || errors.Is(err, io.ErrClosedPipe)

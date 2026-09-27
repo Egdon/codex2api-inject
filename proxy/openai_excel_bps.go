@@ -100,6 +100,9 @@ var excelBPSClientHeaders = [][2]string{
 	{"X-Stainless-Runtime", "browser:chrome"},
 }
 
+// setExcelBPSHeaders applies the account credentials and the Excel add-in
+// client identity shared by Responses and attachment requests. Callers set
+// Content-Type and Accept for their own body.
 func setExcelBPSHeaders(req *http.Request, token, accountID string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Chatgpt-Account-Id", accountID)
@@ -132,6 +135,8 @@ func excelBPSReplayKey(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// Load reads one replay record under the hashed key. A miss returns false with
+// no error; cache errors are returned so ReplayCache can pause the backing.
 func (b excelBPSReplayBacking) Load(key string) ([]byte, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), excelBPSReplayTimeout)
 	defer cancel()
@@ -139,6 +144,8 @@ func (b excelBPSReplayBacking) Load(key string) ([]byte, bool, error) {
 	return raw, ok, err
 }
 
+// Store writes one replay record with excelBPSReplayTTL. It runs on
+// ReplayCache's background writer, never on the request path.
 func (b excelBPSReplayBacking) Store(key string, value []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), excelBPSReplayTimeout)
 	defer cancel()

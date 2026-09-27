@@ -95,6 +95,9 @@ func (r ImageReport) Any() bool {
 	return r.Inline || len(r.FileIDs) > 0
 }
 
+// decodeDataImage validates a base64 data:image URL and returns its lowercase
+// media type and decoded bytes, accepting padded or unpadded base64 up to
+// maxInlineImageBytes.
 func decodeDataImage(raw string) (string, []byte, error) {
 	header, payload, ok := strings.Cut(raw, ",")
 	if !ok || !isInlineImage(raw) {
@@ -156,6 +159,10 @@ func RewriteImages(body []byte, mode ImageMode, upload Uploader) ([]byte, ImageR
 	return out, report, err
 }
 
+// rewriteImageParts rewrites the inline images of one content array in place:
+// omitted as a note in ImagesOmit, left inline when uploadInline is false, or
+// uploaded and replaced by file_id. After the first upload failure the rest
+// of the images become notes, and report records what the body now carries.
 func rewriteImageParts(parts []any, mode ImageMode, uploadInline bool, upload Uploader, report *ImageReport) {
 	for i, raw := range parts {
 		part, _ := raw.(object)
@@ -189,6 +196,8 @@ func rewriteImageParts(parts []any, mode ImageMode, uploadInline bool, upload Up
 	}
 }
 
+// uploadImage hands one data URL to the caller's uploader, keyed by the
+// SHA-256 of the URL text so a cached upload skips base64 decoding.
 func uploadImage(ref string, upload Uploader) (string, error) {
 	if upload == nil {
 		return "", fmt.Errorf("no image uploader")

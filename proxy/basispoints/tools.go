@@ -80,6 +80,8 @@ func (c *ReplayCache) SetBacking(backing ReplayBacking) {
 	c.mu.Unlock()
 }
 
+// activeBacking returns the shared store, or nil when none is attached or it
+// is cooling down after a failure.
 func (c *ReplayCache) activeBacking() ReplayBacking {
 	if c == nil {
 		return nil
@@ -92,6 +94,8 @@ func (c *ReplayCache) activeBacking() ReplayBacking {
 	return c.backing
 }
 
+// backingFailed pauses the shared store for replayBackingCooldown and logs
+// only the first failure of each outage.
 func (c *ReplayCache) backingFailed(err error) {
 	c.mu.Lock()
 	alreadyDown := time.Now().Before(c.backingDownUntil)
@@ -114,6 +118,9 @@ func (c *ReplayCache) putNative(scope, id string, item object, clientCall ...obj
 	c.store(scope, id, item, true, clientCall...)
 }
 
+// store inserts an item into the in-memory LRU and, when persist is set and
+// the backing is healthy, queues it for the background writer. A full queue
+// drops the write rather than blocking the response being translated.
 func (c *ReplayCache) store(scope, id string, item object, persist bool, clientCall ...object) {
 	if c == nil || id == "" {
 		return
@@ -151,6 +158,8 @@ func (c *ReplayCache) store(scope, id string, item object, persist bool, clientC
 	}
 }
 
+// writeLoop drains queued writes one at a time; a failed Store pauses the
+// backing so the remaining queue is skipped until the cooldown ends.
 func (c *ReplayCache) writeLoop() {
 	for write := range c.writes {
 		if backing := c.activeBacking(); backing != nil {
@@ -237,6 +246,8 @@ func (c *ReplayCache) Prefetch(scope string, ids []string) {
 	}
 }
 
+// hydrate loads one key into memory unless a newer local entry (for example a
+// rebuilt item) already exists, so a late prefetch never overwrites it.
 func (c *ReplayCache) hydrate(backing ReplayBacking, key string) {
 	raw, ok, err := backing.Load(key)
 	if err != nil {
