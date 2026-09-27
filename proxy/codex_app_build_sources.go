@@ -65,8 +65,8 @@ func codexBuildIsNewer(candidate, current string) bool {
 	return false
 }
 
-func codexBuildHTTPClient(proxyURL string) *http.Client {
-	return &http.Client{Transport: newCodexStandardTransport(proxyURL), Timeout: 90 * time.Second}
+func codexBuildHTTPClient(endpoint, proxyURL string) (*http.Client, func()) {
+	return newVersionSyncClient(endpoint, proxyURL, 90*time.Second)
 }
 
 func codexBuildRequest(ctx context.Context, client *http.Client, spec codexBuildRequestSpec) (*http.Response, error) {
@@ -100,7 +100,9 @@ func codexReadSmallResponse(resp *http.Response, limit int64) ([]byte, error) {
 
 // FetchCodexDesktopMacBuild 读取官方 Sparkle appcast 中最新正式版的应用构建号。
 func FetchCodexDesktopMacBuild(ctx context.Context, proxyURL string) (string, error) {
-	resp, err := codexBuildRequest(ctx, codexBuildHTTPClient(proxyURL), codexBuildRequestSpec{Method: http.MethodGet, URL: codexMacAppcastURL})
+	client, closeClient := codexBuildHTTPClient(codexMacAppcastURL, proxyURL)
+	defer closeClient()
+	resp, err := codexBuildRequest(ctx, client, codexBuildRequestSpec{Method: http.MethodGet, URL: codexMacAppcastURL})
 	if err != nil {
 		return "", err
 	}
@@ -132,7 +134,9 @@ func FetchCodexDesktopMacBuild(ctx context.Context, proxyURL string) (string, er
 func FetchCodexVSCodeBuild(ctx context.Context, proxyURL string) (string, error) {
 	// 1=versions, 16=version properties；跳过文件元数据以减少响应体。
 	const query = `{"filters":[{"criteria":[{"filterType":7,"value":"openai.chatgpt"}]}],"flags":17}`
-	resp, err := codexBuildRequest(ctx, codexBuildHTTPClient(proxyURL), codexBuildRequestSpec{Method: http.MethodPost, URL: codexMarketplaceURL, Body: strings.NewReader(query)})
+	client, closeClient := codexBuildHTTPClient(codexMarketplaceURL, proxyURL)
+	defer closeClient()
+	resp, err := codexBuildRequest(ctx, client, codexBuildRequestSpec{Method: http.MethodPost, URL: codexMarketplaceURL, Body: strings.NewReader(query)})
 	if err != nil {
 		return "", err
 	}
