@@ -286,6 +286,9 @@ func CanonicalBillingModelKey(model string) string {
 // internal aliases have an independent override and therefore need their own
 // editable row instead of being deduplicated into the canonical model.
 func PricingManagementModelKey(model string) string {
+	if key := daybreakPricingAliasKey(model); key != "" {
+		return key
+	}
 	if key := discoveredGPTPricingKey(model); key != "" {
 		return key
 	}
@@ -297,10 +300,27 @@ func PricingManagementModelKey(model string) string {
 	return CanonicalBillingModelKey(normalized)
 }
 
+func daybreakPricingAliasKey(model string) string {
+	normalized := normalizeBillingModelName(model)
+	if normalized == "" {
+		return ""
+	}
+	lower := strings.ToLower(strings.TrimSpace(model))
+	for _, suffix := range []string{"-daybreak-blue", "-daybreak-red"} {
+		if strings.HasSuffix(lower, suffix) {
+			return normalized + suffix
+		}
+	}
+	if strings.HasPrefix(normalized, "gpt-daybreak-") {
+		return normalized
+	}
+	return ""
+}
+
 // PricingAliasTarget reports the canonical fallback for an independently
 // managed alias. An empty string means the model is already canonical.
 func PricingAliasTarget(model string) string {
-	if discoveredGPTPricingKey(model) != "" {
+	if discoveredGPTPricingKey(model) != "" && daybreakPricingAliasKey(model) == "" {
 		return ""
 	}
 	managed := PricingManagementModelKey(model)

@@ -1562,6 +1562,7 @@ func populateInternalUsageMetaFromContext(c *gin.Context, input *database.UsageL
 }
 
 func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInput) {
+	applyDaybreakUsageModel(c, input)
 	populateAPIKeyMetaFromContext(c, input)
 	populateInternalUsageMetaFromContext(c, input)
 	populateClientIPFromRequest(c, input)
@@ -3866,6 +3867,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	} else if nativeRemoteCompactionV2 {
 		rawBody, requestModel, mappedModel, mappingApplied = h.applyConfiguredCompactModelMappingToBody(rawBody, supportedModels)
 	} else {
+		rememberDaybreakRequest(c, rawBody)
 		rawBody, requestModel, mappedModel, mappingApplied = h.applyConfiguredModelMappingToBody(rawBody, supportedModels)
 	}
 	rawBody, _ = normalizePortableResponsesCompactionHistory(rawBody)
@@ -4150,7 +4152,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		attemptLogEffectiveModel := logEffectiveModel
 		// relay/Grok 账号默认走 HTTP，这里排除全局强制 WS，避免日志把它们错标成 via_websocket。
 		// 打开了上游 WebSocket 的 OpenAI Responses 中转账号在体积判断之后单独改回 WS。
-		useWebsocket := h.shouldUseWebsocketForHTTP() && !wsHTTPFallback.ForceHTTP() && !account.IsRelayStyle()
+		useWebsocket := h.shouldUseWebsocketForHTTP() && !wsHTTPFallback.ForceHTTP() && !account.IsRelayStyle() && !account.IsExcelBPSAvailableForModel(effectiveModel)
 		// 生图请求强制走 HTTP：WebSocket 传输大体积图片数据会卡死（issue #220）；
 		// 自然语言生图意图也需保留 image_generation 工具（issue #288）。
 		if useWebsocket && rawResponsesBodyShouldForceHTTPForImageGeneration(rawBody) {
@@ -4183,6 +4185,22 @@ func (h *Handler) Responses(c *gin.Context) {
 
 		// 透传下游请求头用于指纹学习
 		downstreamHeaders := c.Request.Header.Clone()
+
+		if account.IsExcelBPSAvailableForModel(effectiveModel) {
+			bpsBody := codexBody
+			if mappedBody, mappedModel, ok := h.applyAccountModelMappingToBodyForModels(bpsBody, account, logModel, effectiveModel); ok {
+				bpsBody = mappedBody
+				attemptEffectiveModel = mappedModel
+				attemptLogEffectiveModel = usageEffectiveModelForMapping(logModel, attemptEffectiveModel, true)
+			}
+			threadKey := sessionIdentity.affinityID
+			if threadKey == "" {
+				threadKey = affinityKey
+			}
+			scope := fmt.Sprintf("account:%d:key:%d:thread:%s", account.ID(), apiKeyID, affinityKey)
+			h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, false, isStream, "/v1/responses", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start)
+			return
+		}
 
 		if account.IsRelayStyle() {
 			relayContinuationAttempted = true
@@ -6101,6 +6119,22 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		}
 		downstreamHeaders := c.Request.Header.Clone()
 
+		if account.IsExcelBPSAvailableForModel(effectiveModel) {
+			bpsBody := codexBody
+			if mappedBody, mappedModel, ok := h.applyAccountCompactModelMappingToBody(bpsBody, account, routingModel, effectiveModel); ok {
+				bpsBody = mappedBody
+				attemptEffectiveModel = mappedModel
+				attemptLogEffectiveModel = usageEffectiveModelForMapping(logModel, attemptEffectiveModel, true)
+			}
+			threadKey := sessionIdentity.affinityID
+			if threadKey == "" {
+				threadKey = affinityKey
+			}
+			scope := fmt.Sprintf("account:%d:key:%d:thread:%s", account.ID(), apiKeyID, affinityKey)
+			h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, true, false, "/v1/responses/compact", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start)
+			return
+		}
+
 		if account.IsOpenAIResponsesAPI() {
 			relayContinuationAttempted = true
 			baseURL, _ := account.OpenAIResponsesCredentials()
@@ -6733,6 +6767,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	h.capturePromptRequestIngress(c, rawBody)
 
 	supportedModels := h.supportedModelIDs(c.Request.Context())
+	rememberDaybreakRequest(c, rawBody)
 	rawBody, requestModel, mappedModel, mappingApplied := h.applyConfiguredModelMappingToBody(rawBody, supportedModels)
 
 	// Validate request
@@ -8949,6 +8984,9 @@ func (h *Handler) ListModels(c *gin.Context) {
 
 func (h *Handler) supportedModelIDs(ctx context.Context) []string {
 	models := SupportedModelIDs(ctx, h.db)
+	if h != nil && h.store != nil {
+		models = append(models, DaybreakModelIDs(h.store.Accounts(), models)...)
+	}
 	seen := make(map[string]struct{}, len(models))
 	for _, model := range models {
 		seen[strings.ToLower(strings.TrimSpace(model))] = struct{}{}

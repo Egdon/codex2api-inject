@@ -147,6 +147,12 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	prompt := c.Query("prompt")
+	hasPrompt := quality == nil && c.Request.URL.Query().Has("prompt")
+	if hasPrompt && (strings.TrimSpace(prompt) == "" || len([]rune(prompt)) > auth.MaxTestContentRunes) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("测试内容不能为空，且不能超过 %d 个字符", auth.MaxTestContentRunes)})
+		return
+	}
 	claudeSecurityCfg := h.store.ClaudeSecurityConfig()
 	payload := h.buildAccountConnectionTestPayload(c.Request.Context(), account, testModel, claudeSecurityCfg)
 	if quality != nil {
@@ -154,6 +160,12 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+	} else if hasPrompt {
+		if isClaudeAccount {
+			payload = buildClaudeConnectionTestPayloadWithContent(testModel, prompt, claudeSecurityCfg)
+		} else {
+			payload = buildTestPayloadWithContent(testModel, prompt)
 		}
 	}
 
@@ -189,6 +201,18 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 
 	// 发送请求
 	start := time.Now()
+	if account.IsExcelBPSAvailableForModel(testModel) {
+		// Keep account probes on the same Responses-shaped adapter as normal
+		// traffic. This also covers quality tests, whose HTML prompt is already
+		// represented as a standard Responses input item.
+		if mapped, ok := proxy.ResolveAccountModelMapping(account, testModel); ok && mapped != "" {
+			if next, setErr := sjson.SetBytes(payload, "model", mapped); setErr == nil {
+				payload = next
+			}
+		}
+		h.runExcelBPSInteractiveTest(c, account, payload, testModel, start, isTransient, restoreOnSuccess, &transientOutcome, id, quality != nil, usageReason, usageEndpoint, usageEffort)
+		return
+	}
 	var resp *http.Response
 	var reqErr error
 	if !isClaudeAccount && !isAntigravityAccount && !isOpenAIResponsesAccount {
@@ -1603,6 +1627,9 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 
 	if status, msg, done := h.batchTestSkipDeactivatedWorkspace(acc); done {
 		return status, msg
+	}
+	if acc.IsExcelBPSEnabled() {
+		return h.runExcelBPSBatchTest(testCtx, acc)
 	}
 
 	if status, msg, done := h.batchTestWhamPreflight(testCtx, acc); done {

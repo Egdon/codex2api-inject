@@ -10,6 +10,7 @@ import Pagination from '../components/Pagination'
 import ChannelFilter, { useUsageChannel } from '../components/ChannelFilter'
 import ChannelLogo from '../components/ChannelLogo'
 import CompactionBadges from '../components/CompactionBadges'
+import UsageDaybreakBadge from '../components/UsageDaybreakBadge'
 import ModelLogo from '../components/ModelLogo'
 import Modal from '../components/Modal'
 import ColumnSettingsMenu from '../components/ColumnSettingsMenu'
@@ -2689,6 +2690,7 @@ export default function Usage() {
                             </Badge>
                           ) : null}
                           {visibleColumns.type && <StreamBadge stream={log.stream} />}
+                          {visibleColumns.type && <UsageDaybreakBadge program={log.daybreak_program} />}
                           <CompactionBadges
                             compact={log.compact}
                             hasCompactionHistory={log.has_compaction_history}
@@ -2983,8 +2985,9 @@ export default function Usage() {
                           </div>
                         </TableCell>}
                         {visibleColumns.type && <TableCell>
-                          <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="flex flex-col items-start gap-1.5">
                             <StreamBadge stream={log.stream} />
+                            <UsageDaybreakBadge program={log.daybreak_program} />
                             <CompactionBadges
                               compact={log.compact}
                               hasCompactionHistory={log.has_compaction_history}

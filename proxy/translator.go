@@ -1732,6 +1732,9 @@ func TranslateRequest(rawJSON []byte) ([]byte, error) {
 		return nil, err
 	}
 	out := buildChatResponsesRequest(req)
+	if access := gjson.GetBytes(rawJSON, "access_programs"); access.Exists() {
+		out["access_programs"] = json.RawMessage(access.Raw)
+	}
 	// 工具名净化映射从净化历史前的解析结果推导，与响应侧 ChatToolNameRestoreMap
 	// 使用同一份输入，保证去重后缀两边一致。
 	applyCodexToolNameMap(out, buildCodexToolNameMap(collectChatToolNames(parsed)))

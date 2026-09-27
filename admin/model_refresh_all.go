@@ -197,7 +197,7 @@ func (h *Handler) defaultModelRefreshFuncs() map[string]channelModelRefreshFunc 
 // modelPricingCatalogKeys 返回定价页/模型目录当前展示的全部规范模型键（各渠道拼接），
 // 与 ListModelPricing 的口径一致。
 func (h *Handler) modelPricingCatalogKeys(ctx context.Context) []string {
-	keys := modelPricingManagementKeys(proxy.SupportedModelIDs(ctx, h.db))
+	keys := modelPricingManagementKeys(h.codexPricingModelIDs(ctx))
 	seen := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
 		seen[key] = struct{}{}

@@ -682,8 +682,10 @@ func applyGrokCooldown(store *auth.Store, account *auth.Account, statusCode int,
 		}
 		resetAt := time.Now().Add(24 * time.Hour)
 		// free 账号只有免费额度这一种资源，模型级隔离没有意义且不影响账号状态展示，
-		// 直接整号冷却让列表显示"限流"。付费账号保留模型级隔离（其它模型仍可用）。
-		if strings.EqualFold(strings.TrimSpace(account.GetPlanType()), "free") || cooldownModel == "" {
+		// 直接整号冷却让列表显示"限流"。只有已知付费套餐才保留模型级隔离（其它模型仍可用）；
+		// 套餐未知（AT 不带 tier、导入包无 plan_type、控制面也没观测到）时，错误体本身
+		// 就是在耗免费额度的证据，按 free 处理。
+		if grokFreeQuotaCoolsWholeAccount(account) || cooldownModel == "" {
 			store.MarkCooldown(account, 24*time.Hour, "usage_limited")
 			log.Printf("Grok 账号 %d 免费额度耗尽 (model=%s)，账号冷却 24h", account.ID(), cooldownModel)
 			return codex429Decision{Reason: "usage_limited", ResetAt: resetAt, Cooldown: 24 * time.Hour}
@@ -740,6 +742,12 @@ func applyGrokCooldown(store *auth.Store, account *auth.Account, statusCode int,
 		return codex429Decision{Reason: "version_required", Cooldown: time.Minute}
 	}
 	return codex429Decision{}
+}
+
+// grokFreeQuotaCoolsWholeAccount 判断免费额度耗尽是否整号冷却：free 或套餐未知为真。
+func grokFreeQuotaCoolsWholeAccount(account *auth.Account) bool {
+	plan := account.GrokPlanHint(time.Now())
+	return plan == "" || plan == "free"
 }
 
 // parseRetryAfterHeader 解析 Retry-After 头（秒数或 HTTP 日期）。
