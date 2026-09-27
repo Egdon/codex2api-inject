@@ -395,11 +395,6 @@ func setExcelBPSPromptCacheKey(raw []byte, threadKey string, compact bool) ([]by
 	return json.Marshal(source)
 }
 
-// imageInputError marks an image the client sent that cannot be used at all
-// (bad media type, size, encoding); unlike an upload failure it is safe and
-// useful to report back verbatim.
-type imageInputError struct{ error }
-
 func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, persistReplay bool) (*excelBPSUpstream, error) {
 	if account == nil || !account.IsExcelBPSEnabled() {
 		return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "disabled"}
@@ -433,7 +428,7 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		}
 		mediaType, data, err := image.Decode()
 		if err != nil {
-			return "", imageInputError{err}
+			return "", err
 		}
 		fileID, err := uploadExcelBPSImage(ctx, account, proxyURL, token, accountID, mediaType, data, image.Digest)
 		if err != nil {
@@ -451,9 +446,10 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		}
 		if err := images.CurrentUploadErr; err != nil {
 			log.Printf("[excel-bps] account=%d image in the latest turn was not uploaded: %v", account.ID(), err)
-			var input imageInputError
-			if errors.As(err, &input) {
-				return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "request_unsupported", detail: input.Error()}
+			// Invalid-image messages name only the problem, so they are safe
+			// and useful to return to the client.
+			if errors.Is(err, basispoints.ErrInvalidImage) {
+				return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "request_unsupported", detail: err.Error()}
 			}
 			// Upload errors can name the account proxy, so the client gets a
 			// generic message while the log keeps the cause.
@@ -461,6 +457,9 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		}
 		if images.UploadErr != nil {
 			log.Printf("[excel-bps] account=%d history image upload failed, sending a note instead: %v", account.ID(), images.UploadErr)
+		}
+		if images.InputErr != nil {
+			log.Printf("[excel-bps] account=%d history image is invalid, sending a note instead: %v", account.ID(), images.InputErr)
 		}
 		request, err := newExcelBPSRequest(ctx, body, token, accountID)
 		if err != nil {

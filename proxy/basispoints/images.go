@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -88,12 +89,21 @@ type ImageReport struct {
 	FileIDs []string
 	// UploadErr is the first upload failure; the affected images were omitted.
 	UploadErr error
+	// InputErr is the first image that could not be used at all (bad media
+	// type, size or encoding). It affects only that image; later images are
+	// still uploaded.
+	InputErr error
 	// CurrentUploadErr is set when an image of the latest user turn was not
-	// uploaded. Callers should fail the request: the user expects that image
-	// to be seen. Older history images degrade to notes so a conversation is
-	// never stuck on an image from an earlier turn.
+	// uploaded, for either reason. Callers should fail the request: the user
+	// expects that image to be seen. Older history images degrade to notes so
+	// a conversation is never stuck on an image from an earlier turn.
 	CurrentUploadErr error
 }
+
+// ErrInvalidImage marks an inline image that cannot be used at all, as
+// opposed to an upload endpoint failure. Its messages name only the problem,
+// never image content, so callers may return them to the client.
+var ErrInvalidImage = errors.New("invalid image input")
 
 // Any reports whether the body still sends any image content upstream.
 func (r ImageReport) Any() bool {
@@ -106,24 +116,24 @@ func (r ImageReport) Any() bool {
 func decodeDataImage(raw string) (string, []byte, error) {
 	header, payload, ok := strings.Cut(raw, ",")
 	if !ok || !isInlineImage(raw) {
-		return "", nil, fmt.Errorf("not a base64 data:image URL")
+		return "", nil, fmt.Errorf("%w: not a base64 data:image URL", ErrInvalidImage)
 	}
 	mediaType, _, _ := strings.Cut(strings.TrimPrefix(header, "data:"), ";")
 	mediaType = strings.ToLower(mediaType)
 	// The media type becomes a multipart header on upload; anything beyond a
 	// plain token (CR/LF, quotes, parameters) could inject headers.
 	if !imageMediaType.MatchString(mediaType) {
-		return "", nil, fmt.Errorf("unsupported image media type")
+		return "", nil, fmt.Errorf("%w: unsupported image media type", ErrInvalidImage)
 	}
 	if base64.StdEncoding.DecodedLen(len(payload)) > maxInlineImageBytes {
-		return "", nil, fmt.Errorf("image exceeds %d MiB", maxInlineImageBytes>>20)
+		return "", nil, fmt.Errorf("%w: image exceeds %d MiB", ErrInvalidImage, maxInlineImageBytes>>20)
 	}
 	data, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
 		data, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(payload, "="))
 	}
 	if err != nil || len(data) == 0 {
-		return "", nil, fmt.Errorf("invalid base64 image data")
+		return "", nil, fmt.Errorf("%w: invalid base64 image data", ErrInvalidImage)
 	}
 	return mediaType, data, nil
 }
@@ -173,9 +183,10 @@ func RewriteImages(body []byte, mode ImageMode, upload Uploader) ([]byte, ImageR
 
 // rewriteImageParts rewrites the inline images of one content array in place:
 // omitted as a note in ImagesOmit, left inline when uploadInline is false, or
-// uploaded and replaced by file_id. After the first upload failure the rest
-// of the images become notes, and report records what the body now carries;
-// current marks parts of the latest user turn.
+// uploaded and replaced by file_id. An invalid image becomes a note on its
+// own; after the first upload endpoint failure the rest of the images become
+// notes. report records what the body now carries; current marks parts of the
+// latest user turn.
 func rewriteImageParts(parts []any, mode ImageMode, uploadInline, current bool, upload Uploader, report *ImageReport) {
 	for i, raw := range parts {
 		part, _ := raw.(object)
@@ -197,9 +208,21 @@ func rewriteImageParts(parts []any, mode ImageMode, uploadInline, current bool, 
 			}
 		default:
 			fileID, err := uploadImage(ref, upload)
+			if errors.Is(err, ErrInvalidImage) {
+				// A bad image says nothing about the upload endpoint; keep
+				// uploading the others.
+				if report.InputErr == nil {
+					report.InputErr = err
+				}
+				if current && report.CurrentUploadErr == nil {
+					report.CurrentUploadErr = err
+				}
+				parts[i] = omittedImage("the image data is invalid")
+				continue
+			}
 			if err != nil {
 				report.UploadErr = err
-				if current {
+				if current && report.CurrentUploadErr == nil {
 					report.CurrentUploadErr = err
 				}
 				parts[i] = omittedImage("it could not be uploaded")

@@ -3,6 +3,7 @@ package basispoints
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -787,5 +788,30 @@ func TestRewriteImagesReportsOnlyLatestTurnUploadFailures(t *testing.T) {
 		if err != nil || report.UploadErr == nil || (report.CurrentUploadErr != nil) != tc.current {
 			t.Fatalf("%s: report = %+v, %v", name, report, err)
 		}
+	}
+}
+
+func TestRewriteImagesKeepsUploadingAfterAnInvalidHistoryImage(t *testing.T) {
+	raw := `{"model":"gpt-5.5","input":[` +
+		`{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/x\u0000y;base64,AAAA"}]},` +
+		`{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgo="}]}]}`
+	prepared, _, err := Prepare([]byte(raw), "account:1", &ReplayCache{})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	uploads := 0
+	upload := func(image InlineImage) (string, error) {
+		if _, _, err := image.Decode(); err != nil {
+			return "", err
+		}
+		uploads++
+		return "file-latest", nil
+	}
+	out, report, err := RewriteImages(prepared, ImagesDefault, upload)
+	if err != nil || uploads != 1 || report.CurrentUploadErr != nil || report.UploadErr != nil || !errors.Is(report.InputErr, ErrInvalidImage) {
+		t.Fatalf("report = %+v, uploads=%d, err=%v", report, uploads, err)
+	}
+	if !strings.Contains(string(out), `"file_id":"file-latest"`) || !strings.Contains(string(out), "the image data is invalid") {
+		t.Fatalf("latest image not uploaded or history image not noted: %s", out)
 	}
 }
