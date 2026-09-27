@@ -4,8 +4,11 @@ import (
 	"container/list"
 	"encoding/json"
 	"fmt"
+	"log"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 type tool struct {
@@ -14,6 +17,11 @@ type tool struct {
 	Kind       string
 	Definition string
 	Parameters object
+	// RawField names the argument the raw-field transport fills verbatim;
+	// empty when the tool is not eligible. RawAsList wraps the value in a
+	// one-element array (the built-in shell tool's commands).
+	RawField  string
+	RawAsList bool
 }
 
 type replayEntry struct {
@@ -29,9 +37,84 @@ type ReplayCache struct {
 	entries map[string]*list.Element
 	order   list.List
 	bytes   int
+	backing ReplayBacking
+	// backingDownUntil pauses the backing after a failure so a slow or
+	// unavailable store cannot stall request translation.
+	backingDownUntil time.Time
+	writerOnce       sync.Once
+	writes           chan replayWrite
+	pendingWrites    sync.WaitGroup
 }
 
+// ReplayBacking persists exact native tool items outside this process.
+// Without it a restarted or different gateway instance can only rebuild
+// approximate run_officejs items, and encrypted reasoning then treats earlier
+// tool results as unrelated. Implementations must bound their own latency.
+type ReplayBacking interface {
+	Load(key string) ([]byte, bool, error)
+	Store(key string, value []byte) error
+}
+
+type replayRecord struct {
+	Raw  json.RawMessage `json:"raw"`
+	Call string          `json:"call,omitempty"`
+}
+
+type replayWrite struct {
+	key   string
+	value []byte
+}
+
+const (
+	replayBackingCooldown    = 30 * time.Second
+	replayPrefetchBudget     = time.Second
+	replayPrefetchWorkers    = 8
+	replayWriteQueueCapacity = 256
+)
+
+// SetBacking attaches a shared store; nil keeps the cache process-local.
+func (c *ReplayCache) SetBacking(backing ReplayBacking) {
+	c.mu.Lock()
+	c.backing = backing
+	c.backingDownUntil = time.Time{}
+	c.mu.Unlock()
+}
+
+func (c *ReplayCache) activeBacking() ReplayBacking {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.backing == nil || time.Now().Before(c.backingDownUntil) {
+		return nil
+	}
+	return c.backing
+}
+
+func (c *ReplayCache) backingFailed(err error) {
+	c.mu.Lock()
+	alreadyDown := time.Now().Before(c.backingDownUntil)
+	c.backingDownUntil = time.Now().Add(replayBackingCooldown)
+	c.mu.Unlock()
+	if !alreadyDown {
+		log.Printf("[excel-bps] replay store unavailable, using memory only for %s: %v", replayBackingCooldown, err)
+	}
+}
+
+// put records an item in memory only. Rebuilt or derived items go here: they
+// are reproducible from client history, and persisting them could overwrite
+// the exact native item another instance stored for the same call.
 func (c *ReplayCache) put(scope, id string, item object, clientCall ...object) {
+	c.store(scope, id, item, false, clientCall...)
+}
+
+// putNative records an exact item returned by BPS and also persists it.
+func (c *ReplayCache) putNative(scope, id string, item object, clientCall ...object) {
+	c.store(scope, id, item, true, clientCall...)
+}
+
+func (c *ReplayCache) store(scope, id string, item object, persist bool, clientCall ...object) {
 	if c == nil || id == "" {
 		return
 	}
@@ -39,30 +122,135 @@ func (c *ReplayCache) put(scope, id string, item object, clientCall ...object) {
 	if err != nil || len(raw) > 1<<20 {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.entries == nil {
-		c.entries = make(map[string]*list.Element)
-	}
-	key := scope + "\x00" + id
-	if old := c.entries[key]; old != nil {
-		// Only replayEntry values are inserted into this private list.
-		entry, _ := old.Value.(replayEntry)
-		c.bytes -= len(entry.raw)
-		c.order.Remove(old)
-	}
 	var signature string
 	if len(clientCall) == 1 {
 		signature = historyCallFingerprint(clientCall[0])
 	}
-	c.entries[key] = c.order.PushBack(replayEntry{key: key, raw: raw, callFingerprint: signature})
-	c.bytes += len(raw)
+	key := scope + "\x00" + id
+	c.mu.Lock()
+	c.insertLocked(replayEntry{key: key, raw: raw, callFingerprint: signature})
+	c.mu.Unlock()
+	if !persist || c.activeBacking() == nil {
+		return
+	}
+	record, err := json.Marshal(replayRecord{Raw: raw, Call: signature})
+	if err != nil {
+		return
+	}
+	c.writerOnce.Do(func() {
+		c.writes = make(chan replayWrite, replayWriteQueueCapacity)
+		go c.writeLoop()
+	})
+	c.pendingWrites.Add(1)
+	select {
+	case c.writes <- replayWrite{key: key, value: record}:
+	default:
+		// Never block a response on the shared store; this instance still
+		// replays the item from memory.
+		c.pendingWrites.Done()
+	}
+}
+
+func (c *ReplayCache) writeLoop() {
+	for write := range c.writes {
+		if backing := c.activeBacking(); backing != nil {
+			if err := backing.Store(write.key, write.value); err != nil {
+				c.backingFailed(err)
+			}
+		}
+		c.pendingWrites.Done()
+	}
+}
+
+func (c *ReplayCache) insertLocked(entry replayEntry) {
+	if c.entries == nil {
+		c.entries = make(map[string]*list.Element)
+	}
+	if old := c.entries[entry.key]; old != nil {
+		// Only replayEntry values are inserted into this private list.
+		previous, _ := old.Value.(replayEntry)
+		c.bytes -= len(previous.raw)
+		c.order.Remove(old)
+	}
+	c.entries[entry.key] = c.order.PushBack(entry)
+	c.bytes += len(entry.raw)
 	for len(c.entries) > 1024 || c.bytes > 16<<20 {
 		old := c.order.Front()
-		entry, _ := old.Value.(replayEntry)
-		delete(c.entries, entry.key)
-		c.bytes -= len(entry.raw)
+		evicted, _ := old.Value.(replayEntry)
+		delete(c.entries, evicted.key)
+		c.bytes -= len(evicted.raw)
 		c.order.Remove(old)
+	}
+}
+
+// Prefetch loads call IDs missing from memory in one bounded concurrent pass
+// before translation, so every later lookup is a memory read. Loads that miss
+// the budget are treated as absent and the calls are rebuilt locally.
+func (c *ReplayCache) Prefetch(scope string, ids []string) {
+	backing := c.activeBacking()
+	if backing == nil {
+		return
+	}
+	seen := make(map[string]bool, len(ids))
+	var missing []string
+	c.mu.Lock()
+	for _, id := range ids {
+		key := scope + "\x00" + id
+		if id == "" || seen[key] || c.entries[key] != nil {
+			continue
+		}
+		seen[key] = true
+		missing = append(missing, key)
+	}
+	c.mu.Unlock()
+	if len(missing) == 0 {
+		return
+	}
+	deadline := time.Now().Add(replayPrefetchBudget)
+	keys := make(chan string)
+	var workers sync.WaitGroup
+	for range min(replayPrefetchWorkers, len(missing)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for key := range keys {
+				c.hydrate(backing, key)
+			}
+		}()
+	}
+	for _, key := range missing {
+		if time.Now().After(deadline) || c.activeBacking() == nil {
+			break
+		}
+		keys <- key
+	}
+	close(keys)
+	done := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Until(deadline)):
+		// Stragglers finish in the background and only warm the memory cache.
+	}
+}
+
+func (c *ReplayCache) hydrate(backing ReplayBacking, key string) {
+	raw, ok, err := backing.Load(key)
+	if err != nil {
+		c.backingFailed(err)
+		return
+	}
+	var record replayRecord
+	if !ok || json.Unmarshal(raw, &record) != nil || len(record.Raw) == 0 || len(record.Raw) > 1<<20 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries[key] == nil {
+		c.insertLocked(replayEntry{key: key, raw: record.Raw, callFingerprint: record.Call})
 	}
 }
 
@@ -74,6 +262,9 @@ func (c *ReplayCache) get(scope, id string) object {
 // ignores wire-only item IDs/status and JSON object order, but retains the tool
 // kind, namespace, argument values and exact custom input.
 func historyCallFingerprint(item object) string {
+	if isBuiltinCall(item) {
+		return builtinCallFingerprint(item)
+	}
 	kind, id, name := text(item["type"]), text(item["call_id"]), text(item["name"])
 	if id == "" || name == "" || strings.TrimSpace(id) != id || strings.TrimSpace(name) != name {
 		return ""
@@ -120,20 +311,20 @@ func (c *ReplayCache) getForCall(scope, id string, clientCall object) object {
 }
 
 func (c *ReplayCache) getMatching(scope, id, signature string, requireSignature bool) object {
-	if c == nil {
+	if c == nil || id == "" {
 		return nil
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry := c.entries[scope+"\x00"+id]
-	if entry == nil {
+	var cached replayEntry
+	found := false
+	if element := c.entries[scope+"\x00"+id]; element != nil {
+		cached, found = element.Value.(replayEntry)
+		c.order.MoveToBack(element)
+	}
+	c.mu.Unlock()
+	if !found || (requireSignature && cached.callFingerprint != signature) {
 		return nil
 	}
-	cached, ok := entry.Value.(replayEntry)
-	if !ok || (requireSignature && cached.callFingerprint != signature) {
-		return nil
-	}
-	c.order.MoveToBack(entry)
 	var item object
 	if decode(cached.raw, &item) != nil {
 		return nil
@@ -165,15 +356,26 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 			catalog = append(catalog, nested...)
 			continue
 		}
-		if isUnsupportedHostedTool(kind) {
+		if _, builtin := builtinClientTools[kind]; builtin {
+			// Registered after every declared tool, so a client tool with the
+			// same name always wins regardless of declaration order.
+			if !slices.Contains(b.builtins, kind) {
+				b.builtins = append(b.builtins, kind)
+			}
+			continue
+		}
+		if kind != "function" && kind != "custom" {
+			// Server-hosted and unknown tool kinds (web_search, file_search, ...)
+			// cannot be relayed as client calls. Omit them with a model-visible
+			// warning instead of failing the request.
+			if kind == "" {
+				kind = "unknown"
+			}
 			if b.unsupportedTools == nil {
 				b.unsupportedTools = make(map[string]bool)
 			}
 			b.unsupportedTools[kind] = true
 			continue
-		}
-		if kind != "function" && kind != "custom" {
-			return nil, fmt.Errorf("basispoints does not support hosted tool %q; use client function or custom tools", kind)
 		}
 		if name == "" {
 			return nil, fmt.Errorf("basispoints client tools require a name")
@@ -202,28 +404,30 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 			continue
 		}
 		parameters, _ := entry["parameters"].(object)
-		b.tools[key] = tool{Name: name, Namespace: namespace, Kind: kind, Definition: definition, Parameters: parameters}
+		info := tool{Name: name, Namespace: namespace, Kind: kind, Definition: definition, Parameters: parameters}
+		if kind == "function" {
+			info.RawField = rawFieldFor(parameters)
+			if info.RawField != "" {
+				entry[catalogRawFieldKey] = info.RawField
+			}
+		}
+		b.tools[key] = info
 		catalog = append(catalog, entry)
 	}
 	return catalog, nil
-}
-
-// Hosted capabilities cannot be relayed as client function calls. Ignore known
-// declarations in automatic mode; forced selections are rejected by Prepare.
-func isUnsupportedHostedTool(kind string) bool {
-	switch kind {
-	case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "web_search_2025_08_26",
-		"tool_search", "image_generation", "file_search", "code_interpreter", "computer", "computer_use_preview", "mcp":
-		return true
-	default:
-		return false
-	}
 }
 
 // rebuildNativeHistoryCall uses only the complete call supplied by the client.
 // It does not execute a tool or require that an old tool remain in today's
 // catalog. Cached native items remain authoritative when available.
 func rebuildNativeHistoryCall(item object) (object, error) {
+	if isBuiltinCall(item) {
+		name, args, err := builtinEnvelope(item)
+		if err != nil {
+			return nil, err
+		}
+		return transportHistoryCall(item, object{"name": name, "arguments": args})
+	}
 	id, name := text(item["call_id"]), text(item["name"])
 	if id == "" || strings.TrimSpace(id) != id || name == "" || strings.TrimSpace(name) != name {
 		return nil, fmt.Errorf("basispoints history recovery requires a complete tool call with nonempty call_id and name")
@@ -259,6 +463,16 @@ func rebuildNativeHistoryCall(item object) (object, error) {
 	default:
 		return nil, fmt.Errorf("basispoints history recovery requires a function or custom tool call")
 	}
+	return transportHistoryCall(item, envelope)
+}
+
+// transportHistoryCall wraps a recovered envelope in the run_officejs item BPS
+// knows, keeping the client's call_id so the following result still pairs.
+func transportHistoryCall(item object, envelope object) (object, error) {
+	id := text(item["call_id"])
+	if id == "" || strings.TrimSpace(id) != id {
+		return nil, fmt.Errorf("basispoints history recovery requires a complete tool call with nonempty call_id")
+	}
 	code, err := json.Marshal(envelope)
 	if err != nil {
 		return nil, fmt.Errorf("basispoints history tool arguments cannot be serialized")
@@ -281,21 +495,42 @@ func rebuildNativeHistoryCall(item object) (object, error) {
 	}, nil
 }
 
+// emptyToolOutput replaces a blank tool result, which the model reads as a
+// failed call and retries.
+const emptyToolOutput = "(tool call succeeded with no output)"
+
+// nativePlanResult is what the Excel update_plan executor returns. Codex's own
+// plan tool answers "Plan updated", which leaves the native plan step
+// unresolved upstream and makes the model plan again.
+const nativePlanResult = `{"status":"ok"}`
+
+func isNativePlan(item object) bool {
+	name := text(item["name"])
+	return text(item["type"]) == "function_call" && (name == "update_plan" || name == "functions.update_plan")
+}
+
 func (b *Bridge) translateHistory(input []any) ([]any, error) {
 	result := make([]any, 0, len(input))
 	seenCalls := make(map[string]bool)
+	nativePlans := make(map[string]bool)
+	// callIDs maps a client call item's id to its call_id: the Responses
+	// local_shell_call_output names its call by id rather than call_id.
+	callIDs := make(map[string]string)
 	var trigger any
 	for _, raw := range input {
 		item, ok := raw.(object)
 		if !ok {
 			return nil, fmt.Errorf("invalid Basispoints input item")
 		}
-		delete(item, "internal_chat_message_metadata_passthrough")
 		switch text(item["type"]) {
 		case "additional_tools":
 			continue
 		case "item_reference":
-			return nil, fmt.Errorf("basispoints requires full history; item_reference is unsupported")
+			// References point at stored responses, which store=false never
+			// creates. Skip them like the add-in instead of failing the turn;
+			// Prepare tells the model that part of the history is missing.
+			b.skippedReferences++
+			continue
 		case "compaction_trigger":
 			trigger = item
 			continue
@@ -304,8 +539,11 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 				result = append(result, object{"type": "reasoning", "summary": []any{}, "encrypted_content": encrypted})
 			}
 			continue
-		case "function_call", "custom_tool_call":
+		case "function_call", "custom_tool_call", "local_shell_call", "shell_call", "apply_patch_call":
 			id := text(item["call_id"])
+			if itemID := text(item["id"]); itemID != "" && id != "" {
+				callIDs[itemID] = id
+			}
 			if native := b.replay.getForCall(b.scope, id, item); native != nil {
 				item = native
 			} else {
@@ -317,8 +555,23 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 				item = native
 			}
 			seenCalls[id] = true
-		case "function_call_output", "custom_tool_call_output":
+			nativePlans[id] = isNativePlan(item)
+		case "function_call_output", "custom_tool_call_output", "local_shell_call_output", "shell_call_output", "apply_patch_call_output":
 			id := text(item["call_id"])
+			if _, builtin := builtinKindForCall(text(item["type"])); builtin {
+				if id == "" {
+					// Spec-shaped local_shell_call_output carries only id, which
+					// names the call item (or, in some clients, its call_id).
+					ref := text(item["id"])
+					if id = callIDs[ref]; id == "" {
+						id = ref
+					}
+				}
+				// BPS only knows run_officejs results; keep the pairing call_id
+				// and render the structured result as text. The client's id
+				// may name the call item, so the result gets its own fc_ id.
+				item = object{"type": "function_call_output", "call_id": id, "output": builtinOutputText(item)}
+			}
 			if !seenCalls[id] {
 				native := b.replay.get(b.scope, id)
 				if native == nil {
@@ -326,8 +579,14 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 				}
 				result = append(result, native)
 				seenCalls[id] = true
+				nativePlans[id] = isNativePlan(native)
 			}
 			item["type"] = "function_call_output"
+			if nativePlans[id] {
+				item["output"] = nativePlanResult
+			} else if output, ok := item["output"].(string); item["output"] == nil || ok && strings.TrimSpace(output) == "" {
+				item["output"] = emptyToolOutput
+			}
 			if err := validateHistoryContent(item["output"]); err != nil {
 				return nil, err
 			}
@@ -395,12 +654,19 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	if arguments == nil {
 		return nil, fmt.Errorf("basispoints returned empty tool transport arguments")
 	}
-	envelope, marked, err := customTransportEnvelope(arguments)
-	if !marked && err == nil {
-		envelope, err = decodeTransportEnvelope(arguments["code"])
-	}
+	envelope, raw, err := b.rawFieldEnvelope(arguments)
 	if err != nil {
 		return nil, err
+	}
+	marked := false
+	if !raw {
+		envelope, marked, err = customTransportEnvelope(arguments)
+		if !marked && err == nil {
+			envelope, err = decodeTransportEnvelope(arguments["code"])
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	toolName, err := envelopeName(envelope)
 	if err != nil {
@@ -415,7 +681,7 @@ func (b *Bridge) translateCall(native object) (object, error) {
 		return nil, err
 	}
 	// run_officejs is a real BPS-native tool, so its item replays upstream verbatim.
-	b.replay.put(b.scope, text(native["call_id"]), native, result)
+	b.replay.putNative(b.scope, text(native["call_id"]), native, result)
 	return result, nil
 }
 
@@ -443,6 +709,11 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 	case "function":
 		if kind != "function_call" {
 			return nil, fmt.Errorf("basispoints returned client function tool %q as a %q; no tool was executed", info.Name, kind)
+		}
+		envelope = object{"name": info.Name, "arguments": native["arguments"]}
+	case "local_shell", "shell", "apply_patch":
+		if kind != "function_call" {
+			return nil, fmt.Errorf("basispoints returned built-in tool %q as a %q; no tool was executed", info.Name, kind)
 		}
 		envelope = object{"name": info.Name, "arguments": native["arguments"]}
 	case "custom":
@@ -482,6 +753,22 @@ func (b *Bridge) finishClientToolCall(native object, info tool, envelope object,
 	id := text(native["call_id"])
 	if id == "" {
 		return nil, fmt.Errorf("basispoints tool call is missing call_id")
+	}
+	if _, builtin := builtinClientTools[info.Kind]; builtin {
+		args, err := envelopeArguments(envelope)
+		if err != nil {
+			return nil, err
+		}
+		if raw, ok := args.(string); ok {
+			if decode([]byte(raw), &args) != nil {
+				return nil, fmt.Errorf("basispoints %s arguments are invalid JSON", info.Kind)
+			}
+		}
+		fields, ok := args.(object)
+		if !ok {
+			return nil, fmt.Errorf("basispoints %s arguments must be an object", info.Kind)
+		}
+		return builtinCallItem(info.Kind, id, fields)
 	}
 	itemID := text(native["id"])
 	if itemID == "" {
@@ -528,24 +815,104 @@ func (b *Bridge) finishClientToolCall(native object, info tool, envelope object,
 	return result, nil
 }
 
+// translateResponse converts the native tool calls of a completed response.
+// A call that cannot be relayed (an Excel-native tool, OfficeJS in the
+// transport, a malformed envelope) is dropped rather than failing the other
+// calls and the text of the same response; nothing is executed either way.
 func (b *Bridge) translateResponse(response object) error {
 	if response == nil {
 		return nil
 	}
 	output, _ := response["output"].([]any)
-	for i, raw := range output {
+	kept := make([]any, 0, len(output))
+	calls, dropped := 0, 0
+	answered := false
+	for _, raw := range output {
 		item, _ := raw.(object)
-		if isTool(item) {
-			translated, err := b.translateCall(item)
-			if err != nil {
-				return err
+		if !isTool(item) {
+			if text(item["type"]) == "reasoning" {
+				normalizeReasoningForClient(item)
 			}
-			output[i] = translated
+			answered = answered || hasAssistantText(item)
+			kept = append(kept, raw)
+			continue
+		}
+		if calls > 0 && !b.Parallel {
+			log.Printf("[excel-bps] dropped an extra tool call because the client disabled parallel_tool_calls")
+			continue
+		}
+		translated, err := b.translateCall(item)
+		if err != nil {
+			log.Printf("[excel-bps] dropped an untranslatable tool call: %v", err)
+			dropped++
+			continue
+		}
+		kept = append(kept, translated)
+		calls++
+	}
+	if dropped > 0 && calls == 0 && !answered {
+		// Nothing usable is left; fail so the client retries instead of
+		// ending the turn on an empty "successful" response.
+		return fmt.Errorf("basispoints response contained only tool calls that could not be relayed")
+	}
+	response["output"] = kept
+	response["reasoning"] = object{"effort": b.Effort}
+	response["parallel_tool_calls"] = b.Parallel
+	return nil
+}
+
+func hasAssistantText(item object) bool {
+	if text(item["type"]) != "message" {
+		return false
+	}
+	content, _ := item["content"].([]any)
+	for _, raw := range content {
+		part, _ := raw.(object)
+		if strings.TrimSpace(text(part["text"])) != "" {
+			return true
 		}
 	}
-	response["reasoning"] = object{"effort": b.Effort}
-	response["parallel_tool_calls"] = false
-	return nil
+	return false
+}
+
+// reasoningHeader matches the bold title Codex expects on a reasoning summary.
+const reasoningHeader = "**Thinking**\n\n"
+
+// normalizeReasoningForClient fills a reasoning item's summary so Codex shows
+// it; Codex renders only summary text and drops items whose summary is empty.
+// Upstream replay is unaffected: history keeps only encrypted_content.
+func normalizeReasoningForClient(item object) {
+	if item == nil || text(item["type"]) != "reasoning" {
+		return
+	}
+	joined := func(value any) string {
+		parts, _ := value.([]any)
+		var out strings.Builder
+		for _, raw := range parts {
+			switch part := raw.(type) {
+			case string:
+				out.WriteString(part)
+			case object:
+				out.WriteString(text(part["text"]))
+			}
+		}
+		return out.String()
+	}
+	body := joined(item["summary"])
+	if body == "" {
+		body = joined(item["content"])
+	}
+	if body == "" && text(item["encrypted_content"]) != "" {
+		body = "*Thinking process completed.*"
+	}
+	if strings.TrimSpace(body) == "" {
+		return
+	}
+	if trimmed := strings.TrimLeft(body, " \t\r\n"); !strings.HasPrefix(trimmed, "**") && !strings.HasPrefix(trimmed, "#") {
+		body = reasoningHeader + body
+	}
+	item["summary"] = []any{object{"type": "summary_text", "text": body}}
+	item["content"] = []any{object{"type": "reasoning_text", "text": body}}
 }
 
 func isToolEvent(kind string) bool {

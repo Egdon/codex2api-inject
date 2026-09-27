@@ -10,6 +10,9 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
+	"unicode/utf8"
 )
 
 const ResponsesURL = "https://bps.openai.com/basispoints/api/responses"
@@ -17,13 +20,26 @@ const ResponsesURL = "https://bps.openai.com/basispoints/api/responses"
 type object = map[string]any
 
 type Bridge struct {
-	RequestedEffort  string
-	Effort           string
-	Warnings         []string
+	RequestedEffort string
+	Effort          string
+	Warnings        []string
+	// Parallel mirrors the client's parallel_tool_calls (default true). When
+	// false, only the first client tool call of a response is relayed.
+	Parallel         bool
 	tools            map[string]tool
 	unsupportedTools map[string]bool
 	replay           *ReplayCache
 	scope            string
+	// skippedReferences counts item_reference inputs dropped from history.
+	skippedReferences int
+	// builtins lists declared built-in client tools (shell, apply_patch, ...)
+	// in declaration order, registered after the client's own tools.
+	builtins []string
+	// synthesized is set when a cut-off stream was completed locally.
+	synthesized atomic.Bool
+	// keepalive overrides the idle interval between response.in_progress
+	// frames; zero uses defaultKeepalive.
+	keepalive time.Duration
 }
 
 func decode(raw []byte, target any) error {
@@ -117,22 +133,20 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 	}
 	requested := text(source["reasoning_effort"])
 	if reasoning, ok := source["reasoning"].(object); ok {
+		// reasoning.mode has no Excel wire field, so it is dropped like the
+		// add-in does rather than failing the request.
 		requested = text(reasoning["effort"])
-		if mode := text(reasoning["mode"]); mode != "" && mode != "standard" {
-			return nil, nil, fmt.Errorf("basispoints does not support reasoning mode %q", mode)
-		}
 	}
 	effort, err := NormalizeEffort(requested)
 	if err != nil {
-		return nil, nil, err
+		// Unknown or stale picker values fall back to medium instead of a 4xx.
+		effort = "medium"
 	}
-	b := &Bridge{RequestedEffort: requested, Effort: effort, tools: make(map[string]tool), unsupportedTools: make(map[string]bool), replay: replay, scope: scope}
-	choice := source["tool_choice"]
-	if choice != nil && text(choice) != "auto" && text(choice) != "none" {
-		return nil, nil, fmt.Errorf("basispoints supports tool_choice auto or none only")
-	}
+	parallel, explicit := source["parallel_tool_calls"].(bool)
+	b := &Bridge{RequestedEffort: requested, Effort: effort, Parallel: parallel || !explicit, tools: make(map[string]tool), unsupportedTools: make(map[string]bool), replay: replay, scope: scope}
+	choice := parseToolChoice(source["tool_choice"])
 	var catalog []any
-	if text(choice) != "none" {
+	if !choice.none {
 		catalog, err = b.collectTools(source["tools"], "")
 		if err != nil {
 			return nil, nil, err
@@ -150,6 +164,8 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 			}
 		}
 	}
+	catalog = b.registerBuiltins(catalog)
+	catalog = b.restrictCatalog(catalog, choice.allowed)
 	var outputContract string
 	if config, ok := source["text"].(object); ok {
 		if f, ok := config["format"].(object); ok {
@@ -168,6 +184,24 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 	default:
 		return nil, nil, fmt.Errorf("basispoints input must be text or a Responses item array")
 	}
+	for _, raw := range input {
+		// Codex restamps this private metadata every turn; it must not reach
+		// the wire or change task and turn identity.
+		if item, ok := raw.(object); ok {
+			delete(item, "internal_chat_message_metadata_passthrough")
+		}
+	}
+	// Identity comes from the history as the client sent it, before tool
+	// results and images are rewritten, so retries keep the same turn_id.
+	cacheKey := text(source["prompt_cache_key"])
+	conversation := cacheKey
+	if conversation == "" && len(input) > 0 {
+		conversation = fingerprint(input[0])
+	}
+	turnEnd, iteration := agentTurnState(input)
+	taskID := fingerprint([]any{scope, conversation})
+	turnID := fingerprint([]any{scope, input[:turnEnd]})
+	replay.Prefetch(scope, historyCallIDs(input))
 	translated, err := b.translateHistory(input)
 	if err != nil {
 		return nil, nil, err
@@ -181,15 +215,30 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 		protocol = "This request comes from an external Responses client. Use only the client tools in the catalog below. " +
 			"There is no live workbook or Office runtime for this request. The gateway relays declared client tools and never executes their code. " +
 			"For a function tool, call native run_officejs with code containing one JSON object {\"name\":\"CATALOG_NAME\",\"arguments\":{...}}. " +
+			"The code field is JSON text, not JavaScript: build the complete inner object first, then place it in code, " +
+			"escaping every double quote and backslash inside its string values exactly as JSON requires. " +
+			"Unescaped quotes in shell commands are the most common transport failure. " +
+			"When the catalog lists a raw transport for a tool, prefer it for commands or other text containing quotes or backslashes: " +
+			"set summary to codex2api.raw/CATALOG_NAME/FIELD and put the exact raw field value in code, with no JSON around it. " +
 			"For a custom tool, set summary to codex2api.custom/CATALOG_NAME and put the exact raw input directly in code. " +
-			"Call one client tool at a time and continue after its result. Never call an undeclared native tool or invent a tool result. " +
+			parallelGuidance(b.Parallel) + "Never call an undeclared native tool or invent a tool result. " +
 			"Client tool catalog:\n" + describeCatalog(catalog) +
-			"\nEnd of catalog. The gateway handles run_officejs transport and does not execute Office code."
+			"\nEnd of catalog. The gateway handles run_officejs transport and does not execute Office code.\n" +
+			transportReminder
+		if requirement := choice.requirement(b.tools); requirement != "" {
+			protocol += "\n" + requirement
+		}
 	}
 	if outputContract != "" {
 		protocol += "\n" + outputContract
 	}
 
+	if b.skippedReferences > 0 {
+		warning := fmt.Sprintf("%d history item references were omitted", b.skippedReferences)
+		b.Warnings = append(b.Warnings, warning)
+		protocol += "\nSome earlier conversation items were sent as references to stored responses, which this gateway cannot resolve, " +
+			"so they are missing from the history. Do not assume their content; ask the user if it matters."
+	}
 	if len(b.unsupportedTools) > 0 {
 		kinds := make([]string, 0, len(b.unsupportedTools))
 		for kind := range b.unsupportedTools {
@@ -201,34 +250,13 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 		protocol += "\n" + warning + ". These declarations were omitted. Do not claim to have used them. If the task requires one, explain the limitation or use a suitable declared client tool."
 	}
 	prologue = append(prologue, message("developer", protocol))
-	cacheKey := text(source["prompt_cache_key"])
-	conversation := cacheKey
-	if conversation == "" && len(input) > 0 {
-		conversation = fingerprint(input[0])
-	}
-	turnEnd := 0
-	if len(input) > 0 {
-		turnEnd = 1
-	}
-	iteration := 1
-	for i := len(input) - 1; i >= 0; i-- {
-		item, _ := input[i].(object)
-		if text(item["role"]) == "user" {
-			turnEnd = i + 1
-			break
-		}
-		if strings.HasSuffix(text(item["type"]), "_call_output") {
-			iteration++
-		}
-	}
+	metadata := clientMetadata(source["metadata"])
+	metadata["task_id"], metadata["turn_id"], metadata["agent_iteration"] = taskID, turnID, fmt.Sprint(iteration)
 	output := object{
 		"model": model, "model_selection": "explicit", "stream": true, "store": false,
 		"input": append(prologue, translated...), "reasoning_effort": effort,
 		"context_management": []any{object{"type": "compaction", "compact_threshold": 200000}},
-		"metadata": object{
-			"task_id": fingerprint([]any{scope, conversation}),
-			"turn_id": fingerprint([]any{scope, input[:turnEnd]}), "agent_iteration": fmt.Sprint(iteration),
-		},
+		"metadata":           metadata,
 	}
 	if cacheKey != "" {
 		output["prompt_cache_key"] = "bps-" + fingerprint([]any{scope, cacheKey})
@@ -238,4 +266,209 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 	}
 	body, err := json.Marshal(output)
 	return body, b, err
+}
+
+// agentTurnState returns the end of the turn prefix (through the last user
+// message) and the Excel agent iteration. The add-in keeps turn_id fixed while
+// it runs tools for one user message and advances agent_iteration once per
+// round of tool results; parallel results arrive together as one round.
+func agentTurnState(input []any) (int, int) {
+	lastUser := -1
+	for i, raw := range input {
+		if item, _ := raw.(object); text(item["role"]) == "user" {
+			lastUser = i
+		}
+	}
+	turnEnd := lastUser + 1
+	if lastUser < 0 {
+		turnEnd = min(len(input), 1)
+	}
+	iteration := 1
+	inResults := false
+	for _, raw := range input[lastUser+1:] {
+		item, _ := raw.(object)
+		result := strings.HasSuffix(text(item["type"]), "_call_output")
+		if result && !inResults {
+			iteration++
+		}
+		inResults = result
+	}
+	return turnEnd, iteration
+}
+
+// transportReminder restates the transport rules after the catalog, which can
+// be long enough to push the opening instructions out of focus. It is fixed
+// text inside the cached prefix, so it costs nothing per turn.
+const transportReminder = "Transport rules: one catalog tool per run_officejs call; never nest another run_officejs inside code; " +
+	"code is JSON text, never JavaScript or OfficeJS; escape quotes and backslashes inside JSON string values; " +
+	"use a tool's raw transport (codex2api.raw/CATALOG_NAME/FIELD) when its value contains quotes or backslashes."
+
+func parallelGuidance(parallel bool) string {
+	if parallel {
+		return "When several client tool calls do not depend on each other, make them as separate run_officejs calls in the same response; " +
+			"wait for a result only when the next call needs it. "
+	}
+	return "Call one client tool at a time and continue after its result. "
+}
+
+// SynthesizedCompletion reports whether the stream's response.completed was
+// rebuilt locally after the upstream closed early. Such a response carries no
+// usage, so callers should record it rather than bill it as zero silently.
+func (b *Bridge) SynthesizedCompletion() bool {
+	return b != nil && b.synthesized.Load()
+}
+
+// historyCallIDs lists the call IDs whose native items translation will look up.
+func historyCallIDs(input []any) []string {
+	var ids []string
+	for _, raw := range input {
+		item, _ := raw.(object)
+		switch text(item["type"]) {
+		case "function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output",
+			"local_shell_call", "shell_call", "apply_patch_call",
+			"local_shell_call_output", "shell_call_output", "apply_patch_call_output":
+			ids = append(ids, text(item["call_id"]))
+		}
+	}
+	return ids
+}
+
+// restrictCatalog applies tool_choice allowed_tools: tools outside the allowed
+// set are removed from both the prompt catalog and the relay whitelist.
+func (b *Bridge) restrictCatalog(catalog []any, allowed map[string]bool) []any {
+	if allowed == nil {
+		return catalog
+	}
+	kept := catalog[:0]
+	for _, raw := range catalog {
+		entry, _ := raw.(object)
+		key := text(entry["name"])
+		if allowed[key] || allowed[b.tools[key].Name] {
+			kept = append(kept, raw)
+			continue
+		}
+		delete(b.tools, key)
+	}
+	return kept
+}
+
+// toolChoice is the client's tool_choice. The Excel wire has no such field, so
+// forced selections degrade to auto plus a prompt requirement, and an
+// allowed_tools subset narrows the catalog.
+type toolChoice struct {
+	none     bool
+	required bool
+	name     string
+	allowed  map[string]bool
+}
+
+func parseToolChoice(value any) toolChoice {
+	switch v := value.(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "none":
+			return toolChoice{none: true}
+		case "required":
+			return toolChoice{required: true}
+		}
+	case object:
+		if kind := text(v["type"]); builtinClientTools[kind].callType != "" {
+			return toolChoice{required: true, name: kind}
+		}
+		switch text(v["type"]) {
+		case "function", "custom":
+			name := text(v["name"])
+			if function, ok := v["function"].(object); ok && name == "" {
+				name = text(function["name"])
+			}
+			return toolChoice{required: true, name: name}
+		case "allowed_tools":
+			allowed := make(map[string]bool)
+			tools, _ := v["tools"].([]any)
+			for _, raw := range tools {
+				entry, _ := raw.(object)
+				if kind := text(entry["type"]); builtinClientTools[kind].callType != "" {
+					allowed[kind] = true
+				}
+				if name := text(entry["name"]); name != "" {
+					// A namespaced entry allows only that qualified tool; a bare
+					// name also matches tools declared inside a namespace.
+					if namespace := text(entry["namespace"]); namespace != "" {
+						allowed[namespace+"."+name] = true
+					} else {
+						allowed[name] = true
+					}
+				}
+			}
+			return toolChoice{required: text(v["mode"]) == "required", allowed: allowed}
+		}
+	}
+	return toolChoice{}
+}
+
+func (c toolChoice) requirement(tools map[string]tool) string {
+	if c.name != "" {
+		match := ""
+		if _, ok := tools[c.name]; ok {
+			match = c.name
+		} else {
+			// Sorted so the prompt stays byte-identical for the upstream cache.
+			keys := make([]string, 0, len(tools))
+			for key := range tools {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if tools[key].Name == c.name {
+					match = key
+					break
+				}
+			}
+		}
+		if match != "" {
+			return "The client requires this response to call client tool " + quoted(match) + " through run_officejs."
+		}
+	}
+	if c.required {
+		return "The client requires this response to call at least one client tool through run_officejs."
+	}
+	return ""
+}
+
+// clientMetadata keeps scalar client metadata within the Responses limits
+// (16 keys, 64-character keys, 512-character values), leaving room for the
+// three gateway identity keys, which are set afterwards and always win.
+func clientMetadata(value any) object {
+	metadata := make(object)
+	source, _ := value.(object)
+	keys := make([]string, 0, len(source))
+	for key := range source {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if len(metadata) >= 13 {
+			break
+		}
+		var rendered string
+		switch v := source[key].(type) {
+		case string:
+			rendered = v
+		case json.Number, bool:
+			rendered = fmt.Sprint(v)
+		default:
+			continue
+		}
+		if key = truncateRunes(key, 64); key != "" {
+			metadata[key] = truncateRunes(rendered, 512)
+		}
+	}
+	return metadata
+}
+
+func truncateRunes(value string, limit int) string {
+	if utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	return string([]rune(value)[:limit])
 }
