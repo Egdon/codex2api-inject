@@ -862,7 +862,9 @@ func (b *Bridge) translateResponse(response object) error {
 }
 
 func hasAssistantText(item object) bool {
-	if text(item["type"]) != "message" {
+	// Commentary precedes tool calls; it does not end a turn on its own, the
+	// same rule the cut-off completion applies.
+	if text(item["type"]) != "message" || text(item["phase"]) == "commentary" {
 		return false
 	}
 	content, _ := item["content"].([]any)

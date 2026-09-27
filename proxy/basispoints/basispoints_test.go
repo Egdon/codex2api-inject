@@ -750,3 +750,21 @@ func TestRawFieldTransportRejectsUndeclaredFieldsAndTools(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamFailsWhenOnlyCommentaryRemainsAfterDroppingCalls(t *testing.T) {
+	bridge := &Bridge{Effort: "medium", replay: &ReplayCache{}, tools: map[string]tool{}, unsupportedTools: map[string]bool{}}
+	preamble := `{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I'll run the tests now."}]}`
+	call := `{"type":"function_call","id":"fc_1","call_id":"c","name":"excel_native","arguments":"{}"}`
+	completed := func(output string) string {
+		return "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[" + output + "]}}\n\n"
+	}
+	out := readStream(t, bridge, io.NopCloser(strings.NewReader(completed(preamble+","+call))))
+	if !strings.Contains(out, `"type":"response.failed"`) || strings.Contains(out, `"type":"response.completed"`) {
+		t.Fatalf("commentary alone ended the turn after its call was dropped: %s", out)
+	}
+	answer := strings.Replace(preamble, `"phase":"commentary"`, `"phase":"final_answer"`, 1)
+	out = readStream(t, bridge, io.NopCloser(strings.NewReader(completed(answer+","+call))))
+	if !strings.Contains(out, `"type":"response.completed"`) {
+		t.Fatalf("a final answer with a dropped call should still complete: %s", out)
+	}
+}
