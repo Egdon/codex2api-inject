@@ -218,7 +218,8 @@ func codexWindowsPackageVersion(ctx context.Context, client *http.Client) (strin
 
 // FetchCodexDesktopWindowsBuild 以 Range 分片读取 MSIX 内 ASAR 的压缩前缀。
 func FetchCodexDesktopWindowsBuild(ctx context.Context, proxyURL string) (string, error) {
-	client := codexBuildHTTPClient(proxyURL)
+	client, closeClient := codexBuildHTTPClient(codexWindowsUpdateURL, proxyURL)
+	defer closeClient()
 	packageVersion, parts, err := codexWindowsPackageVersion(ctx, client)
 	if err != nil {
 		return "", err
