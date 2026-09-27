@@ -704,6 +704,7 @@ type APIKeySelfUsageLog struct {
 	Endpoint               string    `json:"endpoint"`
 	Model                  string    `json:"model"`
 	EffectiveModel         string    `json:"effective_model"`
+	DaybreakProgram        string    `json:"daybreak_program"`
 	StatusCode             int       `json:"status_code"`
 	DurationMS             int       `json:"duration_ms"`
 	FirstTokenMS           int       `json:"first_token_ms"`
@@ -733,7 +734,7 @@ type APIKeySelfUsageLog struct {
 	CreatedAt              time.Time `json:"created_at"`
 }
 
-// populateBillingBreakdown 复用与管理端一致的计费拆解逻辑，按 effective_model + 计费档位
+// populateBillingBreakdown 复用与管理端一致的计费拆解逻辑，按生效模型、Daybreak 程序与计费档位
 // 还原输入/输出/缓存读取的费用与单价，并在与实际计费总额不一致时等比缩放对齐。
 func (l *APIKeySelfUsageLog) populateBillingBreakdown() {
 	if l.UserBillingMode == UserBillingModePerImage {
@@ -744,7 +745,7 @@ func (l *APIKeySelfUsageLog) populateBillingBreakdown() {
 	if billingModel == "" {
 		billingModel = l.Model
 	}
-	breakdown := UsageLogCostBreakdown(&UsageLogInput{Model: billingModel, ServiceTier: l.ServiceTier, InputTokens: l.InputTokens, OutputTokens: l.OutputTokens, CachedTokens: l.CachedTokens, ImageInputTokens: l.ImageInputTokens, ImageOutputTokens: l.ImageOutputTokens, CachedImageInputTokens: l.CachedImageInputTokens})
+	breakdown := UsageLogCostBreakdown(&UsageLogInput{Model: billingModel, DaybreakProgram: l.DaybreakProgram, ServiceTier: l.ServiceTier, InputTokens: l.InputTokens, OutputTokens: l.OutputTokens, CachedTokens: l.CachedTokens, ImageInputTokens: l.ImageInputTokens, ImageOutputTokens: l.ImageOutputTokens, CachedImageInputTokens: l.CachedImageInputTokens})
 	l.InputCost = breakdown.InputCost
 	l.OutputCost = breakdown.OutputCost
 	l.CacheReadCost = breakdown.CacheReadCost
@@ -992,6 +993,7 @@ func (db *DB) listAPIKeySelfRecentLogs(ctx context.Context, apiKeyID int64, rang
 			COALESCE(NULLIF(inbound_endpoint, ''), NULLIF(endpoint, ''), 'unknown') AS endpoint_name,
 			COALESCE(model, ''),
 			COALESCE(effective_model, ''),
+			COALESCE(daybreak_program, ''),
 			COALESCE(status_code, 0),
 			COALESCE(duration_ms, 0),
 			COALESCE(first_token_ms, 0),
@@ -1028,6 +1030,7 @@ func (db *DB) listAPIKeySelfRecentLogs(ctx context.Context, apiKeyID int64, rang
 			&item.Endpoint,
 			&item.Model,
 			&item.EffectiveModel,
+			&item.DaybreakProgram,
 			&item.StatusCode,
 			&item.DurationMS,
 			&item.FirstTokenMS,

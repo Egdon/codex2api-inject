@@ -182,7 +182,8 @@
     "streamInterrupted": "串流已中斷，未收到成功完成事件。"
   },
   "nav": {
-    "qualityTest": "降智檢測"
+    "qualityTest": "降智檢測",
+    "channelMonitor": "渠道監控"
   },
   "imageStudioPortal": {
     "quota": {
@@ -365,6 +366,30 @@
     "activeRequestsTooltip": "目前正在處理 {{count}} 個請求",
     "testConnection": "測試連線",
     "testConnectionTitle": "測試連線 - {{account}}",
+    "detectorOpen": "模型指紋檢測",
+    "detectorTitle": "模型指紋檢測",
+    "detectorDisclaimer": "將向選定上游發送 3 組長整數生成請求；遇到拒答或截斷時最多嘗試 6 次，並會消耗帳號額度。",
+    "detectorRequestModel": "請求模型",
+    "detectorConcurrency": "並發（1–3）",
+    "detectorStart": "開始檢測",
+    "detectorRunning": "檢測中…",
+    "detectorProgress": "有效回答",
+    "detectorAttempt": "嘗試 {{current}} / {{total}}",
+    "detectorParsedNumbers": "已解析 {{parsed}} 個，最低 {{minimum}} 個",
+    "detectorValidSamples": "有效樣本",
+    "detectorPrediction": "最相近模型",
+    "detectorProbability": "閉集機率",
+    "detectorFamily": "模型族",
+    "detectorFamilyProbability": "族別機率",
+    "detectorCandidateRanking": "候選模型排行",
+    "detectorProfileSimilarity": "分佈相似度",
+    "detectorDiagnostics": "回答完整度",
+    "detectorDiagnosticItem": "第 {{index}} 次 · {{parsed}} / {{minimum}}",
+    "detectorCalibration": "參考庫交叉驗證準確率 {{accuracy}}",
+    "detectorClosedSetWarning": "ModelTrace 是閉集相似度分析：不在參考庫中的模型也會被歸到最接近的候選，結果僅供排查上游模型使用。",
+    "detectorFailed": "檢測失敗",
+    "detectorConnectionEnded": "檢測串流意外結束",
+    "detectorStreamUnsupported": "瀏覽器不支援串流回應",
     "testDiagHTTPStatus": "上游 HTTP",
     "testDiagFirstFrameTime": "首幀耗時",
     "testDiagHeadersTime": "回應標頭耗時",
@@ -402,6 +427,8 @@
     "testDiagBodyTruncated": "回應較長，預覽最多保留 64 KiB",
     "testDiagCopy": "複製診斷",
     "testDiagRetry": "重新測試",
+    "testReady": "選擇模型並編輯內容後，點擊開始測試",
+    "testStart": "開始測試",
     "testDiagPending": "等待上游回應…",
     "openDetail": "查看詳情",
     "cardDetails": "詳情",
@@ -426,6 +453,12 @@
     "proxyPoolLinkedHint": "已關聯代理池節點（按位址綁定）：在「代理」頁修改該節點位址會同步到所有綁定帳號，刪除則自動解除綁定。"
   },
   "settings": {
+    "clientVersionSyncSuccess": "用戶端版本已同步",
+    "clientVersionSyncPartial": "部分來源同步失敗，已保留原有版本",
+    "autoResetCreditsTitle": "主動重置次數自動消耗",
+    "autoResetCreditsDesc": "分別控制額度窗口用盡和重置券臨期時的自動消耗，兩項預設關閉，每輪每帳號最多消耗一次。",
+    "autoResetCreditsOnExhaustionEnabled": "窗口用盡後自動重置",
+    "autoResetCreditsOnExhaustionDesc": "每 5 分鐘檢查官方 Codex 帳號（含 Business Pro Lite）。上游確認任一共享額度窗口（如 5h、7d）達到 100%，且有可用重置次數時消耗一次，無需等待券臨期。預設關閉；開啟後立即檢查。",
     "codexOAuthKeepalive": "惰性模式下保持 Codex 授權",
     "codexOAuthKeepaliveDesc": "開啟後，惰性模式仍會為即將到期的 Codex Token 續期，包括額度冷卻中的帳號；不會解除冷卻或發送生成請求。預設關閉。",
     "codexTelemetry": "用戶端遙測（實驗性）",

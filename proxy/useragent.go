@@ -421,12 +421,19 @@ func buildCodexStructuredUserAgent(cfg CodexUserAgentConfig, versionFloor string
 		clientName = firstNonEmptyString(clientName, latestCodexClientName)
 		appName = clientName
 	}
-	cliVersion, appVersion := resolveCodexVersionPair(spec, cfg.ClientVersion, cfg.AppVersion, versionFloor)
+	fallback := codexUAVersionPair{}
+	if hasSpec && len(spec.VersionPairs) > 0 {
+		fallback = heaviestCodexPair(spec.VersionPairs)
+	}
+	osName := firstNonEmptyString(cfg.OSName, platform.OSName)
+	cliVersion, appVersion := resolveCodexCurrentVersions(spec, codexVersionSelection{
+		OSName: osName, CLIOverride: cfg.ClientVersion, AppOverride: cfg.AppVersion,
+		VersionFloor: versionFloor, Fallback: fallback,
+	})
 	if hasSpec && spec.AppFollowsCLI && cfg.AppVersion != "" {
 		appVersion = cfg.AppVersion
 	}
 	appName = firstNonEmptyString(cfg.AppName, appName)
-	osName := firstNonEmptyString(cfg.OSName, platform.OSName)
 	osVersion := firstNonEmptyString(cfg.OSVersion, platform.OSVersion)
 	arch := firstNonEmptyString(cfg.Arch, platform.Arch)
 	terminal = firstNonEmptyString(cfg.Terminal, terminal)

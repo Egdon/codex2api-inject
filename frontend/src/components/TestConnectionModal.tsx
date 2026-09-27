@@ -12,6 +12,7 @@ import {
   Loader2,
   RefreshCw,
   RotateCcw,
+  ShieldCheck,
   XCircle,
 } from "lucide-react";
 import { api, getAdminKey } from "../api";
@@ -38,6 +39,7 @@ import { orderAntigravityTestModels } from "../lib/antigravityModels";
 import { cn } from "@/lib/utils";
 import { useToast } from "../hooks/useToast";
 import Modal from "./Modal";
+import ModelDetectorModal from "./ModelDetectorModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
@@ -95,8 +97,8 @@ export default function TestConnectionModal({
   const { showToast } = useToast();
   const [output, setOutput] = useState<string[]>([]);
   const [status, setStatus] = useState<
-    "connecting" | "streaming" | "success" | "error"
-  >("connecting");
+    "idle" | "connecting" | "streaming" | "success" | "error"
+  >("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [model, setModel] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
@@ -106,7 +108,8 @@ export default function TestConnectionModal({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [headersOpen, setHeadersOpen] = useState(false);
   const [rawOpen, setRawOpen] = useState(false);
-  const [attempt, setAttempt] = useState(0);
+  const [detectorOpen, setDetectorOpen] = useState(false);
+  const [testContent, setTestContent] = useState("hi");
   const abortRef = useRef<AbortController | null>(null);
   const outputEndRef = useRef<HTMLDivElement>(null);
   const settledRef = useRef(false);
@@ -128,6 +131,8 @@ export default function TestConnectionModal({
   const isOpenAIResponsesAccount = Boolean(
     account.openai_responses_api || account.grok_api,
   );
+  const isCodexOAuthAccount = !isClaudeAccount && !isOpenAIResponsesAccount && !isAntigravityAccount;
+  const supportsModelDetector = isCodexOAuthAccount || isClaudeAccount || Boolean(account.openai_responses_api && !account.grok_api);
 
   const modelSelectOptions = useMemo(
     () =>
@@ -147,7 +152,10 @@ export default function TestConnectionModal({
         if (isAntigravityAccount) {
           let preferred = "";
           try {
-            preferred = (await api.getChannelTestSettings()).antigravity.test_model ?? "";
+            const settings = await api.getChannelTestSettings();
+            if (!active) return;
+            preferred = settings.antigravity.test_model ?? "";
+            setTestContent(settings.antigravity.test_content || settings.default_test_content || "hi");
           } catch {
             /* 渠道测试设置读不到就按目录自动选 */
           }
@@ -160,6 +168,7 @@ export default function TestConnectionModal({
 
         const settings = await api.getSettings();
         if (!active) return;
+        setTestContent(settings.test_content || "hi");
 
         if (isClaudeAccount) {
           const accountModels = (account.models ?? []).filter(
@@ -267,10 +276,12 @@ export default function TestConnectionModal({
     };
   }, [account.claude_api, account.model_mapping, account.models, isAntigravityAccount, isClaudeAccount, isOpenAIResponsesAccount]);
 
-  useEffect(() => {
-    if (!modelOptionsReady || !selectedModel) return;
+  useEffect(() => () => abortRef.current?.abort(), []);
 
-    // 重置状态（StrictMode 二次 mount 时清理上一次的残留）
+  const startTest = () => {
+    if (!modelOptionsReady || !selectedModel || !testContent.trim() || running) return;
+
+    abortRef.current?.abort();
     setOutput([]);
     setStatus("connecting");
     setErrorMsg("");
@@ -285,7 +296,7 @@ export default function TestConnectionModal({
       if (controller.signal.aborted) return;
 
       try {
-        const params = new URLSearchParams({ model: selectedModel });
+        const params = new URLSearchParams({ model: selectedModel, prompt: testContent });
         if (restoreOnSuccess) {
           params.set("restore_on_success", "true");
         }
@@ -401,36 +412,22 @@ export default function TestConnectionModal({
       }
     };
 
-    // 延迟 50ms 启动，确保 StrictMode cleanup 有足够时间执行 abort
-    const timer = window.setTimeout(() => {
-      void run();
-    }, 50);
-
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [
-    account.id,
-    attempt,
-    markSettled,
-    modelOptionsReady,
-    restoreOnSuccess,
-    selectedModel,
-    t,
-  ]);
+    void run();
+  };
 
   useEffect(() => {
     outputEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [output]);
 
   const statusText = {
+    idle: t("accounts.testReady"),
     connecting: t("accounts.connecting"),
     streaming: t("accounts.receivingResponse"),
     success: t("accounts.testSuccess"),
     error: t("accounts.testFailed"),
   }[status];
   const StatusIcon = {
+    idle: Activity,
     connecting: Loader2,
     streaming: Loader2,
     success: CheckCircle,
@@ -439,6 +436,7 @@ export default function TestConnectionModal({
   const statusIconSpin = status === "connecting" || status === "streaming";
 
   const statusColor = {
+    idle: "text-muted-foreground",
     connecting: "text-muted-foreground",
     streaming: "text-blue-500",
     success: "text-emerald-500",
@@ -554,6 +552,7 @@ export default function TestConnectionModal({
   const monoStyle = { fontFamily: "var(--font-geist-mono)" } as const;
 
   return (
+    <>
     <Modal
       show={true}
       title={t("accounts.testConnectionTitle", {
@@ -565,19 +564,32 @@ export default function TestConnectionModal({
       }}
       footer={
         <div className="flex w-full flex-wrap items-center justify-end gap-2">
-          {diagnostics ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="mr-auto"
-              disabled={running}
-              onClick={() => void handleCopyDiagnostics()}
-            >
-              <Copy className="size-3.5" />
-              {t("accounts.testDiagCopy")}
-            </Button>
-          ) : null}
+          <div className="mr-auto flex flex-wrap items-center gap-2">
+            {diagnostics ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={running}
+                onClick={() => void handleCopyDiagnostics()}
+              >
+                <Copy className="size-3.5" />
+                {t("accounts.testDiagCopy")}
+              </Button>
+            ) : null}
+            {supportsModelDetector ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={running || !modelOptionsReady || !selectedModel}
+                onClick={() => setDetectorOpen(true)}
+              >
+                <ShieldCheck className="size-3.5" />
+                {t("accounts.detectorOpen")}
+              </Button>
+            ) : null}
+          </div>
           <Button
             variant="outline"
             onClick={() => {
@@ -589,11 +601,11 @@ export default function TestConnectionModal({
           </Button>
           <Button
             type="button"
-            disabled={running || !modelOptionsReady || !selectedModel}
-            onClick={() => setAttempt((value) => value + 1)}
+            disabled={running || !modelOptionsReady || !selectedModel || !testContent.trim()}
+            onClick={startTest}
           >
             <RefreshCw className={cn("size-3.5", running && "animate-spin")} />
-            {t("accounts.testDiagRetry")}
+            {t(status === "idle" ? "accounts.testStart" : "accounts.testDiagRetry")}
           </Button>
         </div>
       }
@@ -616,7 +628,22 @@ export default function TestConnectionModal({
             onValueChange={setSelectedModel}
             options={modelSelectOptions}
             placeholder={model || t("settings.testModel")}
-            disabled={!modelOptionsReady || modelSelectOptions.length === 0}
+            disabled={running || !modelOptionsReady || modelSelectOptions.length === 0}
+            aria-label={t("settings.testModel")}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor="account-test-content" className="text-sm font-medium">
+            {t("settings.testContent")}
+          </label>
+          <textarea
+            className="w-full resize-y rounded-xl border border-input bg-background p-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+            id="account-test-content"
+            rows={4}
+            value={testContent}
+            onChange={(event) => setTestContent(event.target.value)}
+            disabled={running || !modelOptionsReady}
           />
         </div>
 
@@ -878,5 +905,14 @@ export default function TestConnectionModal({
         )}
       </div>
     </Modal>
+    {detectorOpen ? (
+      <ModelDetectorModal
+        account={account}
+        requestModels={modelSelectOptions.map((option) => option.value)}
+        defaultModel={selectedModel}
+        onClose={() => setDetectorOpen(false)}
+      />
+    ) : null}
+    </>
   );
 }

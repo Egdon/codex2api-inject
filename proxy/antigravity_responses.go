@@ -500,13 +500,13 @@ func responsesToGeminiInternal(raw []byte, project, model string) (map[string]an
 	callNames := map[string]string{}
 	systemParts := make([]string, 0, 2)
 	if s, ok := in["instructions"].(string); ok {
-		if s = strings.TrimSpace(s); s != "" {
+		if s = normalizeClientScaffolding(s); s != "" {
 			systemParts = append(systemParts, s)
 		}
 	}
 	switch v := in["input"].(type) {
 	case string:
-		add("user", v)
+		add("user", normalizeClientScaffolding(v))
 	case []any:
 		for _, item := range v {
 			m, ok := item.(map[string]any)
@@ -525,6 +525,9 @@ func responsesToGeminiInternal(raw []byte, project, model string) (map[string]an
 				if partsErr != nil {
 					return nil, partsErr
 				}
+				// Message text carries the harness scaffolding; structured
+				// payloads (function calls, images) are never rewritten.
+				parts = normalizeClientScaffoldingParts(parts)
 				switch role {
 				case "assistant":
 					addParts("model", parts)

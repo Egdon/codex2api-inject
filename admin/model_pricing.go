@@ -273,7 +273,7 @@ func (h *Handler) ListModelPricing(c *gin.Context) {
 		return modelPricingManagementKeys(ids)
 	}
 
-	keys := collect(proxy.SupportedModelIDs(ctx, h.db))
+	keys := collect(h.codexPricingModelIDs(ctx))
 	// Grok 模型不在 Codex 注册表里，但同样对外暴露、同样按 token 计费，
 	// 单独并进来，否则定价页看不到 grok-4.5 这类模型。
 	seen := make(map[string]struct{}, len(keys))

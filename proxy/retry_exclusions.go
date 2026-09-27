@@ -318,6 +318,39 @@ func (r *retryAccountExclusions) ResetTransient() bool {
 	return true
 }
 
+// hasResettable reports request-local exclusions that the selection loop
+// clears itself once the pool pass is exhausted (soft first, then transient).
+func (r *retryAccountExclusions) hasResettable() bool {
+	return r != nil && (len(r.soft) > 0 || len(r.transient) > 0)
+}
+
+// forHardSelection is the exclude set left once every resettable exclusion
+// has been cleared.
+func (r *retryAccountExclusions) forHardSelection() map[int64]bool {
+	if r == nil || len(r.hard) == 0 {
+		return nil
+	}
+	exclude := make(map[int64]bool, len(r.hard))
+	for id := range r.hard {
+		exclude[id] = true
+	}
+	return exclude
+}
+
+// onlyResettableExclusionsBlock reports that a queue wait carrying exclude
+// cannot make progress, but clearing this request's soft/transient
+// exclusions would expose a candidate. Saturation is ignored on both sides,
+// so a pool that is merely busy still waits normally.
+func (h *Handler) onlyResettableExclusionsBlock(affinityKey string, apiKeyID int64, exclusions *retryAccountExclusions, exclude map[int64]bool, filter auth.AccountFilter, preserveBinding bool, policy auth.DispatchPolicy) bool {
+	if !exclusions.hasResettable() {
+		return false
+	}
+	if h.store.HasDispatchCandidate(affinityKey, apiKeyID, exclude, filter, preserveBinding, policy) {
+		return false
+	}
+	return h.store.HasDispatchCandidate(affinityKey, apiKeyID, exclusions.forHardSelection(), filter, preserveBinding, policy)
+}
+
 func (r *retryAccountExclusions) CanContinueTransientCycle() bool {
 	return r != nil && len(r.recoverable) > 0
 }
@@ -536,20 +569,29 @@ func (h *Handler) nextRetryAccountWithGuard(ctx context.Context, affinityKey str
 			return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
 		}
 		h.store.TriggerDispatchStateReconcileAsync()
-		var admissionErr error
-		account, stickyProxyURL, guard, admissionErr = h.waitForRetryAccountAvailableWithGuard(ctx, affinityKey, apiKeyID, exclude, filter, preserveBinding, policy)
-		if account != nil {
+		// When this request's own soft/transient exclusions are all that stand
+		// between it and a candidate, no release or wakeup can satisfy a queue
+		// wait that still carries them: indexed engines would burn the whole
+		// selection budget before reaching the reset below (issue #719). Skip
+		// straight to the reset, as the legacy engine already does; hard
+		// exclusions, cooldowns and filters stay in force, and the caller's
+		// retry interval/backoff still paces the next upstream attempt.
+		if !h.onlyResettableExclusionsBlock(affinityKey, apiKeyID, exclusions, exclude, filter, preserveBinding, policy) {
+			var admissionErr error
+			account, stickyProxyURL, guard, admissionErr = h.waitForRetryAccountAvailableWithGuard(ctx, affinityKey, apiKeyID, exclude, filter, preserveBinding, policy)
+			if account != nil {
+				if ctx.Err() != nil {
+					h.store.Release(account)
+					return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
+				}
+				return account, stickyProxyURL, guard, nil
+			}
 			if ctx.Err() != nil {
-				h.store.Release(account)
 				return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
 			}
-			return account, stickyProxyURL, guard, nil
-		}
-		if ctx.Err() != nil {
-			return nil, "", auth.SessionAffinityGuard{}, ctx.Err()
-		}
-		if admissionErr != nil {
-			return nil, "", auth.SessionAffinityGuard{}, admissionErr
+			if admissionErr != nil {
+				return nil, "", auth.SessionAffinityGuard{}, admissionErr
+			}
 		}
 		if !exclusions.ResetSoft() {
 			if exclusions.ResetTransient() {

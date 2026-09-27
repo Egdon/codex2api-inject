@@ -14,10 +14,10 @@ import (
 //   {originator}/{cli版本} ({os} {os版本}; {arch}) {terminal} ({app名}; {app版本})
 // 末尾标记按形态各不相同:codex-tui / codex_exec 复用前缀与 CLI 版本;ChatGPT 桌面端固定
 // "Codex Desktop" 加桌面端构建号;VS Code 插件写宿主 IDE 名(VS Code / Cursor / Windsurf)
-// 加插件构建号。CLI 版本与构建号成对出现,随意组合会生成真实流量里从未出现过的指纹。
+// 加插件构建号。目录中的历史版本对仅用作未同步时的默认画像。
 //
 // 下面的权重来自 2026-09-07~08 约 6.5 万条去重请求的下游 UA 统计(按百分比取整),
-// 用于:预设默认值、管理页的搭配候选、号池画像分布,以及 CLI 版本→构建号配对。
+// 用于:预设默认值、管理页的搭配候选和号池画像分布。
 
 // CodexClientKind 是可模拟的 Codex 客户端形态。
 type CodexClientKind string
@@ -64,7 +64,7 @@ type codexUAKindSpec struct {
 	AppNames        []codexUAWeighted // 末尾标记名候选,首个为默认
 	Terminals       []codexUAWeighted
 	Platforms       []codexUAPlatform
-	VersionPairs    []codexUAVersionPair // 从新到旧;AppFollowsCLI 时为空
+	VersionPairs    []codexUAVersionPair // 未同步时的画像默认值;AppFollowsCLI 时为空
 }
 
 var codexUAKindOrder = []CodexClientKind{
@@ -347,6 +347,43 @@ func resolveCodexVersionPair(spec *codexUAKindSpec, cliVersion, appVersion, vers
 	return last.CLIVersion, last.AppVersion
 }
 
+type codexVersionSelection struct {
+	OSName       string
+	CLIOverride  string
+	AppOverride  string
+	VersionFloor string
+	Fallback     codexUAVersionPair
+}
+
+// resolveCodexCurrentVersions 优先使用同步缓存，旧画像版本对只作默认值。
+func resolveCodexCurrentVersions(spec *codexUAKindSpec, choice codexVersionSelection) (string, string) {
+	if spec == nil || (spec.Kind != CodexClientKindDesktop && spec.Kind != CodexClientKindVSCode) {
+		return resolveCodexVersionPair(spec, choice.CLIOverride, choice.AppOverride, choice.VersionFloor)
+	}
+	settings := CurrentRuntimeSettings()
+	autoCLI := choice.Fallback.CLIVersion
+	if strings.TrimSpace(settings.CodexSyncedCLIVersion) != "" {
+		autoCLI = effectiveLatestCodexCLIVersion()
+	}
+	autoApp := choice.Fallback.AppVersion
+	hasSyncedApp := false
+	if spec.Kind == CodexClientKindVSCode {
+		hasSyncedApp = strings.TrimSpace(settings.CodexSyncedVSCodeBuild) != ""
+		autoApp = firstNonEmptyString(settings.CodexSyncedVSCodeBuild, autoApp)
+	} else if strings.EqualFold(choice.OSName, "Windows") {
+		hasSyncedApp = strings.TrimSpace(settings.CodexSyncedDesktopWindowsBuild) != ""
+		autoApp = firstNonEmptyString(settings.CodexSyncedDesktopWindowsBuild, autoApp)
+	} else if strings.EqualFold(choice.OSName, "Mac OS") {
+		hasSyncedApp = strings.TrimSpace(settings.CodexSyncedDesktopMacBuild) != ""
+		autoApp = firstNonEmptyString(settings.CodexSyncedDesktopMacBuild, autoApp)
+	}
+	if !hasSyncedApp && choice.CLIOverride != "" && choice.AppOverride == "" {
+		_, autoApp = resolveCodexVersionPair(spec, choice.CLIOverride, "", choice.VersionFloor)
+	}
+	cli := effectiveCodexClientVersion(firstNonEmptyString(choice.CLIOverride, autoCLI), choice.VersionFloor)
+	return cli, firstNonEmptyString(choice.AppOverride, autoApp)
+}
+
 // heaviestCodexPair 返回观测占比最高的配对,作为该形态的默认版本(VS Code 插件主力
 // 停在 0.153.0 而非 CLI 最新版,按"最新"取默认会选到罕见组合)。
 func heaviestCodexPair(pairs []codexUAVersionPair) codexUAVersionPair {
@@ -420,14 +457,14 @@ func codexPoolPersona(cfg CodexUserAgentConfig, accountID int64, versionFloor st
 	if !spec.AppFollowsCLI {
 		appName = pickCodexUAWeighted(spec.AppNames, "app:"+seed)
 	}
-	var cliVersion, appVersion string
-	if spec.AppFollowsCLI {
-		cliVersion, appVersion = resolveCodexVersionPair(spec, "", "", versionFloor)
-	} else if p, picked := pickCodexUAVersionPair(codexPairsMeetingFloor(spec.VersionPairs, versionFloor), "version:"+seed); picked {
-		cliVersion, appVersion = p.CLIVersion, p.AppVersion
-	} else {
-		cliVersion, appVersion = resolveCodexVersionPair(spec, "", "", versionFloor)
+	fallback := codexUAVersionPair{}
+	if len(spec.VersionPairs) > 0 {
+		fallback = heaviestCodexPair(spec.VersionPairs)
+		if pair, picked := pickCodexUAVersionPair(spec.VersionPairs, "version:"+seed); picked {
+			fallback = pair
+		}
 	}
+	cliVersion, appVersion := resolveCodexCurrentVersions(spec, codexVersionSelection{OSName: platform.OSName, VersionFloor: versionFloor, Fallback: fallback})
 	return formatCodexUserAgentWithApp(spec.ClientName, cliVersion, platform.OSName, platform.OSVersion, platform.Arch, terminal, appName, appVersion), cliVersion, true
 }
 
@@ -563,7 +600,7 @@ func PreviewCodexUserAgentConfig(raw, versionFloor string, sampleAccountIDs []in
 	return preview, nil
 }
 
-// codexUserAgentComboWarnings 提示目录里从未出现过的搭配(不阻止保存)。
+// codexUserAgentComboWarnings 提示目录里从未出现过的静态画像字段(不阻止保存)。
 func codexUserAgentComboWarnings(cfg CodexUserAgentConfig, kind CodexClientKind) []string {
 	spec, ok := codexUAKindSpecFor(kind)
 	if !ok || cfg.RawUserAgent != "" {
@@ -584,19 +621,6 @@ func codexUserAgentComboWarnings(cfg CodexUserAgentConfig, kind CodexClientKind)
 		}
 		if !codexUAHasPlatform(spec.Platforms, platform) {
 			warnings = append(warnings, "platform")
-		}
-	}
-	if !spec.AppFollowsCLI && cfg.AppVersion != "" {
-		cli := firstNonEmptyString(cfg.ClientVersion, spec.VersionPairs[0].CLIVersion)
-		known := false
-		for _, p := range spec.VersionPairs {
-			if p.CLIVersion == cli && p.AppVersion == cfg.AppVersion {
-				known = true
-				break
-			}
-		}
-		if !known {
-			warnings = append(warnings, "version_pair")
 		}
 	}
 	return warnings

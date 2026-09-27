@@ -389,8 +389,7 @@ func (e *Executor) prepareWebsocketHeaders(ctx context.Context, accessToken stri
 	} else {
 		headers.Set("Originator", proxy.Originator)
 	}
-	// X-Oai-Attestation：DeviceCheck 设备认证头（上游 openai/codex#20619），
-	// 仅在下游携带时透传，本代理不伪造（假 token 服务端验证必败，反而暴露）。
+	// 先透传下游证明；Windows Desktop 身份缺失时在账号自定义头之后补不可用状态。
 	for _, name := range []string{"X-Codex-Turn-State", "X-Codex-Turn-Metadata", "X-Client-Request-Id", "X-Responsesapi-Include-Timing-Metrics", "X-Oai-Attestation"} {
 		if value := strings.TrimSpace(ginHeaders.Get(name)); value != "" {
 			headers.Set(name, value)
@@ -423,6 +422,7 @@ func (e *Executor) prepareWebsocketHeaders(ctx context.Context, accessToken stri
 		}
 		headers.Set(name, value)
 	}
+	proxy.ApplyWindowsDesktopAttestation(headers, account)
 
 	// routing hint 由网关按最终 WS 帧体合成，在账号自定义头之后设置。
 	// 握手头逐连接冻结：复用连接沿用建连时的 hint，语义为拨号期软亲和。

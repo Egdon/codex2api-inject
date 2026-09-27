@@ -173,7 +173,7 @@ func applyReasoningEffortModelToBody(rawBody []byte, entry ReasoningEffortModel)
 	return updatedBody, nil
 }
 
-func (h *Handler) applyConfiguredModelMappingToBody(rawBody []byte, supportedModels []string) ([]byte, string, string, bool) {
+func (h *Handler) applyBaseModelMappingToBody(rawBody []byte, supportedModels []string) ([]byte, string, string, bool) {
 	originalModel := strings.TrimSpace(gjson.GetBytes(rawBody, "model").String())
 	effectiveModel := originalModel
 	if originalModel == "" || !gjson.ValidBytes(rawBody) || h == nil || h.store == nil {

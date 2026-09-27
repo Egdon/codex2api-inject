@@ -124,3 +124,125 @@ func TestSelectionDeadlineStopsPoolWait(t *testing.T) {
 		t.Fatalf("leaked %d queue waiters", got)
 	}
 }
+
+// issue #719: when the request's own soft/transient exclusions cover every
+// eligible account, the queue wait cannot make progress; selection must reset
+// them instead of spending the whole selection budget waiting.
+func TestSelectionResetsRequestExclusionsCoveringWholePool(t *testing.T) {
+	marks := map[string]func(*retryAccountExclusions, int64){
+		"transient": (*retryAccountExclusions).MarkTransient,
+		"soft":      (*retryAccountExclusions).MarkSoft,
+	}
+	for _, engine := range []string{"legacy", "indexed"} {
+		for kind, mark := range marks {
+			t.Run(engine+"/"+kind, func(t *testing.T) {
+				store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 1, SchedulerEngine: engine})
+				t.Cleanup(store.Stop)
+				account := &auth.Account{DBID: 1, AccessToken: "test-token", Status: auth.StatusReady}
+				store.AddAccount(account)
+				exclusions := newRetryAccountExclusions()
+				mark(exclusions, account.DBID)
+
+				h := &Handler{store: store}
+				start := time.Now()
+				got, _, _, err := h.nextRetryAccountWithGuard(context.Background(), "", 0, exclusions, nil, false, auth.DispatchPolicyStandard)
+				if err != nil || got != account {
+					t.Fatalf("selection = %v, %v; want the %s-excluded account after reset", got, err, kind)
+				}
+				store.Release(got)
+				if elapsed := time.Since(start); elapsed > time.Second {
+					t.Fatalf("selection took %s", elapsed)
+				}
+				metrics := store.GetSchedulerMetrics()
+				if metrics.WaitStarted != 0 || metrics.WaitTimeouts != 0 {
+					t.Fatalf("queue waits started=%d timeouts=%d, want 0", metrics.WaitStarted, metrics.WaitTimeouts)
+				}
+			})
+		}
+	}
+}
+
+func TestSelectionTransientResetKeepsHardExclusions(t *testing.T) {
+	for _, engine := range []string{"legacy", "indexed"} {
+		t.Run(engine, func(t *testing.T) {
+			store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 1, SchedulerEngine: engine})
+			t.Cleanup(store.Stop)
+			hard := &auth.Account{DBID: 1, AccessToken: "test-token", Status: auth.StatusReady}
+			transient := &auth.Account{DBID: 2, AccessToken: "test-token", Status: auth.StatusReady}
+			store.AddAccount(hard)
+			store.AddAccount(transient)
+			exclusions := newRetryAccountExclusions()
+			exclusions.MarkHard(hard.DBID)
+			exclusions.MarkTransient(transient.DBID)
+
+			h := &Handler{store: store}
+			for i := 0; i < 3; i++ {
+				got, _, _, err := h.nextRetryAccountWithGuard(context.Background(), "", 0, exclusions, nil, false, auth.DispatchPolicyStandard)
+				if err != nil || got != transient {
+					t.Fatalf("round %d selection = %v, %v; want only the transient account", i, got, err)
+				}
+				store.Release(got)
+				exclusions.MarkTransient(transient.DBID)
+			}
+		})
+	}
+}
+
+func TestSelectionTransientResetKeepsAccountCooldown(t *testing.T) {
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 1, SchedulerEngine: "indexed"})
+	t.Cleanup(store.Stop)
+	account := &auth.Account{DBID: 1, AccessToken: "test-token", Status: auth.StatusReady}
+	store.AddAccount(account)
+	store.MarkCooldown(account, time.Hour, "rate_limited")
+	exclusions := newRetryAccountExclusions()
+	exclusions.MarkTransient(account.DBID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	h := &Handler{store: store}
+	got, _, _, err := h.nextRetryAccountWithGuard(ctx, "", 0, exclusions, nil, false, auth.DispatchPolicyStandard)
+	if got != nil {
+		store.Release(got)
+		t.Fatal("transient reset bypassed the account cooldown")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("selection error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// A saturated but otherwise eligible account is real queue progress: the
+// transient exclusion on another account must not short-circuit that wait.
+func TestSelectionStillWaitsForSaturatedCandidate(t *testing.T) {
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 1, SchedulerEngine: "indexed"})
+	t.Cleanup(store.Stop)
+	busy := &auth.Account{DBID: 1, AccessToken: "test-token", Status: auth.StatusReady}
+	failed := &auth.Account{DBID: 2, AccessToken: "test-token", Status: auth.StatusReady}
+	store.AddAccount(busy)
+	store.AddAccount(failed)
+	exclusions := newRetryAccountExclusions()
+	exclusions.MarkTransient(failed.DBID)
+
+	h := &Handler{store: store}
+	held, _, _, err := h.nextRetryAccountWithGuard(context.Background(), "", 0, exclusions, nil, false, auth.DispatchPolicyStandard)
+	if err != nil || held != busy {
+		t.Fatalf("setup selection = %v, %v", held, err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		store.Release(held)
+		close(released)
+	}()
+	got, _, _, err := h.nextRetryAccountWithGuard(context.Background(), "", 0, exclusions, nil, false, auth.DispatchPolicyStandard)
+	<-released
+	if err != nil || got != busy {
+		t.Fatalf("selection = %v, %v; want the released saturated account", got, err)
+	}
+	store.Release(got)
+	if metrics := store.GetSchedulerMetrics(); metrics.WaitStarted != 1 {
+		t.Fatalf("queue waits started = %d, want 1", metrics.WaitStarted)
+	}
+	if !exclusions.transient[failed.DBID] {
+		t.Fatal("waiting for a saturated account cleared the transient exclusion")
+	}
+}

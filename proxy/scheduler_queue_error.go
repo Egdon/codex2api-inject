@@ -43,6 +43,8 @@ func writeSchedulerQueueError(c *gin.Context, err error, protocol continuousRetr
 	}
 	message := apiErr.Message
 	switch protocol {
+	case continuousRetryProtocolGemini:
+		writeGeminiNativeError(c, http.StatusServiceUnavailable, message)
 	case continuousRetryProtocolAnthropic:
 		if !writeCommittedAnthropicRetryError(c, "overloaded_error", message) {
 			sendAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", message)

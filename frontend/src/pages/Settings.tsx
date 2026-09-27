@@ -2195,6 +2195,7 @@ export default function Settings() {
     proxy_pool_enabled: false,
     fast_scheduler_enabled: false,
     scheduler_engine: 'legacy',
+    auto_reset_credits_on_exhaustion_enabled: false,
     auto_reset_credits_enabled: false,
     auto_reset_credits_before_expiry_min: 60,
     auto_activate_5h_window_enabled: false,
@@ -2363,6 +2364,8 @@ export default function Settings() {
   const [syncedCliVersion, setSyncedCliVersion] = useState('')
   // 实际用于出站 UA 的版本(内置与同步取大);「设为同步版本」按钮以它为准,同步值过期/为空时不会把门槛设低
   const [effectiveCliVersion, setEffectiveCliVersion] = useState('')
+  const [syncedAppBuilds, setSyncedAppBuilds] = useState({ desktop_mac: '', desktop_windows: '', vscode: '' })
+  const [clientSyncErrors, setClientSyncErrors] = useState<string[]>([])
   const logoFileInputRef = useRef<HTMLInputElement>(null)
   const backgroundFileInputRef = useRef<HTMLInputElement>(null)
   const persistedBrandingRef = useRef<Partial<SiteBranding> | null>(null)
@@ -2652,6 +2655,11 @@ export default function Settings() {
     setLoadedAdminSecret(settings.admin_secret ?? '')
     setSyncedCliVersion(settings.codex_synced_cli_version ?? '')
     setEffectiveCliVersion(settings.codex_effective_cli_version ?? '')
+    setSyncedAppBuilds({
+      desktop_mac: settings.codex_synced_desktop_mac_build ?? '',
+      desktop_windows: settings.codex_synced_desktop_windows_build ?? '',
+      vscode: settings.codex_synced_vscode_build ?? '',
+    })
     setModelList(modelsResp.models ?? [])
     setModelItems(modelsResp.items ?? [])
     setModelsLastSyncedAt(modelsResp.last_synced_at)
@@ -2824,14 +2832,21 @@ export default function Settings() {
 
   const handleSyncCliVersion = async () => {
     setSyncingCliVersion(true)
+    setClientSyncErrors([])
     try {
-      const result = await api.syncCodexCLIVersion()
-      setSyncedCliVersion(result.effective_version)
-      setEffectiveCliVersion(result.effective_version)
-      showToast(t('settings.cliVersionSyncSuccess', {
-        version: result.effective_version,
-        fetched: result.fetched_version || '-',
-      }))
+      const result = await api.syncCodexClientVersions()
+      setSyncedCliVersion(result.cli.synced_version || '')
+      setEffectiveCliVersion(result.cli.effective_version)
+      setSyncedAppBuilds({
+        desktop_mac: result.desktop_mac.effective_version,
+        desktop_windows: result.desktop_windows.effective_version,
+        vscode: result.vscode.effective_version,
+      })
+      const errors = (['cli', 'desktop_mac', 'desktop_windows', 'vscode'] as const)
+        .filter((kind) => result[kind].error)
+        .map((kind) => `${kind}: ${result[kind].error}`)
+      setClientSyncErrors(errors)
+      showToast(errors.length ? t('settings.clientVersionSyncPartial') : t('settings.clientVersionSyncSuccess'), errors.length ? 'error' : 'success')
     } catch (error) {
       showToast(`${t('settings.cliVersionSyncFailed')}: ${getErrorMessage(error)}`, 'error')
     } finally {
@@ -3055,10 +3070,23 @@ export default function Settings() {
   const codexUAShowAppNamePreset = codexUAKind !== 'custom' && !codexUAAppFollowsCLI && (codexUAKindSpec?.app_names?.length ?? 0) > 1
   const codexUAClientVersionPlaceholder = (() => {
     const pairs = codexUAKindSpec?.version_pairs ?? []
+    if ((codexUAKind === 'codex-desktop' || codexUAKind === 'codex-vscode') && syncedCliVersion) {
+      return effectiveCliVersion
+    }
     if (pairs.length > 0) {
       return pairs.reduce((best, pair) => (pair.weight > best.weight ? pair : best), pairs[0]).cli_version
     }
     return settingsForm.codex_synced_cli_version || DEFAULT_CODEX_UA_CONFIG.client_version
+  })()
+  const codexUAAppVersionPlaceholder = (() => {
+    if (codexUAAppFollowsCLI) return t('settings.codexUAFollowsClient')
+    if (codexUAKind === 'codex-vscode') return syncedAppBuilds.vscode || t('settings.codexUAAutoPaired')
+    if (codexUAKind === 'codex-desktop') {
+      const synced = codexUAEffectivePlatform.os_name === 'Windows' ? syncedAppBuilds.desktop_windows
+        : codexUAEffectivePlatform.os_name === 'Mac OS' ? syncedAppBuilds.desktop_mac : ''
+      return synced || t('settings.codexUAAutoPaired')
+    }
+    return t('settings.codexUAAutoPaired')
   })()
   const codexUAPoolMixValue = (kind: CodexUAKind) => {
     const weight = codexUserAgentConfig.pool_mix?.[kind]
@@ -3384,6 +3412,17 @@ export default function Settings() {
                 icon={<RefreshCw className="size-4" />}
               >
                 <div className={cn(SETTINGS_SWITCH_GRID, 'items-stretch')}>
+                  <SettingField
+                    label={t('settings.autoResetCreditsOnExhaustionEnabled')}
+                    description={t('settings.autoResetCreditsOnExhaustionDesc')}
+                    layout="switch"
+                    className="h-full"
+                  >
+                    <Switch
+                      checked={settingsForm.auto_reset_credits_on_exhaustion_enabled}
+                      onCheckedChange={(checked) => autoSaveBooleanField('auto_reset_credits_on_exhaustion_enabled', checked)}
+                    />
+                  </SettingField>
                   <SettingField
                     label={t('settings.autoResetCreditsEnabled')}
                     description={t('settings.autoResetCreditsEnabledDesc')}
@@ -4050,9 +4089,13 @@ export default function Settings() {
                           <RefreshCw className={cn('size-3.5', syncingCliVersion && 'animate-spin')} />
                           {syncingCliVersion ? t('settings.cliVersionSyncing') : t('settings.cliVersionSyncNow')}
                         </Button>
-                        {syncedCliVersion && (
-                          <span className="font-mono text-xs text-muted-foreground">{syncedCliVersion}</span>
-                        )}
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
+                          <span>CLI: {effectiveCliVersion || '-'}</span>
+                          <span>Desktop macOS: {syncedAppBuilds.desktop_mac || '-'}</span>
+                          <span>Desktop Windows: {syncedAppBuilds.desktop_windows || '-'}</span>
+                          <span>VSCode: {syncedAppBuilds.vscode || '-'}</span>
+                        </div>
+                        {clientSyncErrors.map((error) => <span key={error} className="block text-xs text-destructive">{error}</span>)}
                       </div>
                     </SettingField>
                     <SettingField
@@ -4277,7 +4320,7 @@ export default function Settings() {
                         <SettingField label={t('settings.codexUAAppVersion')} description={t('settings.codexUAAppVersionDesc')}>
                           <Input
                             value={codexUserAgentConfig.app_version ?? ''}
-                            placeholder={codexUAAppFollowsCLI ? t('settings.codexUAFollowsClient') : t('settings.codexUAAutoPaired')}
+                            placeholder={codexUAAppVersionPlaceholder}
                             disabled={codexUAAppFollowsCLI}
                             onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ app_version: e.target.value })}
                             onBlur={saveCodexUserAgentConfig}
@@ -4458,7 +4501,9 @@ export default function Settings() {
                                     ? t('settings.modelSourceOfficial')
                                     : model.source === 'reasoning_effort'
                                       ? t('settings.modelSourceReasoning')
-                                      : t('settings.modelSourceBuiltin')}
+                                      : model.source === 'daybreak'
+                                        ? 'Daybreak'
+                                        : t('settings.modelSourceBuiltin')}
                                 </Badge>
                                 {model.pro_only ? (
                                   <Badge variant="outline" className="text-[11px]">{t('settings.modelProOnly')}</Badge>

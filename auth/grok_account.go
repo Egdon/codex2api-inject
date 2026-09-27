@@ -1658,6 +1658,7 @@ func (s *Store) ApplyGrokConfig(dbID int64, baseURL, apiKey string, models []str
 		// discard any runtime observations immediately so old facts cannot route
 		// the newly configured key before the account is reloaded.
 		acc.GrokLivePlanKnown = false
+		acc.GrokDisplayPlan = ""
 		acc.GrokAccessAllowed = nil
 		acc.GrokBillingExhausted = false
 		acc.GrokFactsGeneration = 0

@@ -172,7 +172,7 @@ func grokMediaPreferredAccountFilter(model string) auth.AccountFilter {
 		if account.GrokAuthKind() == auth.GrokAuthKindAPIKey {
 			return true
 		}
-		plan := strings.ToLower(strings.TrimSpace(account.GetPlanType()))
+		plan := account.GrokPlanHint(time.Now())
 		return plan != "" && plan != "free"
 	}
 }
