@@ -79,7 +79,7 @@ func (b *Bridge) translateNativePlan(native object) (object, error) {
 	if selected.Namespace != "" {
 		result["namespace"] = selected.Namespace
 	}
-	b.replay.put(b.scope, callID, native, result)
+	b.replay.putNative(b.scope, callID, native, result)
 	return result, nil
 }
 
