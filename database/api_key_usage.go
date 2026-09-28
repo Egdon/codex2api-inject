@@ -737,13 +737,17 @@ type APIKeySelfUsageLog struct {
 // populateBillingBreakdown 复用与管理端一致的计费拆解逻辑，按生效模型、Daybreak 程序与计费档位
 // 还原输入/输出/缓存读取的费用与单价，并在与实际计费总额不一致时等比缩放对齐。
 func (l *APIKeySelfUsageLog) populateBillingBreakdown() {
-	if l.UserBillingMode == UserBillingModePerImage {
+	if IsUnitUserBillingMode(l.UserBillingMode) {
 		l.TotalCost = l.UserBilled
 		return
 	}
 	billingModel := l.EffectiveModel
 	if billingModel == "" {
 		billingModel = l.Model
+	}
+	if MediaBillingUnit(billingModel) != "" {
+		l.TotalCost = l.UserBilled
+		return
 	}
 	breakdown := UsageLogCostBreakdown(&UsageLogInput{Model: billingModel, DaybreakProgram: l.DaybreakProgram, ServiceTier: l.ServiceTier, InputTokens: l.InputTokens, OutputTokens: l.OutputTokens, CachedTokens: l.CachedTokens, ImageInputTokens: l.ImageInputTokens, ImageOutputTokens: l.ImageOutputTokens, CachedImageInputTokens: l.CachedImageInputTokens})
 	l.InputCost = breakdown.InputCost

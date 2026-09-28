@@ -599,6 +599,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"usage_logs", "user_billing_mode", "TEXT DEFAULT ''"},
 		{"usage_logs", "image_unit_price", "REAL DEFAULT 0"},
 		{"usage_logs", "billed_image_count", "INTEGER DEFAULT 0"},
+		{"usage_logs", "video_seconds", "INTEGER DEFAULT 0"},
 		{"usage_logs", "image_count", "INTEGER DEFAULT 0"},
 		{"usage_logs", "image_width", "INTEGER DEFAULT 0"},
 		{"usage_logs", "image_height", "INTEGER DEFAULT 0"},

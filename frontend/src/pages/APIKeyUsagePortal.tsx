@@ -1,4 +1,5 @@
 import { ImageBillingCost } from '../components/image-studio/ImageBillingCost'
+import { mediaBillingUnit } from '../lib/imageBilling'
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
@@ -1124,12 +1125,17 @@ function RecentLogsTable({
 // LogCostCell —— 价格列：悬停展示输入/输出/缓存的费用与单价明细（与管理端口径一致）
 function LogCostCell({ log }: { log: PublicAPIKeyUsageLog }) {
   const { t } = useTranslation()
-  if (log.user_billing_mode === 'per_image') return <ImageBillingCost count={log.billed_image_count} unitPrice={log.image_unit_price} userBilled={log.user_billed} />
+  const mode = log.user_billing_mode || ''
+  if (mode === 'per_image' || mode === 'per_video' || mode === 'per_second') return <ImageBillingCost mode={mode} count={log.billed_image_count} unitPrice={log.image_unit_price} userBilled={log.user_billed} />
   const hasCostContext = log.status_code < 400 && (
     log.user_billed > 0 || log.total_cost > 0 || log.input_tokens > 0 || log.output_tokens > 0 || log.cached_tokens > 0
   )
   if (!hasCostContext) {
     return <span className="font-mono text-[13px] text-muted-foreground">-</span>
+  }
+  // 媒体模型按张/秒折算上游成本,没有 token 分项可拆,直接展示金额。
+  if (mediaBillingUnit(log.effective_model || log.model)) {
+    return <span className="font-mono text-[13px] font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{formatUSD(log.user_billed)}</span>
   }
   return (
     <Tooltip>

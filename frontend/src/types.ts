@@ -3518,9 +3518,15 @@ export interface APIKeyAccountStatsResponse {
   membership_basis: 'current_and_deleted_last_membership'
 }
 
+export type UserBillingMode = 'token' | 'per_image' | 'per_video' | 'per_second'
+
 export interface UsageLog {
-  user_billing_mode?: '' | 'token' | 'per_image'
+  /** Generated video duration (seconds) on Grok video settlement rows. */
+  video_seconds?: number
+  user_billing_mode?: '' | UserBillingMode
+  /** Unit price for unit billing modes (per image / video / second). */
   image_unit_price?: number
+  /** Billed units: images, videos or seconds depending on user_billing_mode. */
   billed_image_count?: number
   request_id?: string
   upstream_request_id?: string
@@ -3659,8 +3665,10 @@ export interface ChartAggregation {
 }
 
 export interface ModelPricingOverride {
-  user_billing_mode?: 'token' | 'per_image'
+  user_billing_mode?: UserBillingMode
   image_unit_price?: number
+  /** Upstream cost per media unit (USD / image or USD / second) for Grok Imagine models. */
+  media_unit_cost?: number
   image_input?: number
   cached_image_input?: number
   source?: string
@@ -4003,8 +4011,10 @@ export interface PublicAPIKeyUsageBreakdown {
 }
 
 export interface PublicAPIKeyUsageLog {
-  user_billing_mode?: '' | 'token' | 'per_image'
+  user_billing_mode?: '' | UserBillingMode
+  /** Unit price for unit billing modes (per image / video / second). */
   image_unit_price?: number
+  /** Billed units: images, videos or seconds depending on user_billing_mode. */
   billed_image_count?: number
   id: number
   endpoint: string
