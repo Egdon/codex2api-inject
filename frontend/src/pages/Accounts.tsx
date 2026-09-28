@@ -7,6 +7,9 @@ import type { ProxyRow } from "../api";
 import { ProxyField } from "../components/ProxyField";
 import AccountProxyBadge from "../components/AccountProxyBadge";
 import AccountProxyQuickEditor from "../components/AccountProxyQuickEditor";
+import AccountHrefQuickEditor, {
+  openAccountHref,
+} from "../components/AccountHrefQuickEditor";
 import SubscriptionBadge from "../components/SubscriptionBadge";
 import {
   buildProxyBindingContext,
@@ -155,6 +158,7 @@ import {
   EyeOff,
   KeyRound,
   ExternalLink,
+  Link2,
   FileText,
   FileJson,
   BarChart3,
@@ -1083,6 +1087,8 @@ interface AccountRowActions {
   openChannelMonitor: (account: AccountRow) => void;
   openQuickGroupEditor: (account: AccountRow) => void;
   openQuickProxyEditor: (account: AccountRow) => void;
+  openHrefEditor: (account: AccountRow) => void;
+  openHref: (account: AccountRow) => void;
   openUsage: (account: AccountRow) => void;
   // 直接打开用量弹窗的官方统计 tab（成本列的官方胶囊）。
   openOfficialUsage: (account: AccountRow) => void;
@@ -1251,19 +1257,38 @@ const AccountTableRow = memo(function AccountTableRow({
                                   )}
                                 </span>
                                 <div className="flex min-w-0 flex-col items-start gap-1">
-                                  <button
-                                    type="button"
-                                    className="break-all text-left font-medium text-foreground transition-colors hover:text-primary"
-                                    title={t("accounts.openDetail")}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      actions.openDetail(account);
-                                    }}
-                                  >
-                                    {account.openai_responses_api || account.grok_api
-                                      ? formatAccountName(account)
-                                      : formatAccountListEmail(account)}
-                                  </button>
+                                  <div className="flex max-w-full items-start gap-1">
+                                    <button
+                                      type="button"
+                                      className="min-w-0 break-all text-left font-medium text-foreground transition-colors hover:text-primary"
+                                      title={t("accounts.openDetail")}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        actions.openDetail(account);
+                                      }}
+                                    >
+                                      {account.openai_responses_api || account.grok_api
+                                        ? formatAccountName(account)
+                                        : formatAccountListEmail(account)}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
+                                      title={t("accounts.hrefClickHint")}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        // 点击 = 跳转（account_href → base_url
+                                        // 回退）；Alt/Option+点击 = 打开配置弹窗。
+                                        if (event.altKey) {
+                                          actions.openHrefEditor(account);
+                                        } else {
+                                          actions.openHref(account);
+                                        }
+                                      }}
+                                    >
+                                      <Link2 className="size-3" />
+                                    </button>
+                                  </div>
                                   {account.effective_workspace_id && (
                                     <span
                                       className={cn(
@@ -1701,6 +1726,8 @@ const AccountCardItem = memo(function AccountCardItem({
       t={t}
       onToggleSelect={() => actions.toggleSelect(account.id)}
       onOpenDetail={() => actions.openDetail(account)}
+      onOpenHref={() => actions.openHref(account)}
+      onOpenHrefEditor={() => actions.openHrefEditor(account)}
       onEdit={() => actions.openSchedulerEditor(account)}
       onEditGroups={() => actions.openQuickGroupEditor(account)}
       onEditProxy={() => actions.openQuickProxyEditor(account)}
@@ -2100,6 +2127,8 @@ export default function Accounts() {
   const [quickProxyAccount, setQuickProxyAccount] = useState<AccountRow | null>(
     null,
   );
+  // 跳转地址快捷编辑：配置 account_href 或回退打开 base_url。
+  const [hrefAccount, setHrefAccount] = useState<AccountRow | null>(null);
   // OAuth 账号“支持模型”白名单编辑器状态;空白名单表示该账号可调度所有模型。
   const [modelsAccount, setModelsAccount] = useState<AccountRow | null>(null);
   const [modelsDraft, setModelsDraft] = useState<string[]>([]);
@@ -6043,6 +6072,12 @@ export default function Accounts() {
     openChannelMonitor: (account) => setChannelMonitorAccount(account),
     openQuickGroupEditor,
     openQuickProxyEditor: (account) => setQuickProxyAccount(account),
+    openHrefEditor: (account) => setHrefAccount(account),
+    openHref: (account) => {
+      if (!openAccountHref(account)) {
+        setHrefAccount(account);
+      }
+    },
     openUsage: (account) => {
       setUsageInitialPage("overview");
       setUsageAccount(account);
@@ -6071,6 +6106,8 @@ export default function Accounts() {
       openChannelMonitor: (a) => rowActionsImplRef.current?.openChannelMonitor(a),
       openQuickGroupEditor: (a) => rowActionsImplRef.current?.openQuickGroupEditor(a),
       openQuickProxyEditor: (a) => rowActionsImplRef.current?.openQuickProxyEditor(a),
+      openHrefEditor: (a) => rowActionsImplRef.current?.openHrefEditor(a),
+      openHref: (a) => rowActionsImplRef.current?.openHref(a),
       openUsage: (a) => rowActionsImplRef.current?.openUsage(a),
       openOfficialUsage: (a) => rowActionsImplRef.current?.openOfficialUsage(a),
       openTesting: (a) => rowActionsImplRef.current?.openTesting(a),
@@ -10137,6 +10174,15 @@ export default function Accounts() {
             }}
           />
 
+          <AccountHrefQuickEditor
+            account={hrefAccount}
+            accountLabel={hrefAccount ? formatAccountName(hrefAccount) : ""}
+            onClose={() => setHrefAccount(null)}
+            onSaved={async () => {
+              await reload();
+            }}
+          />
+
           <Modal
             show={Boolean(quickGroupAccount)}
             title={t("accounts.groupQuickTitle")}
@@ -13601,6 +13647,8 @@ function AccountMobileCard({
   t,
   onToggleSelect,
   onOpenDetail,
+  onOpenHref,
+  onOpenHrefEditor,
   onEdit,
   onEditGroups,
   onEditProxy,
@@ -13635,6 +13683,8 @@ function AccountMobileCard({
   t: ReturnType<typeof useTranslation>["t"];
   onToggleSelect: () => void;
   onOpenDetail: () => void;
+  onOpenHref: () => void;
+  onOpenHrefEditor: () => void;
   onEdit: () => void;
   onEditGroups: () => void;
   onEditProxy: () => void;
@@ -13709,14 +13759,32 @@ function AccountMobileCard({
             {avatarInitial}
           </button>
           <div className="min-w-0 flex-1">
-            <button
-              type="button"
-              className="codex-account-card__name"
-              title={fullName}
-              onClick={onOpenDetail}
-            >
-              {displayName}
-            </button>
+            <div className="flex min-w-0 items-center gap-1">
+              <button
+                type="button"
+                className="codex-account-card__name min-w-0 flex-1"
+                title={fullName}
+                onClick={onOpenDetail}
+              >
+                {displayName}
+              </button>
+              <button
+                type="button"
+                className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
+                title={t("accounts.hrefClickHint")}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  // 与表格行同口径：点击跳转，Alt/Option+点击配置。
+                  if (event.altKey) {
+                    onOpenHrefEditor();
+                  } else {
+                    onOpenHref();
+                  }
+                }}
+              >
+                <Link2 className="size-3" />
+              </button>
+            </div>
             {chatgptAccountId && (
               <div
                 className="codex-account-card__chatgpt-id"

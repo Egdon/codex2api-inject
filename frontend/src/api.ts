@@ -117,6 +117,7 @@ import type {
   PromptReviewTestRequest,
   PromptReviewTestResponse,
   PromptReviewAPIKeysResponse,
+  PublicAPIKeyUsageLogFilter,
   PublicAPIKeyUsageResponse,
   ImageStudioQuota,
   RecycleBinAccountsResponse,
@@ -555,11 +556,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  getPublicAPIKeyUsage: (apiKey: string, range = '30d', params: { page?: number; pageSize?: number } = {}) => {
+  getPublicAPIKeyUsage: (apiKey: string, range = '30d', params: { page?: number; pageSize?: number } & PublicAPIKeyUsageLogFilter = {}) => {
     const search = new URLSearchParams()
     search.set('range', range)
     if (params.page) search.set('page', String(params.page))
     if (params.pageSize) search.set('page_size', String(params.pageSize))
+    if (params.model) search.set('model', params.model)
+    if (params.endpoint) search.set('endpoint', params.endpoint)
+    if (params.status) search.set('status', params.status)
+    if (params.stream) search.set('stream', params.stream)
+    if (params.channel) search.set('channel', params.channel)
     return requestAPIKeyUsage<PublicAPIKeyUsageResponse>(`/summary?${search.toString()}`, apiKey)
   },
   getPortalImageQuota: (apiKey: string) =>

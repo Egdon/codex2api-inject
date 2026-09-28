@@ -727,9 +727,9 @@ func (h *Handler) forwardGrokImagesRequest(c *gin.Context, inboundEndpoint, imag
 			StatusCode: http.StatusOK, DurationMs: int(time.Since(start).Milliseconds()),
 			InboundEndpoint: inboundEndpoint, UpstreamEndpoint: inboundEndpoint, Stream: false,
 		}
-		logInput.CompletionTokens = imageCount
-		logInput.OutputTokens = imageCount
-		logInput.TotalTokens = imageCount
+		// 媒体按张计费(image_count),不再把张数塞进输出 token 冒充用量;
+		// 上游自报的成本(usage.cost_in_usd_ticks)优先作为账号成本。
+		logInput.UpstreamCostUSD = grokUpstreamCostUSD(out)
 		applyImageUsageLogInfo(logInput, grokImagesUsageLogInfo(out))
 		if !claimContinuousRetrySuccess(c, continuousRetryProtocolOpenAI) {
 			h.store.Release(account)
@@ -774,8 +774,8 @@ func buildGrokVideoBody(rawBody []byte, model, profileKind string) []byte {
 	if prompt := strings.TrimSpace(gjson.GetBytes(rawBody, "prompt").String()); prompt != "" {
 		body, _ = sjson.SetBytes(body, "prompt", prompt)
 	}
-	if v := gjson.GetBytes(rawBody, "duration"); v.Exists() && v.Int() > 0 {
-		body, _ = sjson.SetBytes(body, "duration", v.Int())
+	if seconds := grokVideoExplicitSeconds(rawBody); seconds > 0 {
+		body, _ = sjson.SetBytes(body, "duration", seconds)
 	}
 	for _, field := range []string{"aspect_ratio", "resolution"} {
 		if value := strings.TrimSpace(gjson.GetBytes(rawBody, field).String()); value != "" {
@@ -1101,11 +1101,14 @@ func (h *Handler) grokVideoCreate(c *gin.Context, operation string) {
 			return
 		}
 		h.storeGrokVideoBinding(c.Request.Context(), requestID, grokVideoBinding{
-			AccountID: account.ID(),
-			APIKeyID:  apiKeyID,
-			Profile:   result.Profile.Kind,
-			Model:     result.Model,
-			CreatedAt: time.Now().Unix(),
+			AccountID:        account.ID(),
+			APIKeyID:         apiKeyID,
+			Profile:          result.Profile.Kind,
+			Model:            result.Model,
+			CreatedAt:        time.Now().Unix(),
+			RequestModel:     requestModel,
+			EffectiveModel:   logEffectiveModel,
+			RequestedSeconds: grokVideoRequestedSeconds(rawBody, operation),
 		})
 
 		account.Mu().RLock()
@@ -1144,6 +1147,11 @@ type grokVideoBinding struct {
 	Profile   string `json:"profile"`
 	Model     string `json:"model"`
 	CreatedAt int64  `json:"created_at"`
+	// 以下字段供完成时结算:下游请求模型/映射后生效模型(与提交行一致的计费口径),
+	// 以及请求时长(上游状态体缺 video.duration 时的兜底计费秒数)。
+	RequestModel     string `json:"request_model,omitempty"`
+	EffectiveModel   string `json:"effective_model,omitempty"`
+	RequestedSeconds int    `json:"requested_seconds,omitempty"`
 }
 
 func validGrokVideoRequestID(id string) bool {
@@ -1208,6 +1216,7 @@ func (h *Handler) resolveGrokVideoBinding(c *gin.Context, requestID string) (gro
 // 账号;done 状态里的上游资产 URL 重写为本网关的 /content 代理地址(上游签名
 // URL 会过期,统一走网关下载)。
 func (h *Handler) VideosStatus(c *gin.Context) {
+	start := time.Now()
 	requestID := strings.TrimSpace(c.Param("request_id"))
 	if !validGrokVideoRequestID(requestID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "Invalid request: request_id is invalid", "type": "invalid_request_error"}})
@@ -1231,6 +1240,9 @@ func (h *Handler) VideosStatus(c *gin.Context) {
 	defer resp.Body.Close()
 	recordGrokUpstreamObservations(account, resp.Header)
 	out, _ := io.ReadAll(io.LimitReader(resp.Body, grokVideoStatusBodyLimit))
+	// 终态(done/failed/expired)在首次被观察到时结算一次;引擎过载等失败可能以
+	// 非 2xx 携带 failed 状态体返回,因此先于状态码分支处理。
+	h.settleGrokVideo(c, requestID, binding, out, int(time.Since(start).Milliseconds()))
 	// 任务进行中上游以 202 携带 {"status":"pending","progress":N} 返回,
 	// 与 200 一样是合法状态体;统一以 200 透传,轮询客户端只看 body.status。
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {

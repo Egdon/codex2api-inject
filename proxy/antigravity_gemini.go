@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/codex2api/auth"
-	"github.com/tidwall/gjson"
 )
 
 // ExecuteAntigravityGeminiRequest forwards a native Gemini generateContent request
@@ -344,21 +343,6 @@ func antigravityGeminiPartHasThoughtSignature(part map[string]any) bool {
 		}
 	}
 	return false
-}
-
-func geminiNativeUsageFromBody(body []byte) (inputTokens, outputTokens, reasoningTokens, totalTokens int) {
-	usage := gjson.GetBytes(body, "usageMetadata")
-	if !usage.Exists() {
-		return 0, 0, 0, 0
-	}
-	inputTokens = int(usage.Get("promptTokenCount").Int())
-	outputTokens = int(usage.Get("candidatesTokenCount").Int())
-	reasoningTokens = int(usage.Get("thoughtsTokenCount").Int())
-	totalTokens = int(usage.Get("totalTokenCount").Int())
-	if totalTokens == 0 {
-		totalTokens = inputTokens + outputTokens + reasoningTokens
-	}
-	return inputTokens, outputTokens, reasoningTokens, totalTokens
 }
 
 func normalizeGeminiPublicModel(model string) string {

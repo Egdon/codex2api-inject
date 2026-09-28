@@ -24,6 +24,14 @@ func describeCatalog(catalog []any) string {
 			}
 		} else {
 			line += " Pass a JSON object in the envelope's arguments field. Argument contract: " + describeSchema(entry["parameters"], 0)
+			if field := text(entry[catalogRawFieldKey]); field != "" {
+				value := "the exact raw " + quoted(field) + " value"
+				if list, _ := entry[catalogRawListKey].(bool); list {
+					value = "exactly one raw " + quoted(field) + " entry (one command line)"
+				}
+				line += " Raw transport: set run_officejs summary to " + quoted(rawFieldTransportPrefix+text(entry["name"])+"/"+field) +
+					" and put " + value + " directly in code; other arguments keep their defaults."
+			}
 		}
 		lines = append(lines, line)
 	}

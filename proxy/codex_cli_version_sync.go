@@ -63,7 +63,8 @@ func FetchLatestCodexCLIVersion(ctx context.Context, proxyURL string) (string, e
 	// GitHub 访问设置（issue #522）：token 提升 API 限流配额，专用代理与全局代理解耦。
 	ApplyGithubAuth(req)
 
-	client := &http.Client{Transport: newCodexStandardTransport(GithubProxyOrDefault(endpoint, proxyURL)), Timeout: 20 * time.Second}
+	client, closeClient := newVersionSyncClient(endpoint, GithubProxyOrDefault(endpoint, proxyURL), 20*time.Second)
+	defer closeClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("codex releases request: %w", err)
