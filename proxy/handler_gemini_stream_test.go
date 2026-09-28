@@ -82,7 +82,7 @@ func geminiStreamTestHTTPRequest(ctx context.Context, method string) *http.Reque
 	return req
 }
 
-func assertGeminiStreamUsageStatus(t *testing.T, db *database.DB, want int, stream bool) {
+func assertGeminiStreamUsageStatus(t *testing.T, db *database.DB, want int, stream bool) database.UsageLog {
 	t.Helper()
 	db.FlushUsageLogs()
 	logs, err := db.ListUsageLogsByFilter(context.Background(), database.UsageLogFilter{
@@ -97,6 +97,7 @@ func assertGeminiStreamUsageStatus(t *testing.T, db *database.DB, want int, stre
 	if entry := logs[0]; entry.StatusCode != want || entry.Stream != stream {
 		t.Fatalf("usage status=%d stream=%v, want status=%d stream=%v", entry.StatusCode, entry.Stream, want, stream)
 	}
+	return *logs[0]
 }
 
 func TestGeminiNativeStreamFlushesThoughtAndKeepsAliveBeforeAnswer(t *testing.T) {
