@@ -739,7 +739,7 @@ func TestRawFieldTransportRelaysCommandsWithoutNestedEscaping(t *testing.T) {
 }
 
 func TestRawFieldTransportRejectsUndeclaredFieldsAndTools(t *testing.T) {
-	for _, summary := range []string{"codex2api.raw/exec_command/workdir", "codex2api.raw/lookup/a", "codex2api.raw/missing/cmd", "codex2api.raw/exec_command"} {
+	for _, summary := range []string{"codex2api.raw/exec_command/workdir", "codex2api.raw/lookup/a", "codex2api.raw/missing/cmd", "codex2api.raw/exec_command/"} {
 		_, bridge, err := Prepare([]byte(`{"model":"gpt-5.5","input":"go",`+execCommandTools+`}`), "account:1", &ReplayCache{})
 		if err != nil {
 			t.Fatalf("Prepare: %v", err)
