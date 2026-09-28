@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.0.4 - 2026-09-28
+
+### Features
+
+- **Excel Basispoints adapter closes the gaps with the Excel bridge for images, tools and streams (#734, @Fleey).** Many ordinary Codex and Responses requests failed on BPS accounts with the opaque "Basispoints does not support this request". Rejections now return their real reason. Message images are uploaded to `/basispoints/api/attachments` and sent as file IDs, because BPS refuses inline data URLs; stale IDs are re-uploaded on a 422. An image in the latest user turn that cannot be used fails the request (400 for unusable input, 502 for upload errors), while images from earlier turns degrade to a text note so an old image never blocks a conversation. Unknown or hosted tool kinds, `tool_choice` `required` / named / `allowed_tools`, `reasoning.mode`, unknown effort and `item_reference` are degraded with a model-visible note instead of rejected. The built-in client tools `local_shell`, `shell` and `apply_patch` are relayed and returned as native call items, and a raw-field transport lets single-string tools such as `exec_command` skip nested JSON escaping. In streams, an untranslatable tool call is dropped instead of failing the whole response, a commentary preamble alone no longer counts as a final answer, a stream cut off after a final answer or tool call is completed locally and logged as `basispoints_cutoff_completed`, and `response.in_progress` is repeated while the upstream is silent so Codex's idle timeout does not fire. Exact native tool items are persisted in Redis for replay only when a session header names the conversation; other scopes stay in process memory. After upgrading, the first turn of each conversation misses the upstream prompt cache once.
+
+- **Native Gemini requests record token usage and first-token latency.** Both `generateContent` and `streamGenerateContent` now log upstream input, output, thinking and cached tokens. Logged output includes thinking tokens, with reasoning shown as a subset. Streaming usage is read up to the final usage frame, even when it follows `finishReason`, and repeated cumulative snapshots are not added together. First-token latency runs from upstream dispatch to the first content part, excluding keepalives and usage-only frames. Missing upstream usage is not estimated, and older zero-token logs are not backfilled.
+
+- **Grok Imagine models are billed per image and per video second.** Grok Imagine image and video models no longer fall back to text token prices, which put their cost near zero. Upstream cost prefers a custom per-unit cost set by the admin, then the cost xAI reports in `usage.cost_in_usd_ticks`, then a built-in or synced per-unit price (images per picture, video per generated second). The official xAI pricing sync now reads the Imagine table. Video jobs are settled once when a terminal status is first observed, using the reported duration or the requested duration as a fallback. Model pricing adds `media_unit_cost` and two user billing modes for video models, `per_video` and `per_second`, next to the existing `per_image`. Usage logs gain a `video_seconds` column.
+
+- **Per-account jump link on the Accounts page (#740, @xiaomingchen).** A link icon next to each account name opens a configurable `account_href` (such as the account's console or usage page) in a new window, and falls back to the account's `base_url` when none is set. Alt/Option+click opens a quick editor to set, preview or clear it. `PATCH /api/admin/accounts/:id/scheduler` accepts `account_href`, which must be an absolute http/https URL, and an empty string clears it. The value lives in the account credentials, so no migration is needed.
+
+- **The public API key usage page can filter request logs.** `GET /api/key-usage/summary` (and `/me`) accepts optional `model`, `endpoint`, `status` (`success`, `error`, `4xx`, `5xx`, `429`), `stream` (`stream`, `sync`) and `channel` (`codex`, `grok`, `antigravity`, `claude`) filters. They apply only to the log list and `recent_logs_total`, not to the summary, windows or rankings. The response adds `usage.log_models` and `usage.log_endpoints` for building filter dropdowns, and each log carries its `channel`. Invalid values return `400`.
+
+### Fixes
+
+- **Client version sync uses a Chrome TLS fingerprint (#735, @bxb1337).** Version fetches for Codex CLI, Codex Desktop (macOS and Windows), the VS Code extension and Claude CLI were occasionally blocked by WAFs. HTTPS sources now go through the existing Chrome uTLS transport, keep using the configured or environment proxy, and release the connection after each fetch.
+
 ## v3.0.3 - 2026-09-27
 
 ### Features
