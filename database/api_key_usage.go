@@ -652,7 +652,28 @@ type APIKeySelfUsageReport struct {
 	RecentLogsTotal    int64                      `json:"recent_logs_total"`
 	RecentLogsPage     int                        `json:"recent_logs_page"`
 	RecentLogsPageSize int                        `json:"recent_logs_page_size"`
+	// LogModels / LogEndpoints 是时间范围内出现过的请求模型与入站端点(不受日志筛选影响),
+	// 供自助页日志筛选下拉使用。
+	LogModels    []string `json:"log_models"`
+	LogEndpoints []string `json:"log_endpoints"`
 }
+
+// APIKeySelfLogFilter 是自助页请求日志的筛选条件,只作用于 recent_logs,
+// 不影响汇总、窗口与排行。
+type APIKeySelfLogFilter struct {
+	// Model 同时匹配请求模型与实际生效模型。
+	Model string
+	// Endpoint 匹配入站端点(与 recent_logs.endpoint 同口径)。
+	Endpoint string
+	// Status: success | error | 4xx | 5xx | 429;空表示不限。
+	Status string
+	// Stream: stream | sync;空表示不限。
+	Stream string
+	// Channel: codex | grok | antigravity | claude;空表示不限。
+	Channel string
+}
+
+const apiKeySelfLogOptionLimit = 50
 
 type APIKeySelfUsageSummary struct {
 	Requests        int64   `json:"requests"`
@@ -701,6 +722,7 @@ type APIKeySelfUsageBreakdown struct {
 type APIKeySelfUsageLog struct {
 	UserBilling
 	ID                     int64     `json:"id"`
+	Channel                string    `json:"channel"`
 	Endpoint               string    `json:"endpoint"`
 	Model                  string    `json:"model"`
 	EffectiveModel         string    `json:"effective_model"`
@@ -773,6 +795,10 @@ func (l *APIKeySelfUsageLog) populateBillingBreakdown() {
 }
 
 func (db *DB) GetAPIKeySelfUsageReport(ctx context.Context, apiKeyID int64, rangeStart, rangeEnd time.Time, recentPage, recentPageSize int) (*APIKeySelfUsageReport, error) {
+	return db.GetAPIKeySelfUsageReportFiltered(ctx, apiKeyID, rangeStart, rangeEnd, recentPage, recentPageSize, APIKeySelfLogFilter{})
+}
+
+func (db *DB) GetAPIKeySelfUsageReportFiltered(ctx context.Context, apiKeyID int64, rangeStart, rangeEnd time.Time, recentPage, recentPageSize int, logFilter APIKeySelfLogFilter) (*APIKeySelfUsageReport, error) {
 	recentPage, recentPageSize = normalizeAPIKeySelfRecentLogPagination(recentPage, recentPageSize)
 	if apiKeyID <= 0 {
 		return &APIKeySelfUsageReport{
@@ -781,6 +807,8 @@ func (db *DB) GetAPIKeySelfUsageReport(ctx context.Context, apiKeyID int64, rang
 			RecentLogs:         []APIKeySelfUsageLog{},
 			RecentLogsPage:     recentPage,
 			RecentLogsPageSize: recentPageSize,
+			LogModels:          []string{},
+			LogEndpoints:       []string{},
 		}, nil
 	}
 
@@ -810,11 +838,82 @@ func (db *DB) GetAPIKeySelfUsageReport(ctx context.Context, apiKeyID int64, rang
 	if report.Endpoints, err = db.listAPIKeySelfUsageBreakdown(ctx, apiKeyID, rangeStart, rangeEnd, "endpoint", 8); err != nil {
 		return nil, err
 	}
-	report.RecentLogs, report.RecentLogsTotal, report.RecentLogsPage, report.RecentLogsPageSize, err = db.listAPIKeySelfRecentLogs(ctx, apiKeyID, rangeStart, rangeEnd, recentPage, recentPageSize)
+	report.RecentLogs, report.RecentLogsTotal, report.RecentLogsPage, report.RecentLogsPageSize, err = db.listAPIKeySelfRecentLogs(ctx, apiKeyID, rangeStart, rangeEnd, recentPage, recentPageSize, logFilter)
 	if err != nil {
 		return nil, err
 	}
+	if report.LogModels, err = db.listAPIKeySelfDistinct(ctx, apiKeyID, rangeStart, rangeEnd, "NULLIF(model, '')"); err != nil {
+		return nil, err
+	}
+	if report.LogEndpoints, err = db.listAPIKeySelfDistinct(ctx, apiKeyID, rangeStart, rangeEnd, apiKeySelfEndpointExpr); err != nil {
+		return nil, err
+	}
 	return report, nil
+}
+
+const apiKeySelfEndpointExpr = "COALESCE(NULLIF(inbound_endpoint, ''), NULLIF(endpoint, ''), 'unknown')"
+
+// listAPIKeySelfDistinct 按请求量降序列出时间范围内某列的去重取值;expr 只接受包内常量。
+func (db *DB) listAPIKeySelfDistinct(ctx context.Context, apiKeyID int64, rangeStart, rangeEnd time.Time, expr string) ([]string, error) {
+	where, args := db.apiKeySelfUsageWhere(apiKeyID, rangeStart, rangeEnd)
+	args = append(args, apiKeySelfLogOptionLimit)
+	query := `
+		SELECT ` + expr + ` AS value
+		FROM usage_logs
+		WHERE ` + where + ` AND ` + expr + ` IS NOT NULL
+		GROUP BY 1
+		ORDER BY COUNT(*) DESC, value ASC
+		LIMIT ` + fmt.Sprintf("$%d", len(args))
+	rows, err := db.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := []string{}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+// appendAPIKeySelfLogFilter 把日志筛选条件追加到 apiKeySelfUsageWhere 生成的 where 上。
+func appendAPIKeySelfLogFilter(where string, args []interface{}, f APIKeySelfLogFilter) (string, []interface{}) {
+	if model := strings.TrimSpace(f.Model); model != "" {
+		args = append(args, model)
+		p := fmt.Sprintf("$%d", len(args))
+		where += fmt.Sprintf(" AND (COALESCE(model, '') = %s OR COALESCE(effective_model, '') = %s)", p, p)
+	}
+	if endpoint := strings.TrimSpace(f.Endpoint); endpoint != "" {
+		args = append(args, endpoint)
+		where += fmt.Sprintf(" AND %s = $%d", apiKeySelfEndpointExpr, len(args))
+	}
+	if channel := strings.TrimSpace(f.Channel); channel != "" {
+		args = append(args, channel)
+		where += fmt.Sprintf(" AND COALESCE(channel, '') = $%d", len(args))
+	}
+	switch strings.ToLower(strings.TrimSpace(f.Status)) {
+	case "success":
+		where += " AND status_code < 400"
+	case "error":
+		where += " AND status_code >= 400"
+	case "4xx":
+		where += " AND status_code >= 400 AND status_code < 500"
+	case "5xx":
+		where += " AND status_code >= 500"
+	case "429":
+		where += " AND status_code = 429"
+	}
+	switch strings.ToLower(strings.TrimSpace(f.Stream)) {
+	case "stream":
+		where += " AND COALESCE(stream, false) = true"
+	case "sync":
+		where += " AND COALESCE(stream, false) = false"
+	}
+	return where, args
 }
 
 func normalizeAPIKeySelfRecentLogPagination(page, pageSize int) (int, int) {
@@ -919,7 +1018,7 @@ func (db *DB) listAPIKeySelfUsageBreakdown(ctx context.Context, apiKeyID int64, 
 	}
 	nameExpr := "COALESCE(NULLIF(effective_model, ''), NULLIF(model, ''), 'unknown')"
 	if kind == "endpoint" {
-		nameExpr = "COALESCE(NULLIF(inbound_endpoint, ''), NULLIF(endpoint, ''), 'unknown')"
+		nameExpr = apiKeySelfEndpointExpr
 	}
 	where, args := db.apiKeySelfUsageWhere(apiKeyID, rangeStart, rangeEnd)
 	args = append(args, limit)
@@ -971,9 +1070,10 @@ func (db *DB) listAPIKeySelfUsageBreakdown(ctx context.Context, apiKeyID int64, 
 	return items, nil
 }
 
-func (db *DB) listAPIKeySelfRecentLogs(ctx context.Context, apiKeyID int64, rangeStart, rangeEnd time.Time, page, pageSize int) ([]APIKeySelfUsageLog, int64, int, int, error) {
+func (db *DB) listAPIKeySelfRecentLogs(ctx context.Context, apiKeyID int64, rangeStart, rangeEnd time.Time, page, pageSize int, filter APIKeySelfLogFilter) ([]APIKeySelfUsageLog, int64, int, int, error) {
 	page, pageSize = normalizeAPIKeySelfRecentLogPagination(page, pageSize)
 	where, args := db.apiKeySelfUsageWhere(apiKeyID, rangeStart, rangeEnd)
+	where, args = appendAPIKeySelfLogFilter(where, args, filter)
 
 	var total int64
 	countQuery := `SELECT COUNT(*) FROM usage_logs WHERE ` + where
@@ -994,7 +1094,8 @@ func (db *DB) listAPIKeySelfRecentLogs(ctx context.Context, apiKeyID int64, rang
 	query := `
 		SELECT
 			id,
-			COALESCE(NULLIF(inbound_endpoint, ''), NULLIF(endpoint, ''), 'unknown') AS endpoint_name,
+			COALESCE(channel, ''),
+			` + apiKeySelfEndpointExpr + ` AS endpoint_name,
 			COALESCE(model, ''),
 			COALESCE(effective_model, ''),
 			COALESCE(daybreak_program, ''),
@@ -1031,6 +1132,7 @@ func (db *DB) listAPIKeySelfRecentLogs(ctx context.Context, apiKeyID int64, rang
 		var createdAtRaw interface{}
 		if err := rows.Scan(
 			&item.ID,
+			&item.Channel,
 			&item.Endpoint,
 			&item.Model,
 			&item.EffectiveModel,

@@ -4017,6 +4017,7 @@ export interface PublicAPIKeyUsageLog {
   /** Billed units: images, videos or seconds depending on user_billing_mode. */
   billed_image_count?: number
   id: number
+  channel?: UpstreamChannel | ''
   endpoint: string
   model: string
   effective_model: string
@@ -4048,11 +4049,23 @@ export interface PublicAPIKeyUsageLog {
   created_at: ISODateString
 }
 
+/** Request-log filters for the public key usage page; they only narrow recent_logs. */
+export interface PublicAPIKeyUsageLogFilter {
+  model?: string
+  endpoint?: string
+  status?: '' | 'success' | 'error' | '4xx' | '5xx' | '429'
+  stream?: '' | 'stream' | 'sync'
+  channel?: '' | UpstreamChannel
+}
+
 export interface PublicAPIKeyUsageReport {
   summary: PublicAPIKeyUsageSummary
   windows: PublicAPIKeyUsageWindows
   models: PublicAPIKeyUsageBreakdown[]
   endpoints: PublicAPIKeyUsageBreakdown[]
+  /** Requested models / inbound endpoints seen in the range (unaffected by log filters). */
+  log_models?: string[]
+  log_endpoints?: string[]
   recent_logs: PublicAPIKeyUsageLog[]
   recent_logs_total: number
   recent_logs_page: number
