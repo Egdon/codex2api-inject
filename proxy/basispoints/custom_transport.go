@@ -71,6 +71,19 @@ func (b *Bridge) rawFieldEnvelope(arguments object) (object, bool, error) {
 	}
 	spec := strings.TrimPrefix(summary, rawFieldTransportPrefix)
 	cut := strings.LastIndexByte(spec, '/')
+	// Recover an omitted field only when the exact declared tool makes the
+	// interpretation unique. Never guess a tool, field or optional argument.
+	if cut < 0 && validTransportToken(spec) {
+		if info, exists := b.tools[spec]; exists {
+			if info.Kind == "custom" {
+				return customTransportEnvelope(object{"summary": customTransportPrefix + spec, "code": arguments["code"]})
+			}
+			if info.RawField != "" {
+				spec += "/" + info.RawField
+				cut = strings.LastIndexByte(spec, '/')
+			}
+		}
+	}
 	if cut <= 0 || !validTransportToken(spec[:cut]) || !validTransportToken(spec[cut+1:]) {
 		return nil, true, fmt.Errorf("basispoints raw field transport requires summary codex2api.raw/CATALOG_NAME/FIELD")
 	}

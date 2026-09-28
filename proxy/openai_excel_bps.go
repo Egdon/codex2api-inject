@@ -66,6 +66,7 @@ var excelBPSDo = func(req *http.Request, account *auth.Account, proxyURL string)
 
 type excelBPSHTTPError struct {
 	status int
+	code   string // Provider code only; never retain the upstream message or body.
 }
 
 func (e *excelBPSHTTPError) Error() string {
@@ -481,7 +482,7 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		_ = response.Body.Close()
 		log.Printf("[excel-bps] account=%d upstream HTTP %d: %s", account.ID(), response.StatusCode, excelBPSErrorShape(snippet))
 		if !excelBPSImageRefusal(response.StatusCode, snippet) || !images.Any() || mode == basispoints.ImagesOmit {
-			return nil, &excelBPSHTTPError{status: response.StatusCode}
+			return nil, &excelBPSHTTPError{status: response.StatusCode, code: gjson.GetBytes(snippet, "error.code").String()}
 		}
 		next, stale := nextExcelBPSImageMode(images, uploaded)
 		excelBPSAttachments.forget(stale)
@@ -703,10 +704,80 @@ func writeExcelBPSFailure(c *gin.Context, stream bool, status int, code, message
 	}
 }
 
-// handleExcelBPS is the single handler branch shared by Responses and compact.
+const excelBPSNativeFallbackKey = "codex2api.excel_bps_native_fallback"
+
+// excelBPSNativeRequestReason identifies opaque client context which the Excel
+// schema cannot represent. Plaintext agent tasks are normalized by the bridge;
+// genuinely opaque context is preserved and routed to native Codex.
+func excelBPSNativeRequestReason(raw []byte) string {
+	if gjson.GetBytes(raw, "previous_response_id").String() != "" {
+		return "stored_response"
+	}
+	for _, item := range gjson.GetBytes(raw, "input").Array() {
+		isAgent := item.Get("type").String() == "agent_message"
+		for _, field := range []string{"content", "output"} {
+			for _, part := range item.Get(field).Array() {
+				if part.Get("type").String() == "encrypted_content" {
+					if isAgent && field == "content" && !part.Get("text").Exists() && basispoints.IsPlaintextAgentContent(part.Get("encrypted_content").String()) {
+						continue
+					}
+					if isAgent {
+						return "agent_context"
+					}
+					return "opaque_context"
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// Only retry before anything has been sent to the client. Authentication errors,
+// generic forbidden responses and failures after partial output stay visible.
+func excelBPSNativeFailureReason(err error) string {
+	var upstream *excelBPSHTTPError
+	if errors.As(err, &upstream) {
+		if upstream.status >= 500 && upstream.status <= 599 {
+			return "upstream_5xx"
+		}
+		if upstream.status == http.StatusForbidden && upstream.code == "basispoints_model_access_changed" {
+			return "model_access"
+		}
+	}
+	var failure *excelBPSFailure
+	if errors.As(err, &failure) {
+		switch failure.code {
+		case "request_unsupported":
+			return "unsupported_request"
+		case "transport_error", "empty_response":
+			return "transport_error"
+		}
+	}
+	return ""
+}
+
+func markExcelBPSNativeFallback(c *gin.Context, account *auth.Account, reason string) {
+	c.Set(excelBPSNativeFallbackKey, reason)
+	c.Header("X-Codex2api-Upstream-Fallback", "basispoints-to-codex")
+	log.Printf("[excel-bps] account=%d native fallback reason=%s before_output=true", account.ID(), reason)
+}
+
+// handleExcelBPS returns false when the normal Codex handler must continue with
+// the same acquired account and original body. It must not release that account
+// or write a response on fallback. The context marker prevents BPS retry loops.
+
 // It deliberately does not report provider failures to the account scheduler:
 // BPS is an opt-in alternate provider surface, not a Codex health probe.
-func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream, persistReplay bool, endpoint, logModel, effectiveModel, reasoningEffort string, affinityKey string, affinityGuard auth.SessionAffinityGuard, start time.Time) {
+func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream, persistReplay bool, endpoint, logModel, effectiveModel, reasoningEffort string, affinityKey string, affinityGuard auth.SessionAffinityGuard, start time.Time) bool {
+	if c.GetString(excelBPSNativeFallbackKey) != "" {
+		return false
+	}
+	if c.Request.Context().Err() == nil && !c.Writer.Written() {
+		if reason := excelBPSNativeRequestReason(raw); reason != "" {
+			markExcelBPSNativeFallback(c, account, reason)
+			return false
+		}
+	}
 	result, err := forwardExcelBPS(c.Request.Context(), c, account, raw, scope, threadKey, proxyURL, compact, stream, persistReplay)
 	if result.DurationMs == 0 && !start.IsZero() {
 		result.DurationMs = int(max(int64(0), time.Since(start).Milliseconds()))
@@ -730,6 +801,14 @@ func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []by
 		logInput.StatusCode = status
 		logInput.UpstreamErrorKind = code
 		logInput.ErrorMessage = message
+		if reason := excelBPSNativeFailureReason(err); reason != "" && !result.ClientDisconnect && c.Request.Context().Err() == nil && !c.Writer.Written() {
+			markExcelBPSNativeFallback(c, account, reason)
+			logInput.IsRetryAttempt = true
+			if h != nil {
+				h.logUsageForRequest(c, logInput)
+			}
+			return false
+		}
 		if !result.ClientDisconnect {
 			writeExcelBPSFailure(c, stream, status, code, message)
 		}
@@ -749,10 +828,11 @@ func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []by
 		if h != nil && h.store != nil {
 			h.store.ReleaseForSessionWithGuard(account, affinityKey, affinityGuard)
 		}
-		return
+		return true
 	}
 	if h != nil && h.store != nil {
 		h.store.UnbindSessionAffinity(affinityKey, account.ID())
 		h.store.Release(account)
 	}
+	return true
 }

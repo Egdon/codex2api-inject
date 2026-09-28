@@ -47,6 +47,9 @@ func validateImage(part object) error {
 	if detail, exists := part["detail"]; exists && detail != nil {
 		switch text(detail) {
 		case "auto", "low", "high":
+		case "original":
+			// Normalize the client's fidelity hint only; retain the exact image.
+			part["detail"] = "high"
 		default:
 			return fmt.Errorf("basispoints image detail must be auto, low or high")
 		}

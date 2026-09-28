@@ -533,6 +533,7 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 		if !ok {
 			return nil, fmt.Errorf("invalid Basispoints input item")
 		}
+		NormalizeAgentMessage(item)
 		switch text(item["type"]) {
 		case "additional_tools":
 			continue
@@ -743,6 +744,11 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Direct calls retain the upstream's explicit encryption declaration.
+	// A relay wrapper's declaration describes its own fields, not inner args.
+	if metadata := native["encrypted_function_args"]; info.Kind == "function" && metadata != nil {
+		result["encrypted_function_args"] = metadata
+	}
 	// The model bypassed run_officejs, so the bare native name is not a BPS tool.
 	// Cache a transport-wrapped replay so the next turn presents a BPS-known
 	// run_officejs item, matching how absent history is rebuilt.
@@ -759,7 +765,27 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 // how the call replays upstream.
 func (b *Bridge) finishClientToolCall(native object, info tool, envelope object, marked bool) (object, error) {
 	if marked && info.Kind != "custom" {
-		return nil, fmt.Errorf("basispoints raw transport requires a declared custom tool")
+		// Models occasionally label a declared function as a custom transport. A
+		// complete JSON object has an unambiguous function interpretation; recover
+		// only that case. Scripts, arrays, multiple values, undeclared tools and
+		// envelopes naming a different tool remain rejected. No code is executed.
+		if info.Kind != "function" {
+			return nil, fmt.Errorf("basispoints raw transport requires a declared custom tool")
+		}
+		var fields object
+		if err := decode([]byte(text(envelope["input"])), &fields); err != nil || fields == nil {
+			return nil, fmt.Errorf("basispoints mistagged function transport requires one JSON object")
+		}
+		_, hasArguments := fields["arguments"]
+		_, hasArgs := fields["args"]
+		if _, hasName := fields["name"]; hasName && (hasArguments || hasArgs) {
+			if text(fields["name"]) != text(envelope["name"]) || len(fields) != 2 {
+				return nil, fmt.Errorf("basispoints mistagged function envelope conflicts with the declared tool")
+			}
+			envelope = fields
+		} else {
+			envelope = object{"name": envelope["name"], "arguments": fields}
+		}
 	}
 	id := text(native["call_id"])
 	if id == "" {
@@ -822,6 +848,9 @@ func (b *Bridge) finishClientToolCall(native object, info tool, envelope object,
 		}
 		encoded, _ := json.Marshal(args)
 		result["arguments"] = string(encoded)
+		// Relay JSON is plaintext. An explicit empty list prevents clients from
+		// inferring encrypted task messages from encrypted:true in tool schemas.
+		result["encrypted_function_args"] = []string{}
 	}
 	return result, nil
 }

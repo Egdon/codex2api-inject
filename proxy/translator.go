@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codex2api/proxy/basispoints"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -1584,10 +1585,17 @@ func dropBareReasoningInputValue(value any) (any, bool, bool) {
 			// Codex reasoning schema 不认 status 字段（400 unknown_parameter），
 			// 自家输出也从不携带；跨渠道会话中客户端可能裸回灌带 status 的
 			// 外渠道 reasoning 输出（issue #565）。
-			if _, has := v["status"]; has {
-				delete(v, "status")
-				return v, true, true
+			changed := false
+			// BPS adds display-only reasoning content for clients. Native
+			// Responses accepts the encrypted reasoning and summary, but its
+			// input reasoning.content array must be empty.
+			for _, field := range []string{"status", "content"} {
+				if _, has := v[field]; has {
+					delete(v, field)
+					changed = true
+				}
 			}
+			return v, changed, true
 		}
 		return v, false, true
 	default:
@@ -2502,6 +2510,13 @@ func prepareResponsesBodyWithOptions(rawBody []byte, opts responsesBodyPrepareOp
 	sanitizeMalformedResponsesFunctionCalls(body)
 	normalizeResponsesInputItemIDs(body)
 	stripResponsesInputInternalMetadata(body)
+	if input, ok := body["input"].([]any); ok {
+		for _, raw := range input {
+			if item, ok := raw.(map[string]any); ok {
+				basispoints.NormalizeAgentMessage(item)
+			}
+		}
+	}
 	dropBareReasoningInputItems(body)
 	// 6c. 修复工具调用/输出的 call_id 配对（issue #414）。
 	// previous_response_id 保留给上游的原生续链场景跳过：历史存于上游服务端，
