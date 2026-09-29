@@ -4263,7 +4263,9 @@ export interface CodexUserAgentCatalogKind {
   default_terminal: string
   app_names: CodexUserAgentCatalogOption[] | null
   terminals: CodexUserAgentCatalogOption[] | null
+  reference_terminals?: string[] | null
   platforms: CodexUserAgentCatalogPlatform[] | null
+  reference_platforms?: CodexUserAgentCatalogPlatform[] | null
   version_pairs: CodexUserAgentCatalogVersionPair[] | null
 }
 

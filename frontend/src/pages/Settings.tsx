@@ -81,6 +81,7 @@ import {
   Database,
   ExternalLink,
   Eye,
+  Fingerprint,
   Gauge,
   Globe,
   Image as ImageIcon,
@@ -137,6 +138,13 @@ type CodexUserAgentConfig = {
 type CodexUAKind = 'codex-tui' | 'codex-desktop' | 'codex-vscode' | 'codex-exec' | 'custom'
 const CODEX_UA_KINDS: CodexUAKind[] = ['codex-tui', 'codex-desktop', 'codex-vscode', 'codex-exec', 'custom']
 const CODEX_UA_POOL_KINDS: CodexUAKind[] = ['codex-desktop', 'codex-vscode', 'codex-tui', 'codex-exec']
+const CODEX_CLIENT_SYNC_SOURCES = [
+  { key: 'cli', label: 'Codex CLI' },
+  { key: 'desktop_mac', label: 'Desktop macOS' },
+  { key: 'desktop_windows', label: 'Desktop Windows' },
+  { key: 'vscode', label: 'VS Code' },
+] as const
+type CodexClientSyncSource = (typeof CODEX_CLIENT_SYNC_SOURCES)[number]['key']
 const CODEX_UA_FALLBACK_POOL_MIX: Record<string, number> = { 'codex-desktop': 50, 'codex-vscode': 30, 'codex-tui': 20 }
 const CODEX_UA_STRING_KEYS = ['raw_user_agent', 'client_name', 'client_version', 'os_name', 'os_version', 'arch', 'terminal', 'client_kind', 'app_name', 'app_version', 'mode'] as const
 // 与后端 inferCodexClientKind 同规则:未指定形态的旧配置按客户端名推断。
@@ -1472,6 +1480,26 @@ function SettingField({
   )
 }
 
+function SettingsFieldGroup({
+  title,
+  hint,
+  children,
+}: {
+  title: string
+  hint?: string
+  children: ReactNode
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-3 p-3.5 sm:p-4 md:grid-cols-[7.5rem_minmax(0,1fr)] md:gap-5">
+      <div className="min-w-0 md:pt-0.5">
+        <div className="text-[13px] font-semibold leading-snug text-foreground">{title}</div>
+        {hint ? <code className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">{hint}</code> : null}
+      </div>
+      <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">{children}</div>
+    </div>
+  )
+}
+
 function SettingsSkeleton() {
   return (
     <div className="space-y-6" aria-busy="true" aria-live="polite">
@@ -2365,7 +2393,7 @@ export default function Settings() {
   // 实际用于出站 UA 的版本(内置与同步取大);「设为同步版本」按钮以它为准,同步值过期/为空时不会把门槛设低
   const [effectiveCliVersion, setEffectiveCliVersion] = useState('')
   const [syncedAppBuilds, setSyncedAppBuilds] = useState({ desktop_mac: '', desktop_windows: '', vscode: '' })
-  const [clientSyncErrors, setClientSyncErrors] = useState<string[]>([])
+  const [clientSyncErrors, setClientSyncErrors] = useState<Partial<Record<CodexClientSyncSource, string>>>({})
   const logoFileInputRef = useRef<HTMLInputElement>(null)
   const backgroundFileInputRef = useRef<HTMLInputElement>(null)
   const persistedBrandingRef = useRef<Partial<SiteBranding> | null>(null)
@@ -2832,7 +2860,7 @@ export default function Settings() {
 
   const handleSyncCliVersion = async () => {
     setSyncingCliVersion(true)
-    setClientSyncErrors([])
+    setClientSyncErrors({})
     try {
       const result = await api.syncCodexClientVersions()
       setSyncedCliVersion(result.cli.synced_version || '')
@@ -2842,11 +2870,14 @@ export default function Settings() {
         desktop_windows: result.desktop_windows.effective_version,
         vscode: result.vscode.effective_version,
       })
-      const errors = (['cli', 'desktop_mac', 'desktop_windows', 'vscode'] as const)
-        .filter((kind) => result[kind].error)
-        .map((kind) => `${kind}: ${result[kind].error}`)
+      const errors: Partial<Record<CodexClientSyncSource, string>> = {}
+      for (const source of CODEX_CLIENT_SYNC_SOURCES) {
+        const error = result[source.key].error
+        if (error) errors[source.key] = error
+      }
       setClientSyncErrors(errors)
-      showToast(errors.length ? t('settings.clientVersionSyncPartial') : t('settings.clientVersionSyncSuccess'), errors.length ? 'error' : 'success')
+      const failed = Object.keys(errors).length > 0
+      showToast(failed ? t('settings.clientVersionSyncPartial') : t('settings.clientVersionSyncSuccess'), failed ? 'error' : 'success')
     } catch (error) {
       showToast(`${t('settings.cliVersionSyncFailed')}: ${getErrorMessage(error)}`, 'error')
     } finally {
@@ -3005,6 +3036,7 @@ export default function Settings() {
     : inferCodexUAKind(codexUserAgentConfig.client_name)
   const codexUAKindSpec = codexUACatalog?.kinds.find((kind) => kind.kind === codexUAKind) ?? null
   const codexUAAppFollowsCLI = codexUAKindSpec ? codexUAKindSpec.app_follows_cli : codexUAKind === 'codex-tui' || codexUAKind === 'codex-exec'
+  const codexUARawActive = Boolean(codexUserAgentConfig.raw_user_agent?.trim())
   const codexUADefaultPoolMix = codexUACatalog?.default_pool_mix ?? CODEX_UA_FALLBACK_POOL_MIX
   const codexUAKindLabel = useCallback((kind: CodexUAKind) => {
     switch (kind) {
@@ -3039,7 +3071,23 @@ export default function Settings() {
       label: `${platform.os_name} ${platform.os_version} · ${platform.arch}`,
       value: codexUAPlatformKey(platform.os_name, platform.os_version, platform.arch),
     }))
-    return [...options, { label: t('settings.codexUACustomOption'), value: 'custom' }]
+    const referenceOptions = (codexUAKindSpec?.reference_platforms ?? []).map((platform) => {
+      const name = `${platform.os_name} ${platform.os_version} · ${platform.arch}`
+      return {
+        label: `${name} · ${t('settings.codexUAReference')}`,
+        value: codexUAPlatformKey(platform.os_name, platform.os_version, platform.arch),
+        triggerLabel: name,
+        content: (
+          <span className="flex items-start gap-2">
+            <span className="min-w-0 flex-1 break-all">{name}</span>
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+              {t('settings.codexUAReference')}
+            </span>
+          </span>
+        ),
+      }
+    })
+    return [...referenceOptions, ...options, { label: t('settings.codexUACustomOption'), value: 'custom' }]
   }, [codexUAKindSpec, t])
   const codexUAEffectivePlatform = {
     os_name: (codexUserAgentConfig.os_name ?? '').trim() || codexUAKindSpec?.default_platform.os_name || DEFAULT_CODEX_UA_CONFIG.os_name,
@@ -3057,6 +3105,19 @@ export default function Settings() {
   }, [patchAndSaveCodexUserAgentConfig])
   const codexUATerminalOptions = useMemo(() => [
     ...(codexUAKindSpec?.terminals ?? []).map((terminal) => ({ label: terminal.value, value: terminal.value })),
+    ...(codexUAKindSpec?.reference_terminals ?? []).map((terminal) => ({
+      label: `${terminal} · ${t('settings.codexUAReference')}`,
+      value: terminal,
+      triggerLabel: terminal,
+      content: (
+        <span className="flex items-start gap-2">
+          <span className="min-w-0 flex-1 break-all">{terminal}</span>
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+            {t('settings.codexUAReference')}
+          </span>
+        </span>
+      ),
+    })),
     { label: t('settings.codexUACustomOption'), value: 'custom' },
   ], [codexUAKindSpec, t])
   const codexUAEffectiveTerminal = (codexUserAgentConfig.terminal ?? '').trim() || codexUAKindSpec?.default_terminal || DEFAULT_CODEX_UA_CONFIG.terminal
@@ -4053,9 +4114,89 @@ export default function Settings() {
               </SettingsSection>
 
               <SettingsSection id="settings-codex-client" title={t('settings.nav.codexClient')} description={t('settings.nav.codexClientDesc')} icon={<Terminal className="size-4" />}>
-              <SettingsCard title={t('settings.codexClientTitle')} description={t('settings.codexClientDesc')} icon={<Terminal className="size-4" />}>
+              <SettingsCard title={t('settings.codexClientVersionCardTitle')} description={t('settings.codexClientVersionCardDesc')} icon={<RefreshCw className="size-4" />}>
                 <div className="space-y-4">
-                  <div className={SETTINGS_FIELD_GRID_3}>
+                  <div className="overflow-hidden rounded-xl border border-border/60">
+                    <div className="grid grid-cols-2 gap-px bg-border/60 lg:grid-cols-4">
+                      {CODEX_CLIENT_SYNC_SOURCES.map((source) => {
+                        const version = source.key === 'cli' ? effectiveCliVersion : syncedAppBuilds[source.key]
+                        const error = clientSyncErrors[source.key]
+                        return (
+                          <div key={source.key} className="min-w-0 bg-card px-3.5 py-3">
+                            <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                              <span
+                                aria-hidden="true"
+                                className={cn('size-1.5 shrink-0 rounded-full', error ? 'bg-destructive' : version ? 'bg-emerald-500' : 'bg-muted-foreground/40')}
+                              />
+                              <span className="truncate">{source.label}</span>
+                            </div>
+                            <div
+                              className={cn(
+                                'mt-1 truncate font-mono text-sm font-semibold tabular-nums',
+                                version ? 'text-foreground' : 'text-muted-foreground',
+                                syncingCliVersion && 'motion-safe:animate-pulse',
+                              )}
+                            >
+                              {version || t('settings.clientVersionNotSynced')}
+                            </div>
+                            {error ? (
+                              <p className="mt-1 line-clamp-2 break-all text-[11px] leading-snug text-destructive" title={error}>
+                                {t('settings.clientVersionSyncKept')} · {error}
+                              </p>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="flex flex-col gap-3 border-t border-border/60 bg-muted/20 px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5">
+                        <div className="flex items-center gap-2">
+                          <label className="flex cursor-pointer items-center gap-2">
+                            <Switch
+                              checked={settingsForm.codex_cli_version_sync_enabled}
+                              onCheckedChange={(checked) => autoSaveBooleanField('codex_cli_version_sync_enabled', checked)}
+                            />
+                            <span className="text-[13px] font-medium text-foreground">{t('settings.codexCliVersionAutoSync')}</span>
+                          </label>
+                          <SettingHelp text={t('settings.codexCliVersionAutoSyncDesc')} />
+                        </div>
+                        <div className={cn('flex items-center gap-2 transition-opacity', !settingsForm.codex_cli_version_sync_enabled && 'opacity-50')}>
+                          <span className="text-[13px] text-muted-foreground">{t('settings.codexCliVersionSyncInterval')}</span>
+                          <SettingHelp text={t('settings.codexCliVersionSyncIntervalDesc')} />
+                          <div className="relative w-[6.5rem] shrink-0">
+                            <DraftNumberInput
+                              min={1}
+                              max={720}
+                              aria-label={t('settings.codexCliVersionSyncInterval')}
+                              className="h-8 pr-10 tabular-nums"
+                              disabled={!settingsForm.codex_cli_version_sync_enabled}
+                              value={settingsForm.codex_cli_version_sync_interval_hours}
+                              onValueChange={(value) =>
+                                setSettingsForm((f) => ({
+                                  ...f,
+                                  codex_cli_version_sync_interval_hours: value,
+                                }))
+                              }
+                              onValueCommit={(value) => {
+                                if (!settingsForm.codex_cli_version_sync_enabled) return
+                                void autoSaveSettingsPatch({
+                                  codex_cli_version_sync_interval_hours: value,
+                                })
+                              }}
+                            />
+                            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-medium text-muted-foreground">
+                              {t('settings.unit.hour')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <Button size="sm" variant="outline" className="shrink-0 self-start sm:self-auto" onClick={() => void handleSyncCliVersion()} disabled={syncingCliVersion}>
+                        <RefreshCw className={cn('size-3.5', syncingCliVersion && 'animate-spin')} />
+                        {syncingCliVersion ? t('settings.cliVersionSyncing') : t('settings.cliVersionSyncNow')}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className={SETTINGS_FIELD_GRID}>
                     <SettingField label={t('settings.clientCompatMode')} description={t('settings.clientCompatModeDesc')}>
                       <SegmentedPillGroup
                         value={settingsForm.client_compat_mode}
@@ -4066,7 +4207,7 @@ export default function Settings() {
                     <SettingField label={t('settings.codexMinCliVersion')} description={t('settings.codexMinCliVersionDesc')}>
                       <div className="flex items-center gap-2">
                         <Input
-                          className="min-w-0 flex-1"
+                          className="min-w-0 flex-1 font-mono tabular-nums"
                           value={settingsForm.codex_min_cli_version}
                           onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, codex_min_cli_version: e.target.value }))}
                         />
@@ -4083,26 +4224,43 @@ export default function Settings() {
                         </Button>
                       </div>
                     </SettingField>
-                    <SettingField label={t('settings.codexCliVersionSync')} description={t('settings.codexCliVersionSyncDesc')}>
-                      <div className="flex items-center gap-2">
-                        <Button size="sm" variant="outline" onClick={() => void handleSyncCliVersion()} disabled={syncingCliVersion}>
-                          <RefreshCw className={cn('size-3.5', syncingCliVersion && 'animate-spin')} />
-                          {syncingCliVersion ? t('settings.cliVersionSyncing') : t('settings.cliVersionSyncNow')}
-                        </Button>
-                        <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
-                          <span>CLI: {effectiveCliVersion || '-'}</span>
-                          <span>Desktop macOS: {syncedAppBuilds.desktop_mac || '-'}</span>
-                          <span>Desktop Windows: {syncedAppBuilds.desktop_windows || '-'}</span>
-                          <span>VSCode: {syncedAppBuilds.vscode || '-'}</span>
-                        </div>
-                        {clientSyncErrors.map((error) => <span key={error} className="block text-xs text-destructive">{error}</span>)}
-                      </div>
-                    </SettingField>
+                  </div>
+                </div>
+              </SettingsCard>
+
+              <SettingsCard title={t('settings.codexConnectionCardTitle')} description={t('settings.codexConnectionCardDesc')} icon={<Fingerprint className="size-4" />}>
+                <div className={SETTINGS_FIELD_GRID}>
+                  <SettingField label={t('settings.codexFingerprintDefaultMode')} description={t('settings.codexFingerprintDefaultModeDesc')}>
+                    <Select
+                      value={settingsForm.codex_fingerprint_default_mode || 'off'}
+                      onValueChange={(value) => autoSaveStringField('codex_fingerprint_default_mode', value)}
+                      options={codexFingerprintDefaultModeOptions}
+                    />
+                  </SettingField>
+                  <SettingField label={t('settings.utlsShutdownTimeout')} description={t('settings.utlsShutdownTimeoutDesc')} suffix={t('settings.unit.min')}>
+                    <DraftNumberInput
+                      min={1}
+                      max={240}
+                      className="tabular-nums"
+                      value={settingsForm.utls_shutdown_timeout_minutes}
+                      onValueChange={(value) => setSettingsForm(f => ({ ...f, utls_shutdown_timeout_minutes: value }))}
+                      onValueCommit={(value) => {
+                        void autoSaveSettingsPatch({
+                          utls_shutdown_timeout_minutes: value,
+                        })
+                      }}
+                    />
+                  </SettingField>
+                </div>
+                <div className="mt-4 border-t border-border/60 pt-4">
+                  <div className={SETTINGS_ROW_LIST}>
                     <SettingField
                       label={t('settings.codexTelemetry')}
                       description={t('settings.codexTelemetryDesc')}
+                      layout="row"
                     >
                       <Switch
+                        aria-label={t('settings.codexTelemetry')}
                         checked={settingsForm.codex_telemetry_enabled}
                         onCheckedChange={(checked) => autoSaveBooleanField('codex_telemetry_enabled', checked)}
                       />
@@ -4110,259 +4268,214 @@ export default function Settings() {
                     <SettingField
                       label={t('settings.codexTelemetryTiming')}
                       description={t('settings.codexTelemetryTimingDesc')}
+                      layout="row"
                     >
                       <Switch
+                        aria-label={t('settings.codexTelemetryTiming')}
                         checked={settingsForm.codex_telemetry_timing_debug}
                         onCheckedChange={(checked) => autoSaveBooleanField('codex_telemetry_timing_debug', checked)}
                       />
                     </SettingField>
-                    {/* CLI 版本自动同步：开关 + 间隔成对横排，行高一致 */}
-                    <div className="sm:col-span-2 grid gap-0 overflow-hidden rounded-lg border border-border/60 bg-muted/15 sm:grid-cols-2 sm:divide-x sm:divide-border/60">
-                      <div className="flex min-h-[48px] items-center justify-between gap-3 px-3 py-2.5">
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <span className="text-[13px] font-medium leading-snug text-foreground sm:text-sm">
-                            {t('settings.codexCliVersionAutoSync')}
-                          </span>
-                          <SettingHelp text={t('settings.codexCliVersionAutoSyncDesc')} />
-                        </div>
-                        <Switch
-                          checked={settingsForm.codex_cli_version_sync_enabled}
-                          onCheckedChange={(checked) => autoSaveBooleanField('codex_cli_version_sync_enabled', checked)}
-                        />
-                      </div>
-                      <div
-                        className={cn(
-                          'flex min-h-[48px] items-center justify-between gap-3 border-t border-border/60 px-3 py-2.5 sm:border-t-0',
-                          !settingsForm.codex_cli_version_sync_enabled && 'opacity-60',
-                        )}
-                      >
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <span className="text-[13px] font-medium leading-snug text-foreground sm:text-sm">
-                            {t('settings.codexCliVersionSyncInterval')}
-                          </span>
-                          <SettingHelp text={t('settings.codexCliVersionSyncIntervalDesc')} />
-                        </div>
-                        <div className="relative w-[7.25rem] shrink-0">
-                          <DraftNumberInput
-                            min={1}
-                            max={720}
-                            className="h-9 pr-10 tabular-nums"
-                            disabled={!settingsForm.codex_cli_version_sync_enabled}
-                            value={settingsForm.codex_cli_version_sync_interval_hours}
-                            onValueChange={(value) =>
-                              setSettingsForm((f) => ({
-                                ...f,
-                                codex_cli_version_sync_interval_hours: value,
-                              }))
-                            }
-                            onValueCommit={(value) => {
-                              if (!settingsForm.codex_cli_version_sync_enabled) return
-                              void autoSaveSettingsPatch({
-                                codex_cli_version_sync_interval_hours: value,
-                              })
-                            }}
-                          />
-                          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-medium text-muted-foreground">
-                            {t('settings.unit.hour')}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <SettingField label={t('settings.utlsShutdownTimeout')} description={t('settings.utlsShutdownTimeoutDesc')}>
-                      <div className="relative">
-                        <DraftNumberInput
-                          min={1}
-                          max={240}
-                          className="pr-12 tabular-nums"
-                          value={settingsForm.utls_shutdown_timeout_minutes}
-                          onValueChange={(value) => setSettingsForm(f => ({ ...f, utls_shutdown_timeout_minutes: value }))}
-                          onValueCommit={(value) => {
-                            void autoSaveSettingsPatch({
-                              utls_shutdown_timeout_minutes: value,
-                            })
-                          }}
-                        />
-                        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-medium text-muted-foreground">
-                          {t('settings.unit.min')}
-                        </span>
-                      </div>
-                    </SettingField>
-                    <SettingField label={t('settings.codexFingerprintDefaultMode')} description={t('settings.codexFingerprintDefaultModeDesc')}>
-                      <Select
-                        value={settingsForm.codex_fingerprint_default_mode || 'off'}
-                        onValueChange={(value) => autoSaveStringField('codex_fingerprint_default_mode', value)}
-                        options={codexFingerprintDefaultModeOptions}
-                      />
-                    </SettingField>
-                    <SettingField className="sm:col-span-2 xl:col-span-3" label={t('settings.codexUAMode')} description={t('settings.codexUAModeDesc')}>
+                  </div>
+                </div>
+              </SettingsCard>
+
+              <SettingsCard title={t('settings.codexClientTitle')} description={t('settings.codexClientDesc')} icon={<Terminal className="size-4" />}>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]">
+                    <SettingField label={t('settings.codexUAMode')} description={t('settings.codexUAModeDesc')}>
                       <SegmentedPillGroup
-                        className="max-w-sm"
                         value={codexUAMode}
                         onChange={(value) => patchAndSaveCodexUserAgentConfig({ mode: value === 'pool' ? 'pool' : '' })}
                         options={codexUAModeOptions}
                       />
                     </SettingField>
-                    {codexUAMode === 'pool' ? (
-                      CODEX_UA_POOL_KINDS.map((kind) => (
+                    {codexUAMode === 'pool' ? null : (
+                      <SettingField label={t('settings.codexUAKind')} description={t('settings.codexUAKindDesc')}>
+                        <div className="overflow-x-auto">
+                          <SegmentedPillGroup
+                            className="min-w-max"
+                            value={codexUAKind}
+                            onChange={selectCodexUAKind}
+                            options={codexUAKindOptions}
+                          />
+                        </div>
+                      </SettingField>
+                    )}
+                  </div>
+                  {codexUAMode === 'pool' ? (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                      {CODEX_UA_POOL_KINDS.map((kind) => (
                         <SettingField key={kind} label={`${t('settings.codexUAPoolMix')} · ${codexUAKindLabel(kind)}`} description={t('settings.codexUAPoolMixDesc')}>
                           <Input
                             type="number"
                             min={0}
                             step={1}
                             inputMode="numeric"
+                            className="tabular-nums"
                             value={codexUAPoolMixValue(kind)}
                             placeholder={String(codexUADefaultPoolMix[kind] ?? 0)}
                             onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUAPoolMix(kind, e.target.value)}
                             onBlur={saveCodexUserAgentConfig}
                           />
                         </SettingField>
-                      ))
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="min-w-0 rounded-xl border border-primary/15 bg-primary/[0.03] px-3.5 py-3">
+                    <div className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
+                      <Eye className="size-3.5 text-primary" aria-hidden="true" />
+                      {codexUAMode === 'pool' ? t('settings.codexUAPoolPreview') : t('settings.codexUAPreview')}
+                    </div>
+                    {codexUAPreviewError ? (
+                      <div className="break-all text-[11px] leading-5 text-destructive">{codexUAPreviewError}</div>
+                    ) : !codexUAPreview ? (
+                      <div className="text-[11px] leading-5 text-muted-foreground">{t('settings.codexUAPreviewLoading')}</div>
+                    ) : codexUAPreview.persona ? (
+                      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 font-mono text-[11px] leading-5 text-muted-foreground sm:text-xs">
+                        <dt className="text-foreground/70">User-Agent</dt>
+                        <dd className="break-all text-foreground">{codexUAPreview.persona.user_agent}</dd>
+                        <dt className="text-foreground/70">Originator</dt>
+                        <dd className="break-all">{codexUAPreview.persona.originator}</dd>
+                        <dt className="text-foreground/70">Version</dt>
+                        <dd className="break-all">{codexUAPreview.persona.version}</dd>
+                      </dl>
                     ) : (
-                      <>
-                        <SettingField className="sm:col-span-2 xl:col-span-3" label={t('settings.codexUAKind')} description={t('settings.codexUAKindDesc')}>
-                          <SegmentedPillGroup
-                            className="max-w-3xl"
-                            value={codexUAKind}
-                            onChange={selectCodexUAKind}
-                            options={codexUAKindOptions}
-                          />
-                        </SettingField>
-                        <SettingField className="sm:col-span-2 xl:col-span-3" label={t('settings.codexUserAgentRaw')} description={t('settings.codexUserAgentRawDesc')}>
-                          <Input
-                            className="font-mono text-xs"
-                            value={codexUserAgentConfig.raw_user_agent ?? ''}
-                            placeholder="codex-tui/0.153.3 (Linux Unknown; x86_64) xterm-256color (codex-tui; 0.153.3)"
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ raw_user_agent: e.target.value })}
-                            onBlur={saveCodexUserAgentConfig}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUAClientName')} description={t('settings.codexUAClientNameDesc')}>
-                          <Input
-                            value={codexUserAgentConfig.client_name ?? ''}
-                            placeholder={codexUAKindSpec?.client_name ?? DEFAULT_CODEX_UA_CONFIG.client_name}
-                            disabled={codexUAKind !== 'custom'}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ client_name: e.target.value })}
-                            onBlur={saveCodexUserAgentConfig}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUAClientVersion')} description={t('settings.codexUAClientVersionDesc')}>
-                          <Input
-                            value={codexUserAgentConfig.client_version ?? ''}
-                            placeholder={codexUAClientVersionPlaceholder}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ client_version: e.target.value })}
-                            onBlur={saveCodexUserAgentConfig}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUAPlatformPreset')} description={t('settings.codexUAPlatformPresetDesc')}>
-                          <Select
-                            value={codexUAPlatformPresetValue}
-                            onValueChange={applyCodexUAPlatformPreset}
-                            options={codexUAPlatformOptions}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUAOSName')} description={t('settings.codexUAOSNameDesc')}>
-                          <Input
-                            value={codexUserAgentConfig.os_name ?? ''}
-                            placeholder={codexUAKindSpec?.default_platform.os_name ?? DEFAULT_CODEX_UA_CONFIG.os_name}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ os_name: e.target.value })}
-                            onBlur={saveCodexUserAgentConfig}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUAOSVersion')} description={t('settings.codexUAOSVersionDesc')}>
-                          <Input
-                            value={codexUserAgentConfig.os_version ?? ''}
-                            placeholder={codexUAKindSpec?.default_platform.os_version ?? DEFAULT_CODEX_UA_CONFIG.os_version}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ os_version: e.target.value })}
-                            onBlur={saveCodexUserAgentConfig}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUAArch')} description={t('settings.codexUAArchDesc')}>
-                          <Input
-                            value={codexUserAgentConfig.arch ?? ''}
-                            placeholder={codexUAKindSpec?.default_platform.arch ?? DEFAULT_CODEX_UA_CONFIG.arch}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ arch: e.target.value })}
-                            onBlur={saveCodexUserAgentConfig}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUATerminalPreset')} description={t('settings.codexUATerminalPresetDesc')}>
-                          <Select
-                            value={codexUATerminalPresetValue}
-                            onValueChange={(value) => { if (value !== 'custom') patchAndSaveCodexUserAgentConfig({ terminal: value }) }}
-                            options={codexUATerminalOptions}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUATerminal')} description={t('settings.codexUATerminalDesc')}>
-                          <Input
-                            value={codexUserAgentConfig.terminal ?? ''}
-                            placeholder={codexUAKindSpec?.default_terminal ?? DEFAULT_CODEX_UA_CONFIG.terminal}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ terminal: e.target.value })}
-                            onBlur={saveCodexUserAgentConfig}
-                          />
-                        </SettingField>
-                        <SettingField label={t('settings.codexUAAppName')} description={t('settings.codexUAAppNameDesc')}>
-                          <div className="space-y-2">
-                            {codexUAShowAppNamePreset ? (
-                              <Select
-                                value={codexUAAppNamePresetValue}
-                                onValueChange={(value) => { if (value !== 'custom') patchAndSaveCodexUserAgentConfig({ app_name: value }) }}
-                                options={codexUAAppNameOptions}
-                              />
-                            ) : null}
+                      <ul className="space-y-1 font-mono text-[11px] leading-5 text-muted-foreground sm:text-xs">
+                        {(codexUAPreview.samples ?? []).map((sample) => (
+                          <li key={`${sample.label}-${sample.account_id ?? 0}`} className="break-all">
+                            <span className="text-foreground/70">{sample.label}{sample.account_id ? ` · ${sample.account_id}` : ''}</span>
+                            {' '}<span className="text-foreground">{sample.user_agent}</span>
+                            <span className="text-foreground/50">{' · '}{sample.originator}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {codexUAPreview?.warnings?.length ? (
+                      <div className="mt-2 flex items-start gap-1.5 text-[11px] leading-5 text-amber-600 dark:text-amber-400">
+                        <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                        <span>{t('settings.codexUAWarnUnseen', { fields: codexUAPreview.warnings.map((field) => t(`settings.codexUAWarn_${field}`)).join(' / ') })}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                  {codexUAMode === 'pool' ? null : (
+                    <>
+                      <SettingField label={t('settings.codexUserAgentRaw')} description={t('settings.codexUserAgentRawDesc')}>
+                        <Input
+                          className="font-mono text-xs"
+                          value={codexUserAgentConfig.raw_user_agent ?? ''}
+                          placeholder="codex-tui/0.153.3 (Linux Unknown; x86_64) xterm-256color (codex-tui; 0.153.3)"
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ raw_user_agent: e.target.value })}
+                          onBlur={saveCodexUserAgentConfig}
+                        />
+                      </SettingField>
+                      {codexUARawActive ? (
+                        <p className="-mt-1.5 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400 sm:text-xs">
+                          {t('settings.codexUARawActiveHint')}
+                        </p>
+                      ) : null}
+                      <div className={cn('divide-y divide-border/60 rounded-xl border border-border/60 transition-opacity', codexUARawActive && 'opacity-60')}>
+                        <SettingsFieldGroup title={t('settings.codexUAGroupClient')} hint="name/version">
+                          <SettingField label={t('settings.codexUAClientName')} description={t('settings.codexUAClientNameDesc')}>
                             <Input
-                              value={codexUserAgentConfig.app_name ?? ''}
-                              placeholder={codexUAAppFollowsCLI ? t('settings.codexUAFollowsClient') : codexUAEffectiveAppName}
-                              disabled={codexUAAppFollowsCLI || (codexUAKind === 'codex-desktop')}
-                              onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ app_name: e.target.value })}
+                              value={codexUserAgentConfig.client_name ?? ''}
+                              placeholder={codexUAKindSpec?.client_name ?? DEFAULT_CODEX_UA_CONFIG.client_name}
+                              disabled={codexUAKind !== 'custom'}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ client_name: e.target.value })}
                               onBlur={saveCodexUserAgentConfig}
                             />
-                          </div>
-                        </SettingField>
-                        <SettingField label={t('settings.codexUAAppVersion')} description={t('settings.codexUAAppVersionDesc')}>
-                          <Input
-                            value={codexUserAgentConfig.app_version ?? ''}
-                            placeholder={codexUAAppVersionPlaceholder}
-                            disabled={codexUAAppFollowsCLI}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ app_version: e.target.value })}
-                            onBlur={saveCodexUserAgentConfig}
-                          />
-                        </SettingField>
-                      </>
-                    )}
-                    <div className="min-w-0 rounded-lg border border-border/70 bg-muted/25 p-3 sm:col-span-2 xl:col-span-3">
-                      <div className="mb-1.5 text-[13px] font-medium text-foreground">
-                        {codexUAMode === 'pool' ? t('settings.codexUAPoolPreview') : t('settings.codexUAPreview')}
+                          </SettingField>
+                          <SettingField label={t('settings.codexUAClientVersion')} description={t('settings.codexUAClientVersionDesc')}>
+                            <Input
+                              value={codexUserAgentConfig.client_version ?? ''}
+                              placeholder={codexUAClientVersionPlaceholder}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ client_version: e.target.value })}
+                              onBlur={saveCodexUserAgentConfig}
+                            />
+                          </SettingField>
+                        </SettingsFieldGroup>
+                        <SettingsFieldGroup title={t('settings.codexUAGroupPlatform')} hint="(os version; arch)">
+                          <SettingField label={t('settings.codexUAPlatformPreset')} description={t('settings.codexUAPlatformPresetDesc')}>
+                            <Select
+                              value={codexUAPlatformPresetValue}
+                              onValueChange={applyCodexUAPlatformPreset}
+                              options={codexUAPlatformOptions}
+                            />
+                          </SettingField>
+                          <SettingField label={t('settings.codexUAOSName')} description={t('settings.codexUAOSNameDesc')}>
+                            <Input
+                              value={codexUserAgentConfig.os_name ?? ''}
+                              placeholder={codexUAKindSpec?.default_platform.os_name ?? DEFAULT_CODEX_UA_CONFIG.os_name}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ os_name: e.target.value })}
+                              onBlur={saveCodexUserAgentConfig}
+                            />
+                          </SettingField>
+                          <SettingField label={t('settings.codexUAOSVersion')} description={t('settings.codexUAOSVersionDesc')}>
+                            <Input
+                              value={codexUserAgentConfig.os_version ?? ''}
+                              placeholder={codexUAKindSpec?.default_platform.os_version ?? DEFAULT_CODEX_UA_CONFIG.os_version}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ os_version: e.target.value })}
+                              onBlur={saveCodexUserAgentConfig}
+                            />
+                          </SettingField>
+                          <SettingField label={t('settings.codexUAArch')} description={t('settings.codexUAArchDesc')}>
+                            <Input
+                              value={codexUserAgentConfig.arch ?? ''}
+                              placeholder={codexUAKindSpec?.default_platform.arch ?? DEFAULT_CODEX_UA_CONFIG.arch}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ arch: e.target.value })}
+                              onBlur={saveCodexUserAgentConfig}
+                            />
+                          </SettingField>
+                        </SettingsFieldGroup>
+                        <SettingsFieldGroup title={t('settings.codexUAGroupTerminal')} hint="TERM_PROGRAM">
+                          <SettingField label={t('settings.codexUATerminalPreset')} description={t('settings.codexUATerminalPresetDesc')}>
+                            <Select
+                              value={codexUATerminalPresetValue}
+                              onValueChange={(value) => { if (value !== 'custom') patchAndSaveCodexUserAgentConfig({ terminal: value }) }}
+                              options={codexUATerminalOptions}
+                            />
+                          </SettingField>
+                          <SettingField label={t('settings.codexUATerminal')} description={t('settings.codexUATerminalDesc')}>
+                            <Input
+                              value={codexUserAgentConfig.terminal ?? ''}
+                              placeholder={codexUAKindSpec?.default_terminal ?? DEFAULT_CODEX_UA_CONFIG.terminal}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ terminal: e.target.value })}
+                              onBlur={saveCodexUserAgentConfig}
+                            />
+                          </SettingField>
+                        </SettingsFieldGroup>
+                        <SettingsFieldGroup title={t('settings.codexUAGroupApp')} hint="(app; version)">
+                          <SettingField label={t('settings.codexUAAppName')} description={t('settings.codexUAAppNameDesc')}>
+                            <div className="space-y-2">
+                              {codexUAShowAppNamePreset ? (
+                                <Select
+                                  value={codexUAAppNamePresetValue}
+                                  onValueChange={(value) => { if (value !== 'custom') patchAndSaveCodexUserAgentConfig({ app_name: value }) }}
+                                  options={codexUAAppNameOptions}
+                                />
+                              ) : null}
+                              <Input
+                                value={codexUserAgentConfig.app_name ?? ''}
+                                placeholder={codexUAAppFollowsCLI ? t('settings.codexUAFollowsClient') : codexUAEffectiveAppName}
+                                disabled={codexUAAppFollowsCLI || (codexUAKind === 'codex-desktop')}
+                                onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ app_name: e.target.value })}
+                                onBlur={saveCodexUserAgentConfig}
+                              />
+                            </div>
+                          </SettingField>
+                          <SettingField label={t('settings.codexUAAppVersion')} description={t('settings.codexUAAppVersionDesc')}>
+                            <Input
+                              value={codexUserAgentConfig.app_version ?? ''}
+                              placeholder={codexUAAppVersionPlaceholder}
+                              disabled={codexUAAppFollowsCLI}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => updateCodexUserAgentConfig({ app_version: e.target.value })}
+                              onBlur={saveCodexUserAgentConfig}
+                            />
+                          </SettingField>
+                        </SettingsFieldGroup>
                       </div>
-                      {codexUAPreviewError ? (
-                        <div className="break-all text-[11px] leading-5 text-destructive">{codexUAPreviewError}</div>
-                      ) : !codexUAPreview ? (
-                        <div className="text-[11px] leading-5 text-muted-foreground">{t('settings.codexUAPreviewLoading')}</div>
-                      ) : codexUAPreview.persona ? (
-                        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 font-mono text-[11px] leading-5 text-muted-foreground">
-                          <dt className="text-foreground/70">User-Agent</dt>
-                          <dd className="break-all">{codexUAPreview.persona.user_agent}</dd>
-                          <dt className="text-foreground/70">Originator</dt>
-                          <dd className="break-all">{codexUAPreview.persona.originator}</dd>
-                          <dt className="text-foreground/70">Version</dt>
-                          <dd className="break-all">{codexUAPreview.persona.version}</dd>
-                        </dl>
-                      ) : (
-                        <ul className="space-y-0.5 font-mono text-[11px] leading-5 text-muted-foreground">
-                          {(codexUAPreview.samples ?? []).map((sample) => (
-                            <li key={`${sample.label}-${sample.account_id ?? 0}`} className="break-all">
-                              <span className="text-foreground/70">{sample.label}{sample.account_id ? ` · ${sample.account_id}` : ''}</span>
-                              {' '}{sample.user_agent}
-                              <span className="text-foreground/50">{' · '}{sample.originator}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {codexUAPreview?.warnings?.length ? (
-                        <div className="mt-1.5 text-[11px] leading-5 text-amber-600 dark:text-amber-400">
-                          {t('settings.codexUAWarnUnseen', { fields: codexUAPreview.warnings.map((field) => t(`settings.codexUAWarn_${field}`)).join(' / ') })}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
+                    </>
+                  )}
                 </div>
               </SettingsCard>
               </SettingsSection>
