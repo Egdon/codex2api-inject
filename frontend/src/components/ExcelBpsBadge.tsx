@@ -180,11 +180,19 @@ export function ExcelBpsStatus({ account, variant = "row" }: ExcelBpsStatusProps
   }
 
   if (variant === "card") {
+    // Same geometry as .codex-account-card__flag, which would otherwise
+    // override the tone colors (unlayered CSS beats utility classes).
     return (
-      <span className={cn("codex-account-card__flag ring-1 ring-inset", STATUS_TONES[tone])} title={title}>
+      <span
+        className={cn(
+          "inline-flex max-w-full items-center gap-1 rounded-md px-[0.4375rem] py-1 text-[11px] font-medium leading-[1.2] ring-1 ring-inset",
+          STATUS_TONES[tone],
+        )}
+        title={title}
+      >
         <Icon className="size-3 shrink-0" aria-hidden />
-        <span className="font-semibold">{label}</span>
-        {detail ? <span className="min-w-0 truncate tabular-nums opacity-90">· {detail}</span> : null}
+        <span className="shrink-0 font-semibold">{label}</span>
+        {detail ? <span className="min-w-0 truncate tabular-nums">· {detail}</span> : null}
       </span>
     );
   }
