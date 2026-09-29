@@ -94,6 +94,9 @@ type RuntimeSettings struct {
 	// CodexBasispoints403ProbeIntervalMin is the recovery probe interval for a
 	// paused account or model, 1-10080 minutes (default 1).
 	CodexBasispoints403ProbeIntervalMin int
+	// CodexBasispoints429CooldownSec is the Basispoints route cooldown after a
+	// rate limit without Retry-After, 1-600 seconds (default 5).
+	CodexBasispoints429CooldownSec int
 	// CodexRequestCompression 对 HTTP /responses 请求体做 zstd 压缩（默认 true，
 	// 与真实 Codex CLI 一致）。与 CodexForceWebsocket 正交：WS 路径走
 	// permessage-deflate（拨号器已开启），本项只作用于 HTTP 路径，两者可同时生效。
@@ -349,6 +352,7 @@ func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	settings.ContinuousRetryPolicy = database.NormalizeContinuousRetryPolicy(settings.ContinuousRetryPolicy)
 	settings.CodexBasispointsModels = database.NormalizeCodexBasispointsModels(settings.CodexBasispointsModels)
 	settings.CodexBasispoints403ProbeIntervalMin = database.NormalizeCodexBasispoints403ProbeIntervalMinutes(settings.CodexBasispoints403ProbeIntervalMin)
+	settings.CodexBasispoints429CooldownSec = database.NormalizeCodexBasispoints429CooldownSeconds(settings.CodexBasispoints429CooldownSec)
 	return settings
 }
 
@@ -375,6 +379,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.CodexBasispointsModels = settings.CodexBasispointsModels
 		next.CodexBasispoints403PauseDisabled = settings.CodexBasispoints403PauseDisabled
 		next.CodexBasispoints403ProbeIntervalMin = settings.CodexBasispointsProbeMinutes
+		next.CodexBasispoints429CooldownSec = settings.CodexBasispoints429CooldownSeconds
 		next.CodexRequestCompression = settings.CodexRequestCompression
 		next.CodexWSWeakNetworkMode = settings.CodexWSWeakNetworkMode
 		next.CodexWSHideErrors = settings.CodexWSHideUpstreamErrors

@@ -72,10 +72,41 @@ func excelBPSHealthTestAccount(id int64) *auth.Account {
 	return &auth.Account{DBID: id, AccessToken: "synthetic-access-token", AccountID: "chatgpt-account", ExcelBPSEnabled: true}
 }
 
+func setExcelBPSRateLimitCooldownForTest(t *testing.T, seconds int) {
+	t.Helper()
+	previous := CurrentRuntimeSettings()
+	t.Cleanup(func() { ApplyRuntimeSettings(previous) })
+	UpdateRuntimeSettings(func(s RuntimeSettings) RuntimeSettings {
+		s.CodexBasispoints429CooldownSec = seconds
+		return s
+	})
+}
+
+func TestExcelBPSRateLimitCooldownFollowsTheSetting(t *testing.T) {
+	now := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		setting int
+		want    time.Duration
+	}{
+		{setting: 0, want: 5 * time.Second},
+		{setting: 1, want: time.Second},
+		{setting: 45, want: 45 * time.Second},
+		{setting: 600, want: 10 * time.Minute},
+		{setting: 601, want: 5 * time.Second},
+	} {
+		setExcelBPSRateLimitCooldownForTest(t, tc.setting)
+		if got := excelBPSRetryAfter(make(http.Header), now); got != tc.want {
+			t.Fatalf("cooldown setting %d = %s, want %s", tc.setting, got, tc.want)
+		}
+	}
+}
+
 func TestExcelBPSRetryAfterIsClamped(t *testing.T) {
+	setExcelBPSRateLimitCooldownForTest(t, 7)
 	now := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
 	for value, want := range map[string]time.Duration{
-		"":      excelBPSRateLimitDefault,
+		"":      7 * time.Second,
+		"soon":  7 * time.Second,
 		"30":    30 * time.Second,
 		"0":     excelBPSRateLimitMin,
 		"99999": excelBPSRateLimitMax,
@@ -107,6 +138,23 @@ func TestExcelBPSHealthRateLimitCoolsOnlyTheRoute(t *testing.T) {
 	clock.Advance(31 * time.Second)
 	if excelBPSHealth.blocks(account, "gpt-6-astra") {
 		t.Fatal("cooldown outlived Retry-After")
+	}
+}
+
+func TestExcelBPSHealthRateLimitWithoutRetryAfterUsesTheSetting(t *testing.T) {
+	resetExcelBPSHealthForTest(t)
+	setExcelBPSRateLimitCooldownForTest(t, 12)
+	clock := useExcelBPSTestClock(t)
+	account := excelBPSHealthTestAccount(302)
+	// The in-stream token limit maps to 429 without Retry-After.
+	excelBPSHealth.observeFailure(context.Background(), account, "gpt-6-astra", http.StatusTooManyRequests, "rate_limit_exceeded", nil, "")
+	clock.Advance(11 * time.Second)
+	if !excelBPSHealth.blocks(account, "gpt-6-astra") {
+		t.Fatal("cooldown ended before the configured 12 seconds")
+	}
+	clock.Advance(2 * time.Second)
+	if excelBPSHealth.blocks(account, "gpt-6-astra") {
+		t.Fatal("cooldown outlived the configured 12 seconds")
 	}
 }
 

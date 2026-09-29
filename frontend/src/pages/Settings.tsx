@@ -9,6 +9,8 @@ import { useDataLoader } from '../hooks/useDataLoader'
 import { useToast } from '../hooks/useToast'
 import type { AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
 import { ANTIGRAVITY_DEFAULT_MODELS } from '../lib/antigravityModels'
+import { EXCEL_BPS_KNOWN_MODELS, excelBpsModelOptions, formatExcelBpsModels, parseExcelBpsModels } from '../lib/excelBpsModels'
+import ChipInput from '../components/ChipInput'
 import { countPayloadRules } from './PayloadRules'
 import { getErrorMessage } from '../utils/error'
 import { DEFAULT_CLAUDE_MODEL_MAP } from '../lib/modelMapping'
@@ -2207,6 +2209,7 @@ export default function Settings() {
     codex_basispoints_models: '',
     codex_basispoints_403_auto_pause: true,
     codex_basispoints_403_probe_interval_minutes: 1,
+    codex_basispoints_429_cooldown_seconds: 5,
     codex_ws_weak_network_mode: false,
     codex_ws_keepalive_enabled: false,
     codex_ws_keepalive_interval_sec: 60,
@@ -2552,6 +2555,13 @@ export default function Settings() {
       [field]: value,
     } as Partial<SystemSettings>)
   }, [autoSaveSettingsPatch])
+
+  // BPS model chips save on every change, in the canonical stored form.
+  const saveExcelBpsModels = useCallback((models: string[]) => {
+    const value = formatExcelBpsModels(models)
+    setSettingsForm(f => ({ ...f, codex_basispoints_models: value }))
+    autoSaveStringField('codex_basispoints_models', value)
+  }, [autoSaveStringField])
 
   // ===== Antigravity OAuth client 配置(草稿态 + 显式保存;secret 不回显,留空 = 沿用已保存值) =====
   const [agOAuthDraft, setAgOAuthDraft] = useState<{ rows: AntigravityOAuthClientSetting[]; activeKey: string } | null>(null)
@@ -3809,12 +3819,28 @@ export default function Settings() {
                   </div>
                   <div className={SETTINGS_FIELD_GRID}>
                     <SettingField label={t('settings.codexBasispointsModels')} description={t('settings.codexBasispointsModelsDesc')}>
-                      <Input
-                        value={settingsForm.codex_basispoints_models}
-                        placeholder={t('settings.codexBasispointsModelsPlaceholder')}
-                        onChange={(e) => setSettingsForm(f => ({ ...f, codex_basispoints_models: e.target.value }))}
-                        onBlur={(e) => autoSaveStringField('codex_basispoints_models', e.currentTarget.value)}
-                      />
+                      <div className="space-y-2">
+                        <ChipInput
+                          value={parseExcelBpsModels(settingsForm.codex_basispoints_models)}
+                          options={excelBpsModelOptions(modelList)}
+                          placeholder={t('settings.codexBasispointsModelsPlaceholder')}
+                          onChange={(models) => saveExcelBpsModels(models)}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <Button type="button" variant="outline" size="sm" onClick={() => saveExcelBpsModels([...EXCEL_BPS_KNOWN_MODELS])}>
+                            {t('settings.codexBasispointsModelsFillKnown')}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={!settingsForm.codex_basispoints_models}
+                            onClick={() => saveExcelBpsModels([])}
+                          >
+                            {t('settings.codexBasispointsModelsClear')}
+                          </Button>
+                        </div>
+                      </div>
                     </SettingField>
                   </div>
                   <div className={SETTINGS_SWITCH_ROW}>
@@ -3846,6 +3872,21 @@ export default function Settings() {
                         />
                         <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
                           {t('settings.codexBasispoints403ProbeIntervalUnit')}
+                        </span>
+                      </div>
+                    </SettingField>
+                    <SettingField label={t('settings.codexBasispoints429Cooldown')} description={t('settings.codexBasispoints429CooldownDesc')}>
+                      <div className="relative">
+                        <DraftNumberInput
+                          min={1}
+                          max={600}
+                          className="pr-14 tabular-nums"
+                          value={settingsForm.codex_basispoints_429_cooldown_seconds}
+                          onValueChange={(value) => setSettingsForm(f => ({ ...f, codex_basispoints_429_cooldown_seconds: value }))}
+                          onValueCommit={(value) => void autoSaveSettingsPatch({ codex_basispoints_429_cooldown_seconds: value })}
+                        />
+                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                          {t('settings.codexBasispoints429CooldownUnit')}
                         </span>
                       </div>
                     </SettingField>

@@ -131,3 +131,42 @@ func TestBasispoints403SettingsPersistValidateAndReload(t *testing.T) {
 		t.Fatal("reload/GET mismatch")
 	}
 }
+
+func TestBasispointsRateLimitCooldownPersistValidateAndReload(t *testing.T) {
+	h, db, _ := newImagesSettingsHandler(t)
+	t.Cleanup(func() { proxy.ApplyRuntimeSettings(proxy.DefaultRuntimeSettings()) })
+	get := decodeResponseCacheSettingsResponse(t, invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil))
+	if get.CodexBasispoints429CooldownSec != 5 {
+		t.Fatalf("default cooldown = %d, want 5", get.CodexBasispoints429CooldownSec)
+	}
+	for _, invalid := range []int{0, -1, 601} {
+		response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{"codex_basispoints_429_cooldown_seconds": invalid})
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("cooldown %d accepted with %d", invalid, response.Code)
+		}
+	}
+	response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{"codex_basispoints_429_cooldown_seconds": 600})
+	if response.Code != 200 {
+		t.Fatalf("PUT: %d %s", response.Code, response.Body.String())
+	}
+	if got := decodeResponseCacheSettingsResponse(t, response); got.CodexBasispoints429CooldownSec != 600 || proxy.CurrentRuntimeSettings().CodexBasispoints429CooldownSec != 600 {
+		t.Fatalf("PUT/runtime mismatch: %d/%d", got.CodexBasispoints429CooldownSec, proxy.CurrentRuntimeSettings().CodexBasispoints429CooldownSec)
+	}
+	saved, err := db.GetSystemSettings(context.Background())
+	if err != nil || saved.CodexBasispoints429CooldownSeconds != 600 {
+		t.Fatalf("persisted mismatch: %+v %v", saved, err)
+	}
+	// An unrelated update from a stale instance keeps the persisted value.
+	proxy.UpdateRuntimeSettings(func(s proxy.RuntimeSettings) proxy.RuntimeSettings { s.CodexBasispoints429CooldownSec = 5; return s })
+	if response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{"site_name": "unrelated"}); response.Code != 200 {
+		t.Fatalf("unrelated PUT: %d", response.Code)
+	}
+	if saved, err := db.GetSystemSettings(context.Background()); err != nil || saved.CodexBasispoints429CooldownSeconds != 600 {
+		t.Fatalf("unrelated update overwrote the cooldown: %+v %v", saved, err)
+	}
+	proxy.ApplyRuntimeSettings(proxy.DefaultRuntimeSettings())
+	proxy.ApplyRuntimeSettingsFromSystem(saved)
+	if reloaded := decodeResponseCacheSettingsResponse(t, invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil)); reloaded.CodexBasispoints429CooldownSec != 600 {
+		t.Fatalf("reload/GET cooldown = %d", reloaded.CodexBasispoints429CooldownSec)
+	}
+}

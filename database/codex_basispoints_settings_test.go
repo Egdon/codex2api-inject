@@ -45,3 +45,38 @@ func TestParseCodexBasispointsModels(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexBasispointsRouteHealthSettingsRoundTrip(t *testing.T) {
+	db, err := New("sqlite", filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatalf("New(sqlite): %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	// Zero values written by bootstrap map to the defaults.
+	if err := db.UpdateSystemSettings(ctx, &SystemSettings{}); err != nil {
+		t.Fatalf("UpdateSystemSettings(zero): %v", err)
+	}
+	got, err := db.GetSystemSettings(ctx)
+	if err != nil || got == nil || got.CodexBasispointsProbeMinutes != DefaultCodexBasispoints403ProbeIntervalMinutes || got.CodexBasispoints429CooldownSeconds != DefaultCodexBasispoints429CooldownSeconds {
+		t.Fatalf("zero-value settings = %+v, %v", got, err)
+	}
+	got.CodexBasispoints403PauseDisabled = true
+	got.CodexBasispointsProbeMinutes = 30
+	got.CodexBasispoints429CooldownSeconds = 600
+	if err := db.UpdateSystemSettings(ctx, got); err != nil {
+		t.Fatalf("UpdateSystemSettings: %v", err)
+	}
+	again, err := db.GetSystemSettings(ctx)
+	if err != nil || again == nil || !again.CodexBasispoints403PauseDisabled || again.CodexBasispointsProbeMinutes != 30 || again.CodexBasispoints429CooldownSeconds != 600 {
+		t.Fatalf("round trip = %+v, %v", again, err)
+	}
+}
+
+func TestNormalizeCodexBasispoints429CooldownSeconds(t *testing.T) {
+	for seconds, want := range map[int]int{0: 5, -3: 5, 1: 1, 5: 5, 600: 600, 601: 5} {
+		if got := NormalizeCodexBasispoints429CooldownSeconds(seconds); got != want {
+			t.Fatalf("NormalizeCodexBasispoints429CooldownSeconds(%d) = %d, want %d", seconds, got, want)
+		}
+	}
+}

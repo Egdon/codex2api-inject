@@ -31,6 +31,28 @@ func NormalizeCodexBasispoints403ProbeIntervalMinutes(minutes int) int {
 	return minutes
 }
 
+// Basispoints rate-limit route cooldown bounds, in seconds. Retry-After from
+// the upstream still takes precedence, capped at the same maximum.
+const (
+	DefaultCodexBasispoints429CooldownSeconds = 5
+	MaxCodexBasispoints429CooldownSeconds     = 600
+)
+
+// ValidCodexBasispoints429CooldownSeconds reports whether an administrator
+// supplied cooldown is in range.
+func ValidCodexBasispoints429CooldownSeconds(seconds int) bool {
+	return seconds >= 1 && seconds <= MaxCodexBasispoints429CooldownSeconds
+}
+
+// NormalizeCodexBasispoints429CooldownSeconds maps unset or invalid stored
+// values to the default instead of disabling the cooldown.
+func NormalizeCodexBasispoints429CooldownSeconds(seconds int) int {
+	if !ValidCodexBasispoints429CooldownSeconds(seconds) {
+		return DefaultCodexBasispoints429CooldownSeconds
+	}
+	return seconds
+}
+
 // ParseCodexBasispointsModels returns the normalized model names of raw.
 func ParseCodexBasispointsModels(raw string) []string {
 	fields := strings.FieldsFunc(raw, func(r rune) bool {

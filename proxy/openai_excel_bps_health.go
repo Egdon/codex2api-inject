@@ -16,12 +16,14 @@ import (
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/cache"
+	"github.com/codex2api/database"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
 
 // Basispoints route health. A BPS 429 cools only this account's Basispoints
-// route for Retry-After. A BPS 403 pauses the route — per (account, model) for
+// route for Retry-After, or the configured cooldown (default 5 seconds). A
+// BPS 403 pauses the route — per (account, model) for
 // basispoints_model_access_changed, otherwise for the whole account — until a
 // background probe shows it recovered. Paused routes send requests straight
 // to native Codex; the account's Codex scheduling state is never changed.
@@ -30,7 +32,6 @@ const (
 	excelBPSHealthScanInterval = 15 * time.Second
 	excelBPSProbeConcurrency   = 3
 	excelBPSProbeTimeout       = 45 * time.Second
-	excelBPSRateLimitDefault   = time.Minute
 	excelBPSRateLimitMin       = time.Second
 	excelBPSRateLimitMax       = 10 * time.Minute
 	excelBPSHealthNamespace    = "excel_bps_health"
@@ -249,10 +250,19 @@ func (s *excelBPSHealthState) blocks(account *auth.Account, model string) bool {
 	return s.pauses[excelBPSPauseKey(id, "")] != nil || s.pauses[excelBPSPauseKey(id, model)] != nil
 }
 
-// excelBPSRetryAfter parses Retry-After (seconds or an HTTP date).
+// excelBPSRateLimitCooldown is the configured route cooldown after a
+// Basispoints rate limit that carries no usable Retry-After.
+func excelBPSRateLimitCooldown() time.Duration {
+	seconds := database.NormalizeCodexBasispoints429CooldownSeconds(CurrentRuntimeSettings().CodexBasispoints429CooldownSec)
+	return time.Duration(seconds) * time.Second
+}
+
+// excelBPSRetryAfter parses Retry-After (seconds or an HTTP date). Without a
+// usable header the configured cooldown applies; the upstream value otherwise
+// wins, bounded to the same range as the setting.
 func excelBPSRetryAfter(header http.Header, now time.Time) time.Duration {
 	value := strings.TrimSpace(header.Get("Retry-After"))
-	wait := excelBPSRateLimitDefault
+	wait := excelBPSRateLimitCooldown()
 	if seconds, err := strconv.Atoi(value); err == nil {
 		wait = time.Duration(seconds) * time.Second
 	} else if at, err := http.ParseTime(value); err == nil {
