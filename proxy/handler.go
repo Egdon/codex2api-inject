@@ -8535,7 +8535,12 @@ func (h *Handler) applyCooldownForModel(account *auth.Account, statusCode int, b
 			}
 			return codex429Decision{}
 		}
-		h.store.MarkCooldown(account, 30*time.Minute, "payment_required")
+		// A bare 402/403 is not proof that this credential is out of
+		// balance. The upstream also uses these statuses for transient
+		// policy, routing, and endpoint responses. Do not turn one such
+		// request into a durable account-level payment_required gate; the
+		// usage probe and AT refresh are the authoritative account checks.
+		// Explicit usage exhaustion is handled above by IsUsageLimitReachedError.
 	}
 	return codex429Decision{}
 }
