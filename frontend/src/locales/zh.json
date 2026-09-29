@@ -598,6 +598,8 @@
     "autoRefresh": "自动刷新",
     "autoRefreshOff": "关闭自动刷新",
     "autoRefreshEvery": "每 {{seconds}} 秒",
+    "autoRefreshCountdown": "{{seconds}} 秒后自动刷新",
+    "autoRefreshRunning": "正在自动刷新",
     "save": "保存",
     "saving": "保存中…",
     "cancel": "取消",

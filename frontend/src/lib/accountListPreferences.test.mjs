@@ -59,6 +59,8 @@ test("account list sort round-trips a chosen column", () => {
   });
   writeAccountListSort({ key: "group", dir: "desc" }, storage);
   assert.deepEqual(readAccountListSort(storage), { key: "group", dir: "desc" });
+  writeAccountListSort({ key: "id", dir: "asc" }, storage);
+  assert.deepEqual(readAccountListSort(storage), { key: "id", dir: "asc" });
 });
 
 test("restoring the default sort clears the stored value", () => {

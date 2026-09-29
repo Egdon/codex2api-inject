@@ -15,6 +15,7 @@ export const ACCOUNT_LIST_SORT_KEYS = [
   "importTime",
   "schedulerPriority",
   "group",
+  "id",
 ] as const;
 export type AccountListSortKey = (typeof ACCOUNT_LIST_SORT_KEYS)[number];
 export type AccountListSortDir = "asc" | "desc";

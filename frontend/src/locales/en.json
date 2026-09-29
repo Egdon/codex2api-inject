@@ -598,6 +598,8 @@
     "autoRefresh": "Auto refresh",
     "autoRefreshOff": "Auto refresh off",
     "autoRefreshEvery": "Every {{seconds}}s",
+    "autoRefreshCountdown": "Auto refresh in {{seconds}}s",
+    "autoRefreshRunning": "Auto refreshing",
     "save": "Save",
     "saving": "Saving…",
     "cancel": "Cancel",

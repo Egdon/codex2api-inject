@@ -1904,6 +1904,8 @@ export default function Accounts() {
         return t("accounts.usage");
       case "importTime":
         return t("accounts.importTime");
+      case "id":
+        return t("accounts.idColumn");
       case "schedulerPriority":
         return t("accounts.schedulerPriorityColumn");
       case "group":
@@ -7090,7 +7092,8 @@ export default function Accounts() {
                         sortKey === "requests" ||
                         sortKey === "today" ||
                         sortKey === "usage" ||
-                        sortKey === "importTime"
+                        sortKey === "importTime" ||
+                        sortKey === "id"
                           ? sortKey
                           : "default"
                       }
@@ -7101,7 +7104,7 @@ export default function Accounts() {
                         if (value === "default") {
                           setSortKey(null);
                         } else {
-                          setSortKey(value as "requests" | "today" | "usage" | "importTime");
+                          setSortKey(value as "requests" | "today" | "usage" | "importTime" | "id");
                           setSortDir("desc");
                         }
                         setPage(1);
@@ -7112,12 +7115,14 @@ export default function Accounts() {
                         { value: "today", label: t("accounts.todayStats") },
                         { value: "usage", label: t("accounts.usage") },
                         { value: "importTime", label: t("accounts.importTime") },
+                        { value: "id", label: t("accounts.idColumn") },
                       ]}
                     />
                     {(sortKey === "requests" ||
                       sortKey === "today" ||
                       sortKey === "usage" ||
-                      sortKey === "importTime") && (
+                      sortKey === "importTime" ||
+                      sortKey === "id") && (
                       <Button
                         type="button"
                         variant="outline"
@@ -7582,8 +7587,26 @@ export default function Accounts() {
                           </TableHead>
                         )}
                         {visibleColumns.id && (
-                          <TableHead className="text-[13px] font-semibold">
-                            {t("accounts.idColumn")}
+                          <TableHead
+                            className="text-[13px] font-semibold cursor-pointer select-none hover:text-primary transition-colors"
+                            onClick={() => {
+                              if (sortKey === "id") {
+                                setSortDir((d) =>
+                                  d === "asc" ? "desc" : "asc",
+                                );
+                              } else {
+                                setSortKey("id");
+                                setSortDir("desc");
+                              }
+                              setPage(1);
+                            }}
+                          >
+                            {t("accounts.idColumn")}{" "}
+                            {sortKey === "id"
+                              ? sortDir === "desc"
+                                ? "↓"
+                                : "↑"
+                              : ""}
                           </TableHead>
                         )}
                         {visibleColumns.email && (

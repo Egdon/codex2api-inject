@@ -257,6 +257,8 @@
     "autoRefresh": "自動重新整理",
     "autoRefreshOff": "關閉自動重新整理",
     "autoRefreshEvery": "每 {{seconds}} 秒",
+    "autoRefreshCountdown": "{{seconds}} 秒後自動重新整理",
+    "autoRefreshRunning": "正在自動重新整理",
     "failed": "失敗",
     "enabled": "開啟",
     "disabled": "關閉"
