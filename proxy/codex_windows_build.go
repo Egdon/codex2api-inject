@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 )
 
 const (
@@ -231,13 +232,15 @@ func FetchCodexDesktopWindowsBuild(ctx context.Context, proxyURL string) (string
 	if err != nil {
 		return "", err
 	}
-	// 版本化路径并非每个 Store 版本都会上传，缺失时回退到最新包，由下方主次版本校验兜底。
+	// 版本化路径并非每个 Store 版本都会上传，缺失时回退到最新包。
 	var ranges *codexRangeReader
-	for _, url := range []string{
+	fallback := false
+	for i, url := range []string{
 		codexMSIXBaseURL + "releases/" + packageVersion + "/ChatGPT-x64.msix",
 		codexMSIXBaseURL + "ChatGPT-x64.msix",
 	} {
 		ranges, err = newCodexRangeReader(ctx, client, url)
+		fallback = i > 0
 		if !errors.Is(err, errCodexMSIXNotFound) {
 			break
 		}
@@ -245,6 +248,61 @@ func FetchCodexDesktopWindowsBuild(ctx context.Context, proxyURL string) (string
 	if err != nil {
 		return "", err
 	}
+	cacheKey := ""
+	if ranges.etag != "" {
+		cacheKey = fmt.Sprintf("%s|%s|%d", ranges.url, ranges.etag, ranges.size)
+	}
+	version, cached := codexWindowsBuildCache.get(cacheKey)
+	if !cached {
+		if version, err = codexMSIXPackageVersion(ranges); err != nil {
+			return "", err
+		}
+		codexWindowsBuildCache.put(cacheKey, version)
+	}
+	buildParts, ok := codexBuildParts(version, 3)
+	if !ok || !codexWindowsBuildMatchesStore(buildParts, parts, fallback) {
+		return "", fmt.Errorf("Desktop package version %s does not match Store build %s", version, packageVersion)
+	}
+	return version, nil
+}
+
+// codexWindowsBuildMatchesStore:版本化包必须与清单主次版本一致;回退的最新包常落后于
+// 清单几天(Store 先发布、包后上传),只拒绝比清单还新的异常包。
+func codexWindowsBuildMatchesStore(build, store []int64, fallback bool) bool {
+	if !fallback {
+		return build[0] == store[0] && build[1] == store[1]
+	}
+	return build[0] < store[0] || build[0] == store[0] && build[1] <= store[1]
+}
+
+// codexWindowsBuildCache 以 MSIX URL+ETag+大小为键缓存解析结果:包不变时省掉数十次 Range 请求。
+var codexWindowsBuildCache codexWindowsBuildMemo
+
+type codexWindowsBuildMemo struct {
+	mu      sync.Mutex
+	key     string
+	version string
+}
+
+func (m *codexWindowsBuildMemo) get(key string) (string, bool) {
+	if key == "" {
+		return "", false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.version, m.key == key
+}
+
+func (m *codexWindowsBuildMemo) put(key, version string) {
+	if key == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.key, m.version = key, version
+}
+
+func codexMSIXPackageVersion(ranges *codexRangeReader) (string, error) {
 	archive, err := zip.NewReader(ranges, ranges.size)
 	if err != nil {
 		return "", err
@@ -262,14 +320,7 @@ func FetchCodexDesktopWindowsBuild(ctx context.Context, proxyURL string) (string
 		}
 		version, parseErr := codexASARPackageVersion(stream)
 		_ = stream.Close()
-		if parseErr != nil {
-			return "", parseErr
-		}
-		buildParts, ok := codexBuildParts(version, 3)
-		if !ok || buildParts[0] != parts[0] || buildParts[1] != parts[1] {
-			return "", fmt.Errorf("Desktop package version mismatch")
-		}
-		return version, nil
+		return version, parseErr
 	}
 	return "", fmt.Errorf("Desktop app.asar not found in MSIX")
 }
