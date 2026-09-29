@@ -5,6 +5,7 @@ import {
   Fingerprint,
   Gauge,
   Globe,
+  Layers,
   Loader2,
   Save,
   Tag,
@@ -24,6 +25,7 @@ import {
   formStateFromAccount,
   isAbortError,
   isQuickConfigFormCurrent,
+  type ExcelBpsMode,
   type QuickConfigFormState,
   type QuickConfigLoadStatus,
   type QuickConfigReadySaveError,
@@ -43,6 +45,8 @@ import {
 } from "@/components/ui/sheet";
 import ChipInput from "./ChipInput";
 import AccountGroupMultiSelect from "./AccountGroupMultiSelect";
+import ExcelBpsBadge from "./ExcelBpsBadge";
+import { excelBpsCanResume } from "../lib/excelBpsStatus";
 import StateShell from "./StateShell";
 
 function formatSignedNumber(value: number): string {
@@ -88,6 +92,7 @@ export default function AccountQuickConfigSheet({
   const { showToast } = useToast();
 
   const [saving, setSaving] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [loadStatus, setLoadStatus] = useState<QuickConfigLoadStatus>("loading");
   const [loadError, setLoadError] = useState("");
   const [retryNonce, setRetryNonce] = useState(0);
@@ -192,6 +197,25 @@ export default function AccountQuickConfigSheet({
     full: t("accounts.codexFingerprintModeFullDetail"),
   };
 
+  const handleResumeExcelBps = async () => {
+    setResuming(true);
+    try {
+      await api.clearAccountExcelBpsPause(account.id);
+      showToast(t("accounts.excelBpsResumed"));
+      onSaved();
+    } catch (err) {
+      showToast(`${t("accounts.excelBpsResumeFailed")}: ${getErrorMessage(err)}`, "error");
+    } finally {
+      setResuming(false);
+    }
+  };
+
+  const excelBpsOptions: { value: ExcelBpsMode; label: string }[] = [
+    { value: "inherit", label: t("accounts.excelBpsModeInherit") },
+    { value: "on", label: t("accounts.excelBpsModeOn") },
+    { value: "off", label: t("accounts.excelBpsModeOff") },
+  ];
+
   const fingerprintMode = form?.fingerprintMode ?? "off";
   const scoreMode = form?.scoreMode ?? "default";
   const concurrencyMode = form?.concurrencyMode ?? "default";
@@ -281,6 +305,57 @@ export default function AccountQuickConfigSheet({
               {fingerprintDetails[fingerprintMode]}
             </div>
           </div>
+
+          {form.excelBpsMode != null ? (
+            <div className="rounded-xl border border-border/70 bg-card p-4 shadow-2xs space-y-3">
+              <div className="flex items-center justify-between gap-2 border-b border-border/50 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Layers className="size-4 text-emerald-500" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-foreground">
+                    {t("accounts.excelBpsModeTitle")}
+                  </span>
+                </div>
+                <Badge variant={account.openai_excel_bps_effective ? "default" : "outline"} className="text-[11px]">
+                  {account.openai_excel_bps_effective
+                    ? t("accounts.excelBpsEffectiveOn")
+                    : t("accounts.excelBpsEffectiveOff")}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {t("accounts.excelBpsModeHint")}
+              </p>
+              {excelBpsCanResume(account) ? (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                  <div className="flex min-w-0 items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+                    <ExcelBpsBadge account={account} />
+                    <span className="truncate">{t("accounts.excelBpsResumeHint")}</span>
+                  </div>
+                  <Button size="sm" variant="outline" disabled={resuming} onClick={() => void handleResumeExcelBps()}>
+                    {resuming ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                    {t("accounts.excelBpsResume")}
+                  </Button>
+                </div>
+              ) : null}
+              <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-border/70 bg-muted/30 p-1" role="radiogroup" aria-label={t("accounts.excelBpsModeTitle")}>
+                {excelBpsOptions.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={form.excelBpsMode === opt.value}
+                    onClick={() => patchForm({ excelBpsMode: opt.value })}
+                    className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-all duration-150 ${
+                      form.excelBpsMode === opt.value
+                        ? "bg-primary text-primary-foreground font-bold shadow-xs ring-1 ring-primary/30"
+                        : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="rounded-xl border border-border/70 bg-card p-4 shadow-2xs space-y-3.5">
             <div className="flex items-center gap-2 border-b border-border/50 pb-2.5">

@@ -408,6 +408,10 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 	if accountID == "" {
 		return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "account_identity_missing"}
 	}
+	// Requests that need image generation go to native Codex before this
+	// point, so an image tool left here (typically injected by the gateway) is
+	// unusable; drop it instead of adding a hosted-tool warning to the prompt.
+	raw = stripResponsesImageGenerationTool(raw)
 	preparedInput, err := setExcelBPSPromptCacheKey(raw, threadKey, compact)
 	if err != nil {
 		return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "request_invalid", detail: err.Error()}
@@ -421,6 +425,9 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		log.Printf("[excel-bps] account=%d prepare rejected: %v", account.ID(), err)
 		return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "request_unsupported", detail: err.Error()}
 	}
+	// Client usage reports Basispoints cache creation as ordinary input when
+	// the operator enabled it; otherwise the upstream counters pass through.
+	bridge.CacheWritesAsInput = CurrentRuntimeSettings().CodexBasispointsCacheWriteAsInput
 	uploaded := make(map[string]bool)
 	upload := func(image basispoints.InlineImage) (string, error) {
 		key := fmt.Sprintf("%d\x00%s", account.ID(), image.Digest)
@@ -440,6 +447,7 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		return fileID, nil
 	}
 	mode := basispoints.ImagesDefault
+	encryptedRetried := false
 	for {
 		body, images, err := basispoints.RewriteImages(prepared, mode, upload)
 		if err != nil {
@@ -474,15 +482,38 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 			return nil, &excelBPSFailure{status: http.StatusBadGateway, code: "empty_response"}
 		}
 		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
-			return &excelBPSUpstream{response: response, bridge: bridge, model: gjson.GetBytes(preparedInput, "model").String()}, nil
+			model := gjson.GetBytes(preparedInput, "model").String()
+			if rejected := inspectExcelBPSStart(ctx, response, excelBPSPreOutputWindow); rejected != nil {
+				log.Printf("[excel-bps] account=%d upstream rejected before output: status=%d code=%q", account.ID(), rejected.status, rejected.code)
+				excelBPSHealth.observeFailure(ctx, account, model, rejected.status, rejected.code, response.Header, proxyURL)
+				return nil, rejected
+			}
+			return &excelBPSUpstream{response: response, bridge: bridge, model: model}, nil
 		}
 		// The body stays out of the client response; operators still need the
 		// provider reason to tell unsupported input from account problems.
 		snippet, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
 		_ = response.Body.Close()
 		log.Printf("[excel-bps] account=%d upstream HTTP %d: %s", account.ID(), response.StatusCode, excelBPSErrorShape(snippet))
+		invalidEncrypted := response.StatusCode == http.StatusBadRequest && isExcelBPSInvalidEncryptedContent(snippet)
+		if invalidEncrypted && !encryptedRetried {
+			// Reasoning produced elsewhere (for example by native Codex before a
+			// fallback) cannot be verified here. Retry once without it; nothing
+			// was generated for the rejected request.
+			if stripped, ok := basispoints.StripReasoningEncryptedContent(prepared); ok {
+				encryptedRetried = true
+				prepared = stripped
+				log.Printf("[excel-bps] account=%d retrying once without unverifiable encrypted reasoning", account.ID())
+				continue
+			}
+		}
 		if !excelBPSImageRefusal(response.StatusCode, snippet) || !images.Any() || mode == basispoints.ImagesOmit {
-			return nil, &excelBPSHTTPError{status: response.StatusCode, code: gjson.GetBytes(snippet, "error.code").String()}
+			code := gjson.GetBytes(snippet, "error.code").String()
+			if invalidEncrypted {
+				code = "invalid_encrypted_content"
+			}
+			excelBPSHealth.observeFailure(ctx, account, gjson.GetBytes(preparedInput, "model").String(), response.StatusCode, code, response.Header, proxyURL)
+			return nil, &excelBPSHTTPError{status: response.StatusCode, code: code}
 		}
 		next, stale := nextExcelBPSImageMode(images, uploaded)
 		excelBPSAttachments.forget(stale)
@@ -521,6 +552,12 @@ type excelBPSResult struct {
 	// Synthesized marks a completion rebuilt after the upstream closed early;
 	// it has no usage, so its token counts are unknown rather than zero.
 	Synthesized bool
+	// Completed is the translated response.completed event data, kept so the
+	// caller can index the turn for later previous_response_id expansion.
+	Completed []byte
+	// Effort is the reasoning tier Basispoints actually ran (for example max
+	// is sent as xhigh), recorded instead of the requested tier.
+	Effort string
 }
 
 func (r *excelBPSResult) usageFrom(payload []byte) {
@@ -574,6 +611,7 @@ func forwardExcelBPS(ctx context.Context, c *gin.Context, account *auth.Account,
 	result.StatusCode = upstream.response.StatusCode
 	result.Model = upstream.model
 	result.RequestID = upstream.response.Header.Get("x-request-id")
+	result.Effort = upstream.bridge.Effort
 	converted := upstream.bridge.Stream(upstream.response.Body)
 	defer converted.Close()
 	if stream {
@@ -603,6 +641,9 @@ func forwardExcelBPS(ctx context.Context, c *gin.Context, account *auth.Account,
 				}
 			}
 			result.usageFrom(data)
+			if result.Terminal == "response.completed" {
+				result.Completed = append([]byte(nil), data...)
+			}
 			if !stream {
 				completed = append(completed[:0], data...)
 				return false
@@ -713,6 +754,9 @@ func excelBPSNativeRequestReason(raw []byte) string {
 	if gjson.GetBytes(raw, "previous_response_id").String() != "" {
 		return "stored_response"
 	}
+	if reason := excelBPSImageIntentReason(raw); reason != "" {
+		return reason
+	}
 	for _, item := range gjson.GetBytes(raw, "input").Array() {
 		isAgent := item.Get("type").String() == "agent_message"
 		for _, field := range []string{"content", "output"} {
@@ -743,6 +787,20 @@ func excelBPSNativeFailureReason(err error) string {
 		if upstream.status == http.StatusForbidden && upstream.code == "basispoints_model_access_changed" {
 			return "model_access"
 		}
+		// Encrypted context that Basispoints still cannot verify after one
+		// retry belongs to native Codex, which can read its own reasoning.
+		if upstream.status == http.StatusBadRequest && upstream.code == "invalid_encrypted_content" {
+			return "encrypted_context"
+		}
+		// Basispoints throttles its own endpoint; native Codex capacity is separate.
+		if upstream.status == http.StatusTooManyRequests {
+			return "rate_limited"
+		}
+		// Native Codex owns token refresh and account auth state; let it see
+		// the same credential instead of duplicating that handling here.
+		if upstream.status == http.StatusUnauthorized {
+			return "auth"
+		}
 	}
 	var failure *excelBPSFailure
 	if errors.As(err, &failure) {
@@ -768,7 +826,7 @@ func markExcelBPSNativeFallback(c *gin.Context, account *auth.Account, reason st
 
 // It deliberately does not report provider failures to the account scheduler:
 // BPS is an opt-in alternate provider surface, not a Codex health probe.
-func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream, persistReplay bool, endpoint, logModel, effectiveModel, reasoningEffort string, affinityKey string, affinityGuard auth.SessionAffinityGuard, start time.Time) bool {
+func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream, persistReplay bool, endpoint, logModel, effectiveModel, reasoningEffort string, affinityKey string, affinityGuard auth.SessionAffinityGuard, start time.Time, onCompleted func(completed []byte)) bool {
 	if c.GetString(excelBPSNativeFallbackKey) != "" {
 		return false
 	}
@@ -795,6 +853,9 @@ func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []by
 		ReasoningTokens: result.ReasoningTokens, CachedTokens: result.CachedTokens,
 		ReasoningEffort: reasoningEffort, Stream: stream, Compact: compact,
 		RequestID: result.RequestID, UpstreamResponseModel: result.UpstreamModel,
+	}
+	if result.Effort != "" {
+		logInput.ReasoningEffort = result.Effort
 	}
 	if err != nil {
 		status, code, message := excelBPSFailureInfo(err)
@@ -825,6 +886,9 @@ func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []by
 		h.logUsageForRequest(c, logInput)
 	}
 	if err == nil && result.Terminal == "response.completed" {
+		if onCompleted != nil && len(result.Completed) > 0 {
+			onCompleted(result.Completed)
+		}
 		if h != nil && h.store != nil {
 			h.store.ReleaseForSessionWithGuard(account, affinityKey, affinityGuard)
 		}
