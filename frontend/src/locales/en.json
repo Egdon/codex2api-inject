@@ -1,4 +1,30 @@
 {
+  "bps": {
+    "masterTitle": "Enable BPS for Codex",
+    "masterHint": "Applies only to Responses, compact, and their connection/HTML quality tests. Account BPS preferences are preserved when this switch is off.",
+    "masterBehavior": "When off, new unbound requests use native Codex. In-flight requests are unchanged. Errors never trigger an automatic fallback; known incompatible continuations fail explicitly.",
+    "accountTitle": "BPS preference",
+    "accountHint": "Off by default. Configure eligible ordinary OAuth accounts to use BPS for Responses/compact and associated tests when the master switch is on. This does not describe every request's actual source.",
+    "unsupported": "Only ordinary Codex OAuth accounts support BPS. Relay/API-key, agent identity, and other-channel accounts cannot enable it. An existing invalid preference can still be cleared.",
+    "masterOffHint": "The BPS master switch is off. This preference is saved but new unbound requests use native Codex.",
+    "preferenceBadge": "BPS",
+    "masterOffBadge": "BPS configured · master off",
+    "preferenceHint": "Saved BPS preference, not actual request routing. Check the recorded upstream source in usage or test results.",
+    "batchHint": "Only change BPS when explicitly selected. Eligibility is checked using fetched metadata for all selected IDs, including other pages. Unsupported or unresolved accounts are skipped and counted; Off also clears existing invalid preferences. Other selected fields are unaffected.",
+    "unchanged": "Unchanged",
+    "on": "On",
+    "off": "Off",
+    "batchDone": "Saved: {{success}}; failed: {{fail}}. BPS skipped: {{unsupported}} unsupported, {{unknown}} unresolved. Other selected fields are applied independently."
+  },
+  "upstreamSource": {
+    "title": "Upstream source",
+    "all": "All upstream sources",
+    "bps": "BPS",
+    "codex": "Native Codex",
+    "other": "Other upstream",
+    "unknown": "Unknown / not recorded",
+    "hint": "Actual source recorded by the backend for this request or test, never inferred from current account preferences. Legacy records without a source are unknown."
+  },
   "updates": {
     "buildMetadata": "Upstream base: {{base}} · Revision: {{revision}}",
     "identityUnavailable": "Cannot verify the running build identity. Installation was not started.",

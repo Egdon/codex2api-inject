@@ -17,9 +17,24 @@ func (a *Account) IsExcelBPSEnabled() bool {
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.ExcelBPSEnabled &&
-		!a.isRelayStyleLocked() &&
-		!a.isCodexAgentIdentityLocked() &&
+	return a.ExcelBPSEnabled && a.isExcelBPSEligibleLocked()
+}
+
+// IsExcelBPSEligible reports the supported ordinary OAuth credential kind,
+// without conflating eligibility with the saved opt-in or global master gate.
+func (a *Account) IsExcelBPSEligible() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.isExcelBPSEligibleLocked()
+}
+
+func (a *Account) isExcelBPSEligibleLocked() bool {
+	return !a.isRelayStyleLocked() &&
+		!strings.EqualFold(strings.TrimSpace(a.CodexAuthMode), CodexAuthModeAgentIdentity) &&
+		(strings.TrimSpace(a.UpstreamType) == "" || strings.EqualFold(strings.TrimSpace(a.UpstreamType), "codex")) &&
 		strings.TrimSpace(a.APIKey) == "" &&
 		strings.TrimSpace(a.AccessToken) != ""
 }

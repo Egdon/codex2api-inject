@@ -182,7 +182,10 @@ func (db *DB) FinishCodexRefresh(ctx context.Context, attempt *CodexRefreshAttem
 				unresolved = true
 				continue
 			}
-			merged := mergeCredentialMaps(row.Credentials, updates)
+			merged := mergeCredentialMaps(cloneCredentialUpdates(row.Credentials), updates)
+			if err := db.markBPSPolicyTransition(ctx, tx, row.ID, row.Credentials, merged); err != nil {
+				return err
+			}
 			merged["codex_refresh_attempt_id"] = attempt.ID
 			if err := db.writeCodexRefreshCredentials(ctx, tx, row, merged, true); err != nil {
 				return err

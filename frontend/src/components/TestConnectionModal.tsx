@@ -1,6 +1,8 @@
 // 账号测连弹窗:Codex、Claude(经 Codex 诊断帧)、Grok/Responses、Antigravity 共用。
 // 消费 GET /api/admin/accounts/:id/test 的 SSE:test_start → content* → diagnostics /
 // test_complete / error;codex_diagnostics 可能挂在任意事件上,读到 SSE 关闭再刷新列表。
+import UpstreamSourceBadge from './UpstreamSourceBadge';
+import type { UpstreamSource } from '../lib/upstreamSource';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -70,6 +72,7 @@ async function copyTextToClipboard(text: string) {
 }
 
 interface TestEvent {
+  upstream_source?: UpstreamSource;
   type: "test_start" | "content" | "diagnostics" | "test_complete" | "error";
   text?: string;
   model?: string;
@@ -99,6 +102,7 @@ export default function TestConnectionModal({
   const [status, setStatus] = useState<
     "idle" | "connecting" | "streaming" | "success" | "error"
   >("idle");
+  const [upstreamSource, setUpstreamSource] = useState<UpstreamSource>();
   const [errorMsg, setErrorMsg] = useState("");
   const [model, setModel] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
@@ -286,6 +290,7 @@ export default function TestConnectionModal({
     setStatus("connecting");
     setErrorMsg("");
     setDiagnostics(null);
+    setUpstreamSource(undefined);
     setModel(selectedModel);
     settledRef.current = false;
 
@@ -344,6 +349,7 @@ export default function TestConnectionModal({
               const event: TestEvent = JSON.parse(trimmed.slice(6));
               // 请求阶段失败时后端不单发 diagnostics 帧,而是把诊断挂在 error 事件上,
               // 因此不分事件类型,带了就收。
+              if (event.upstream_source !== undefined) setUpstreamSource(event.upstream_source);
               if (event.codex_diagnostics) {
                 setDiagnostics(event.codex_diagnostics);
               }
@@ -633,6 +639,9 @@ export default function TestConnectionModal({
           />
         </div>
 
+        {status !== 'idle' && <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{t('upstreamSource.title')}</span><UpstreamSourceBadge source={upstreamSource} />
+        </div>}
         <div className="space-y-2">
           <label htmlFor="account-test-content" className="text-sm font-medium">
             {t("settings.testContent")}

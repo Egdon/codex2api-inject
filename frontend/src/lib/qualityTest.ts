@@ -23,6 +23,7 @@ export const QUALITY_TEST_BUILTIN_PRESETS: QualityTestBuiltinPreset[] = [
 ]
 
 export interface QualityTestJob {
+  upstream_source?: import('./upstreamSource').UpstreamSource
   id: number
   account_id: number
   account_name: string
@@ -104,6 +105,7 @@ export function qualityTestPlanTone(plan: string): string {
 }
 
 export interface QualityTestEvent extends ClaudeTestEvent {
+  upstream_source?: import('./upstreamSource').UpstreamSource
   codex_diagnostics?: CodexTestDiagnostics
 }
 

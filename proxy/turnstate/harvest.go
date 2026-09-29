@@ -142,6 +142,12 @@ func (h *Harvester) persistTicket(ctx context.Context, t CachedTicket) {
 	if h.db == nil {
 		return
 	}
+	if err := h.db.UpsertTurnStateTicket(ctx, ticketRow(t)); err != nil {
+		log.Printf("[turn-state] ticket persistence failed for account %d", t.AccountID)
+	}
+}
+
+func ticketRow(t CachedTicket) database.TurnStateTicket {
 	row := database.TurnStateTicket{
 		AccountID:      t.AccountID,
 		Model:          t.Model,
@@ -158,9 +164,7 @@ func (h *Harvester) persistTicket(ctx context.Context, t CachedTicket) {
 	if t.LastHarvestAt > 0 {
 		row.LastHarvestAt = time.Unix(t.LastHarvestAt, 0).UTC()
 	}
-	if err := h.db.UpsertTurnStateTicket(ctx, row); err != nil {
-		log.Printf("[turn-state] ticket persistence failed for account %d", t.AccountID)
-	}
+	return row
 }
 
 func (h *Harvester) deleteTicket(ctx context.Context, accountID int64, model string) error {
@@ -215,7 +219,11 @@ func filterHarvestAccounts(accounts []*auth.Account, cfg Config) []*auth.Account
 		upstream := strings.TrimSpace(acc.UpstreamType)
 		accountID := strings.TrimSpace(acc.AccountID)
 		refresh := strings.TrimSpace(acc.RefreshToken)
+		bps := acc.ExcelBPSEnabled // saved flag, independent of master/eligibility
 		acc.Mu().RUnlock()
+		if bps {
+			continue
+		}
 		if strings.EqualFold(upstream, auth.UpstreamGrok) ||
 			strings.EqualFold(upstream, auth.UpstreamClaude) ||
 			strings.EqualFold(upstream, auth.UpstreamAntigravity) ||
@@ -314,6 +322,9 @@ func randomSID() string {
 }
 
 func (h *Harvester) probe(ctx context.Context, cfg Config, acc *auth.Account, model, inject string) (string, http.Header, error) {
+	if savedBPSFlag(acc) {
+		return "", nil, errors.New("BPS account excluded from legacy harvest")
+	}
 	if h.probeFn != nil {
 		return h.probeFn(ctx, cfg, acc, model, inject)
 	}

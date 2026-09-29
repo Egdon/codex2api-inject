@@ -1,3 +1,4 @@
+import UpstreamSourceBadge from '../components/UpstreamSourceBadge'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
@@ -191,6 +192,7 @@ function ResultDialog({ id, revision, onClose, onOpenStudio }: { id: number | un
             <DetailMeta label={t('qualityTest.outputTokens')} value={run?.output_tokens?.toLocaleString() ?? '—'} />
             <DetailMeta label={t('qualityTest.reasoningTokens')} value={run?.reasoning_tokens?.toLocaleString() ?? '—'} />
           </dl>
+          {run && <div className="flex items-center gap-2 text-xs text-muted-foreground"><span>{t('upstreamSource.title')}</span><UpstreamSourceBadge source={run.upstream_source} /></div>}
           {run?.response_model ? <p className="quality-test-response-model !p-0 mt-3">{t('qualityTest.responseModel')}: {run.response_model}</p> : null}
           {run?.prompt ? <><div className="mt-6 flex items-center justify-between gap-2"><h3 className="!mb-0">{t('qualityTest.savedPrompt')}</h3></div><p className="quality-test-dialog-prompt">{run.prompt}</p>{run.completed_at ? <small className="quality-test-dialog-finished">{t('qualityTest.finishedAt')}: {formatBeijingTime(run.completed_at)}</small> : null}</> : null}
         </aside>
@@ -471,6 +473,7 @@ export default function QualityTest() {
         <div className="quality-test-active-heading"><span><RefreshCw className="size-3.5 animate-spin" />{t('qualityTest.activeTasks')}</span><p>{t('qualityTest.backgroundHint')}</p></div>
         <div className="quality-test-active-list">{records.active_jobs.map((job) => <Button variant="outline" key={job.id} className="quality-test-active-card" aria-pressed={selectedID === job.id} onClick={() => selectJob(job.id, 'studio')}>
           <span className="quality-test-active-account"><span>{job.account_name}</span><PlanBadge plan={job.plan_type} /></span>
+          <UpstreamSourceBadge source={job.upstream_source} />
           <span className="quality-test-active-model">{job.model} · {job.reasoning_effort || t('qualityTest.efforts.default')}</span>
           <span className="quality-test-active-meta">#{job.id} · {t(`qualityTest.status.${job.status}`)}<span>{formatTime(job.duration_ms)}<ArrowUpRight className="size-3.5" /></span></span>
         </Button>)}</div>
@@ -514,7 +517,7 @@ export default function QualityTest() {
           <tbody>{records.jobs.map((job) => <tr key={job.id} className={modalID === job.id ? 'is-selected' : ''} onClick={() => openRecord(job.id)}>
             <td className="quality-test-record-id">#{job.id}</td>
             <td><div className="quality-test-record-account"><span title={job.account_name}>{job.account_name}</span><small>#{job.account_id}<PlanBadge plan={job.plan_type} /></small></div></td>
-            <td><span className="quality-test-record-model">{job.model}</span></td><td><span className="quality-test-effort-chip">{job.reasoning_effort || t('qualityTest.efforts.default')}</span></td>
+            <td><span className="quality-test-record-model">{job.model}</span><UpstreamSourceBadge source={job.upstream_source} /></td><td><span className="quality-test-effort-chip">{job.reasoning_effort || t('qualityTest.efforts.default')}</span></td>
             <td><PresetLabel job={job} /></td>
             <td className="quality-test-record-time">{formatBeijingTime(job.created_at)}</td>
             <td><span className={`quality-test-status quality-test-status-pill ${job.status}`}>{isQualityTestActive(job) ? <RefreshCw className="size-3 animate-spin" /> : <span className="quality-test-status-dot" />}{t(`qualityTest.status.${job.status}`)}</span></td>
@@ -577,6 +580,7 @@ export default function QualityTest() {
           <dl className="quality-test-metrics">
             {([[t('qualityTest.duration'), run ? formatTime(run.duration_ms) : '—'], [t('qualityTest.firstContent'), formatTime(run?.first_content_ms), t('qualityTest.firstContentHint')], [t('qualityTest.outputTokens'), run?.output_tokens?.toLocaleString() ?? '—'], [t('qualityTest.reasoningTokens'), run?.reasoning_tokens?.toLocaleString() ?? '—']] as [string, string, string?][]).map(([label, value, hint]) => <div key={label} title={hint}><dt>{label}</dt><dd>{value}</dd>{hint ? <small className="quality-test-metric-hint">{hint}</small> : null}</div>)}
           </dl>
+          {run && <div className="flex items-center gap-2 text-xs text-muted-foreground"><span>{t('upstreamSource.title')}</span><UpstreamSourceBadge source={run.upstream_source} /></div>}
           {run?.response_model ? <p className="quality-test-response-model">{t('qualityTest.responseModel')}: {run.response_model}</p> : null}
           {run?.prompt ? <details className="quality-test-saved-prompt"><summary>{t('qualityTest.savedPrompt')}</summary><p>{run.prompt}</p>{run.completed_at ? <small>{t('qualityTest.finishedAt')}: {formatBeijingTime(run.completed_at)}</small> : null}</details> : null}
         </section>

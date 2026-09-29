@@ -22,9 +22,6 @@ func (h *Handler) runExcelBPSBatchTest(ctx context.Context, account *auth.Accoun
 	if err != nil {
 		return "failed", err.Error()
 	}
-	if !account.IsExcelBPSAvailableForModel(model) {
-		return "failed", "Basispoints is not enabled for the selected model"
-	}
 	payload := h.buildAccountConnectionTestPayload(ctx, account, model, h.store.ClaudeSecurityConfig())
 	if mapped, ok := proxy.ResolveAccountModelMapping(account, model); ok && mapped != "" {
 		if next, setErr := sjson.SetBytes(payload, "model", mapped); setErr == nil {

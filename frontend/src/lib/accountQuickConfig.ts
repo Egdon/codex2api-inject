@@ -1,3 +1,4 @@
+import { buildBPSAccountPatch, type BPSAccountMetadata } from './bps.ts';
 import type {
   CodexFingerprintMode,
   UpdateAccountSchedulerRequest,
@@ -14,7 +15,7 @@ export type QuickConfigSaveError =
 
 export type QuickConfigReadySaveError = Exclude<QuickConfigSaveError, "not_ready">;
 
-export interface QuickConfigAccountSource {
+export interface QuickConfigAccountSource extends BPSAccountMetadata {
   upstream_request_id_header?: string | null;
   id: number;
   detail_loaded?: boolean;
@@ -30,6 +31,8 @@ export interface QuickConfigAccountSource {
 }
 
 export interface QuickConfigFormState {
+  bpsAccount: BPSAccountMetadata;
+  bpsEnabled: boolean;
   upstreamRequestIdHeader: string;
   accountId: number;
   fingerprintMode: CodexFingerprintMode;
@@ -109,6 +112,13 @@ export function formStateFromAccount(
 ): QuickConfigFormState {
   return {
     accountId: account.id,
+    bpsEnabled: account.openai_excel_bps ?? false,
+    bpsAccount: {
+      id: account.id, account_type: account.account_type,
+      openai_responses_api: account.openai_responses_api, grok_api: account.grok_api,
+      claude_api: account.claude_api, antigravity_api: account.antigravity_api,
+      agent_identity: account.agent_identity, openai_excel_bps: account.openai_excel_bps,
+    },
     upstreamRequestIdHeader: account.upstream_request_id_header ?? "",
     fingerprintMode: normalizeCodexFingerprintMode(account.codex_fingerprint_mode),
     scoreMode: account.score_bias_override != null ? "custom" : "default",
@@ -195,6 +205,7 @@ export function buildQuickConfigSavePayload(
   return {
     ok: true,
     payload: {
+      ...buildBPSAccountPatch(form.bpsAccount, form.bpsEnabled),
       score_bias_override: form.scoreMode === "custom" ? parsedScoreBias : null,
       base_concurrency_override:
         form.concurrencyMode === "custom" ? parsedBaseConcurrency : null,

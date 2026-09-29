@@ -358,6 +358,7 @@ export interface SubscriptionRefreshResponse {
 }
 
 export interface AccountRow {
+  openai_excel_bps?: boolean
   codex_last_refresh_at?: string
   codex_refresh_error?: string
   upstream_request_id_header?: string | null
@@ -1539,6 +1540,7 @@ export interface GrokBatchImportResponse {
 }
 
 export interface UpdateAccountSchedulerRequest {
+  openai_excel_bps?: boolean
   upstream_request_id_header?: string | null
   score_bias_override?: number | null
   base_concurrency_override?: number | null
@@ -2154,6 +2156,8 @@ export interface CodexEgressSummary {
 }
 
 export interface SystemSettings {
+  /** Absent on older servers means enabled. */
+  openai_excel_bps_enabled?: boolean
   site_name: string
   site_logo: string
   background_image: string
@@ -3563,6 +3567,7 @@ export interface APIKeyAccountStatsResponse {
 export type UserBillingMode = 'token' | 'per_image' | 'per_video' | 'per_second'
 
 export interface UsageLog {
+  upstream_source?: import('./lib/upstreamSource').UpstreamSource
   /** Generated video duration (seconds) on Grok video settlement rows. */
   video_seconds?: number
   user_billing_mode?: '' | UserBillingMode

@@ -2105,6 +2105,8 @@ func (h *Handler) GetAccount(c *gin.Context) {
 // accountLiteResponse 是 ?view=lite 的账号条目:身份 + 绑定字段,无调度/用量指标。
 // 字段名与完整版 accountResponse 对齐,前端可直接当 AccountRow 子集消费。
 type accountLiteResponse struct {
+	AccountType        string `json:"account_type"`
+	AntigravityAPI     bool   `json:"antigravity_api"`
 	ID                 int64  `json:"id"`
 	Name               string `json:"name"`
 	Email              string `json:"email"`
@@ -2162,6 +2164,8 @@ func (h *Handler) listAccountsLite(c *gin.Context, ctx context.Context) {
 			status = rt
 		}
 		accounts = append(accounts, accountLiteResponse{
+			AccountType:        row.Type,
+			AntigravityAPI:     strings.EqualFold(upstreamType, auth.UpstreamAntigravity),
 			ID:                 row.ID,
 			Name:               row.Name,
 			Email:              email,
@@ -2753,6 +2757,22 @@ func (h *Handler) UpdateAccountScheduler(c *gin.Context) {
 		}
 	}
 
+	if update.ExcelBPSEnabled.Set && update.ExcelBPSEnabled.Value {
+		row, err := h.db.GetAccountByID(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(c, http.StatusNotFound, "账号不存在")
+			return
+		}
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "读取账号失败")
+			return
+		}
+		if !excelBPSAccountRowEligible(row) {
+			writeError(c, http.StatusBadRequest, "Basispoints 仅支持普通 Codex OAuth 账号")
+			return
+		}
+	}
+
 	if err := h.db.UpdateAccountSchedulerMetadata(ctx, id, update.ScoreBiasOverride, update.BaseConcurrencyOverride, update.SkipWarmTier, update.AllowedAPIKeyIDs, database.OptionalStringSlice{Set: update.Tags.Set, Values: update.Tags.Values}, update.GroupIDs, update.ProxyURL, update.CredentialUpdates); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
@@ -2764,6 +2784,17 @@ func (h *Handler) UpdateAccountScheduler(c *gin.Context) {
 	h.applyAccountSchedulerRuntimeUpdate(id, update)
 
 	writeMessage(c, http.StatusOK, "账号调度配置已更新")
+}
+
+func excelBPSAccountRowEligible(row *database.AccountRow) bool {
+	if row == nil || !strings.EqualFold(strings.TrimSpace(row.Type), "oauth") {
+		return false
+	}
+	upstream := strings.TrimSpace(row.GetCredential("upstream_type"))
+	return (upstream == "" || strings.EqualFold(upstream, "codex")) &&
+		!strings.EqualFold(strings.TrimSpace(row.GetCredential("auth_mode")), auth.CodexAuthModeAgentIdentity) &&
+		!isAgentIdentityCredentialRow(row) && strings.TrimSpace(row.GetCredential("api_key")) == "" &&
+		(strings.TrimSpace(row.GetCredential("access_token")) != "" || strings.TrimSpace(row.GetCredential("refresh_token")) != "")
 }
 
 func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSchedulerUpdate) {
@@ -6886,7 +6917,26 @@ func (h *Handler) BatchUpdateAccounts(c *gin.Context) {
 		}
 	}
 
-	updatedIDs, err := h.db.BatchUpdateAccountMetadata(ctx, ids, database.BatchAccountMetadataUpdate{
+	eligibleIDs := ids
+	if schedulerUpdate.ExcelBPSEnabled.Set && schedulerUpdate.ExcelBPSEnabled.Value {
+		rows, err := h.db.ListActive(ctx)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "读取账号失败")
+			return
+		}
+		eligible := make(map[int64]bool, len(rows))
+		for _, row := range rows {
+			eligible[row.ID] = excelBPSAccountRowEligible(row)
+		}
+		eligibleIDs = make([]int64, 0, len(ids))
+		for _, id := range ids {
+			if eligible[id] {
+				eligibleIDs = append(eligibleIDs, id)
+			}
+		}
+	}
+
+	updatedIDs, err := h.db.BatchUpdateAccountMetadata(ctx, eligibleIDs, database.BatchAccountMetadataUpdate{
 		Enabled:                 enabled,
 		Locked:                  locked,
 		ScoreBiasOverride:       schedulerUpdate.ScoreBiasOverride,
@@ -7882,7 +7932,12 @@ func parseOpsErrorLogFilter(c *gin.Context, withPaging bool) (database.UsageLogF
 		return database.UsageLogFilter{}, false
 	}
 
+	source, validSource := parseUpstreamSourceFilter(c)
+	if !validSource {
+		return database.UsageLogFilter{}, false
+	}
 	filter := database.UsageLogFilter{
+		UpstreamSource:  source,
 		Start:           startTime,
 		End:             endTime,
 		Page:            1,
@@ -8285,6 +8340,17 @@ func parseUsageLogStatusFilter(c *gin.Context, filter *database.UsageLogFilter) 
 	}
 }
 
+func parseUpstreamSourceFilter(c *gin.Context) (string, bool) {
+	source := strings.ToLower(strings.TrimSpace(c.Query("upstream_source")))
+	switch source {
+	case "", "bps", "codex", "other", "unknown":
+		return source, true
+	default:
+		writeError(c, http.StatusBadRequest, "upstream_source 必须是 bps、codex、other 或 unknown")
+		return "", false
+	}
+}
+
 func parseUsageLogsFilter(c *gin.Context, startTime, endTime time.Time) (database.UsageLogFilter, bool) {
 	apiKeyID, ok := parseOpsErrorPositiveInt64(c, "api_key_id")
 	if !ok {
@@ -8295,7 +8361,12 @@ func parseUsageLogsFilter(c *gin.Context, startTime, endTime time.Time) (databas
 		return database.UsageLogFilter{}, false
 	}
 
+	source, validSource := parseUpstreamSourceFilter(c)
+	if !validSource {
+		return database.UsageLogFilter{}, false
+	}
 	filter := database.UsageLogFilter{
+		UpstreamSource:    source,
 		RequestID:         strings.TrimSpace(c.Query("request_id")),
 		UpstreamRequestID: strings.TrimSpace(c.Query("upstream_request_id")),
 		Start:             startTime,
@@ -9202,6 +9273,7 @@ func (h *Handler) DeleteAPIKey(c *gin.Context) {
 // ==================== Settings ====================
 
 type settingsResponse struct {
+	OpenAIExcelBPSEnabled               bool   `json:"openai_excel_bps_enabled"`
 	SiteName                            string `json:"site_name"`
 	SiteLogo                            string `json:"site_logo"`
 	BackgroundImage                     string `json:"background_image"`
@@ -9394,6 +9466,7 @@ type settingsResponse struct {
 type rawJSON = json.RawMessage
 
 type updateSettingsReq struct {
+	OpenAIExcelBPSEnabled               *bool                            `json:"openai_excel_bps_enabled"`
 	SiteName                            *string                          `json:"site_name"`
 	SiteLogo                            *string                          `json:"site_logo"`
 	BackgroundImage                     *string                          `json:"background_image"`
@@ -10163,6 +10236,11 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "读取响应缓存设置失败："+err.Error())
 		return
 	}
+	bpsEnabled, err := h.db.GetOpenAIExcelBPSEnabled(ctx)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "读取 Basispoints 总开关失败")
+		return
+	}
 	dbSettings, _ := h.db.GetSystemSettings(ctx)
 	_, adminAuthSource := h.resolveAdminSecret(c.Request.Context())
 	adminSecret := ""
@@ -10213,6 +10291,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 	modelCooldownSettings := h.store.GetModelCooldownSettings()
 	continuousRetryPolicy := h.store.GetContinuousRetryPolicy()
 	c.JSON(http.StatusOK, settingsResponse{
+		OpenAIExcelBPSEnabled:               bpsEnabled,
 		antigravityOAuthSettingsView:        currentAntigravityOAuthSettingsView(),
 		SiteName:                            branding.SiteName,
 		SiteLogo:                            branding.SiteLogo,
@@ -10513,6 +10592,11 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	h.settingsUpdateMu.Lock()
 	defer h.settingsUpdateMu.Unlock()
+	bpsEnabled, bpsErr := h.db.GetOpenAIExcelBPSEnabled(c.Request.Context())
+	if bpsErr != nil {
+		writeError(c, http.StatusInternalServerError, "读取 Basispoints 总开关失败")
+		return
+	}
 	if req.ResponseCacheConfigGeneration != nil {
 		writeError(c, http.StatusBadRequest, "response_cache_config_generation 为只读字段")
 		return
@@ -11898,6 +11982,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
+		if req.OpenAIExcelBPSEnabled != nil {
+			writeError(c, http.StatusInternalServerError, "保存 Basispoints 总开关前无法持久化系统设置")
+			return
+		}
 		if req.CodexImagesMainModel != nil {
 			writeError(c, http.StatusInternalServerError, "保存生图设置失败，文本驱动模型未生效")
 			return
@@ -12070,6 +12158,15 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		h.store.TriggerAutoCleanupAsync()
 	}
 
+	if req.OpenAIExcelBPSEnabled != nil {
+		if err := h.db.SaveOpenAIExcelBPSEnabled(c.Request.Context(), *req.OpenAIExcelBPSEnabled); err != nil {
+			writeError(c, http.StatusInternalServerError, "保存 Basispoints 总开关失败，设置未生效")
+			return
+		}
+		bpsEnabled = *req.OpenAIExcelBPSEnabled
+		auth.SetOpenAIExcelBPSEnabled(bpsEnabled)
+	}
+
 	adminSecretForDisplay := currentAdminSecret
 	adminAuthSource := func() string {
 		_, source := h.resolveAdminSecret(c.Request.Context())
@@ -12081,6 +12178,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	modelCooldownSettings := h.store.GetModelCooldownSettings()
 
 	c.JSON(http.StatusOK, settingsResponse{
+		OpenAIExcelBPSEnabled:               bpsEnabled,
 		antigravityOAuthSettingsView:        currentAntigravityOAuthSettingsView(),
 		SiteName:                            siteName,
 		SiteLogo:                            siteLogo,

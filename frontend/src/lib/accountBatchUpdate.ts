@@ -14,6 +14,7 @@ export interface BuildBatchMetadataUpdateOptions {
   schedulerPriority: number | null;
   updateCodexFingerprintMode?: boolean;
   codexFingerprintMode?: CodexFingerprintMode;
+  bpsMode?: import('./bps').BPSBatchMode;
   updateTimezone?: boolean;
   timezone?: string;
 }
@@ -32,6 +33,7 @@ export function buildBatchMetadataUpdate({
   schedulerPriority,
   updateCodexFingerprintMode,
   codexFingerprintMode,
+  bpsMode,
   updateTimezone,
   timezone,
 }: BuildBatchMetadataUpdateOptions): BatchUpdateAccountsRequest {
@@ -44,6 +46,7 @@ export function buildBatchMetadataUpdate({
   if (updateSchedulerPriority) payload.scheduler_priority = schedulerPriority;
   if (updateCodexFingerprintMode)
     payload.codex_fingerprint_mode = codexFingerprintMode ?? "off";
+  if (bpsMode === 'on' || bpsMode === 'off') payload.openai_excel_bps = bpsMode === 'on';
   if (updateTimezone) payload.timezone = (timezone ?? "").trim();
   return payload;
 }

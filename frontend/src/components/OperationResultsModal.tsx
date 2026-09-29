@@ -1,3 +1,4 @@
+import UpstreamSourceBadge from './UpstreamSourceBadge';
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AccountRow } from "../types";
@@ -245,6 +246,7 @@ export default function OperationResultsModal({
                 <TableRow>
                   <TableHead>{t("accounts.operationResultsAccount")}</TableHead>
                   <TableHead>{t("accounts.operationResultsStatus")}</TableHead>
+                  {state.action === 'batch_test' && <TableHead>{t('upstreamSource.title')}</TableHead>}
                   <TableHead>{t("accounts.operationResultsHTTP")}</TableHead>
                   <TableHead>{t("accounts.operationResultsMessage")}</TableHead>
                 </TableRow>
@@ -253,7 +255,7 @@ export default function OperationResultsModal({
                 {filteredResults.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={4}
+                      colSpan={state.action === 'batch_test' ? 5 : 4}
                       className="py-8 text-center text-muted-foreground"
                     >
                       {state.results.length === 0
@@ -289,6 +291,7 @@ export default function OperationResultsModal({
                             {statusLabel(result.status)}
                           </span>
                         </TableCell>
+                        {state.action === 'batch_test' && <TableCell><UpstreamSourceBadge source={result.upstream_source} /></TableCell>}
                         <TableCell>
                           {result.httpStatus ? (
                             <span className="font-mono text-xs font-semibold">

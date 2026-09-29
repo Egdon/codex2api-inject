@@ -1,3 +1,4 @@
+import { BPSAccountControl } from './BPSAccountControl';
 import type { ChangeEvent } from "react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -251,6 +252,8 @@ export default function AccountQuickConfigSheet({
           >
             {form ? (
               <>
+          <BPSAccountControl account={form.bpsAccount} checked={form.bpsEnabled}
+            onCheckedChange={(bpsEnabled) => patchForm({ bpsEnabled })} disabled={saving} />
           <div className="rounded-xl border border-border/70 bg-card p-4 shadow-2xs space-y-3">
             <div className="flex items-center gap-2 border-b border-border/50 pb-2.5">
               <Fingerprint className="size-4 text-teal-500" />

@@ -73,6 +73,14 @@ func prepareCodexTurnStateInjection(ctx context.Context, account *auth.Account, 
 	if account == nil || !turnstate.GetConfig().InjectEnabled {
 		return ctx, requestBody, headers
 	}
+	// Saved BPS opt-in remains excluded even with the master gate off. Cached
+	// harvester tickets can outlive the DB change, so fence the injection itself.
+	account.Mu().RLock()
+	bpsOptIn := account.ExcelBPSEnabled
+	account.Mu().RUnlock()
+	if bpsOptIn {
+		return withCodexTurnStateInjection(ctx, ""), requestBody, headers
+	}
 	upstreamModel := strings.TrimSpace(gjson.GetBytes(requestBody, "model").String())
 	clientModel := codexClientModelFromContext(ctx)
 	injected := ""

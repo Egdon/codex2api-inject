@@ -106,11 +106,16 @@ func (db *DB) ensureAstraPolicySchema(ctx context.Context) error {
 			return fmt.Errorf("astra policy schema: %w", err)
 		}
 	}
-	if db.isSQLite() {
-		return db.ensureSQLiteColumn(ctx, "codex_astra_policy", "priority_version", "BIGINT NOT NULL DEFAULT 0")
+	for _, column := range []string{"priority_version", "bps_revision"} {
+		if db.isSQLite() {
+			if err := db.ensureSQLiteColumn(ctx, "codex_astra_policy", column, "BIGINT NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+		} else if _, err := db.conn.ExecContext(ctx, `ALTER TABLE codex_astra_policy ADD COLUMN IF NOT EXISTS `+column+` BIGINT NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
 	}
-	_, err := db.conn.ExecContext(ctx, `ALTER TABLE codex_astra_policy ADD COLUMN IF NOT EXISTS priority_version BIGINT NOT NULL DEFAULT 0`)
-	return err
+	return nil
 }
 
 func (db *DB) AstraPolicySnapshot(ctx context.Context, id int64) (AstraPolicyState, error) {
@@ -156,6 +161,8 @@ func (db *DB) markManualPolicyGroups(ctx context.Context, tx *sql.Tx, ids []int6
 }
 
 type AstraPolicyExpectation struct {
+	BPSRevision     int64
+	BPSEnabled      bool
 	GroupIDs        []int64
 	Version         int64
 	Sequence        int64
@@ -198,6 +205,10 @@ func (db *DB) AstraPolicyExpectation(ctx context.Context, id int64) (AstraPolicy
 		}
 		var err error
 		out, err = policyMembership(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		out.BPSRevision, out.BPSEnabled, err = harvestBPSState(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -287,6 +298,13 @@ func (db *DB) ApplyAstraPolicyOutcome(ctx context.Context, o AstraPolicyOutcome)
 		}
 		if err := db.lockPolicyAccount(ctx, tx, o.AccountID); err != nil {
 			return err
+		}
+		revision, enabled, err := harvestBPSState(ctx, tx, o.AccountID)
+		if err != nil {
+			return err
+		}
+		if enabled || o.Expected.BPSEnabled || revision != o.Expected.BPSRevision {
+			return nil
 		}
 		current, err := policyMembership(ctx, tx, o.AccountID)
 		if err != nil {
