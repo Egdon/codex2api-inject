@@ -2557,10 +2557,9 @@ export default function Settings() {
   }, [autoSaveSettingsPatch])
 
   // BPS model chips save on every change, in the canonical stored form.
+  // autoSaveSettingsPatch applies the optimistic value and its rollback.
   const saveExcelBpsModels = useCallback((models: string[]) => {
-    const value = formatExcelBpsModels(models)
-    setSettingsForm(f => ({ ...f, codex_basispoints_models: value }))
-    autoSaveStringField('codex_basispoints_models', value)
+    autoSaveStringField('codex_basispoints_models', formatExcelBpsModels(models))
   }, [autoSaveStringField])
 
   // ===== Antigravity OAuth client 配置(草稿态 + 显式保存;secret 不回显,留空 = 沿用已保存值) =====

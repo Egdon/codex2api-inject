@@ -118,7 +118,8 @@ func excelBPSPauseEnabled() bool {
 }
 
 func excelBPSProbeInterval() time.Duration {
-	return time.Duration(CurrentRuntimeSettings().CodexBasispoints403ProbeIntervalMin) * time.Minute
+	minutes := database.NormalizeCodexBasispoints403ProbeIntervalMinutes(CurrentRuntimeSettings().CodexBasispoints403ProbeIntervalMin)
+	return time.Duration(minutes) * time.Minute
 }
 
 func (s *excelBPSHealthState) clock() time.Time {
