@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +18,10 @@ const (
 	codexASARHeaderMax   = 8 << 20
 	codexASAROutputMax   = 64 << 20
 	codexPackageJSONMax  = 64 << 10
+	codexMSIXBaseURL     = "https://persistent.oaistatic.com/codex-app-prod/"
 )
+
+var errCodexMSIXNotFound = errors.New("MSIX not found")
 
 type codexRangeReader struct {
 	ctx        context.Context
@@ -54,6 +58,9 @@ func newCodexRangeReader(ctx context.Context, client *http.Client, url string) (
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("MSIX range probe %s: %w", url, errCodexMSIXNotFound)
+	}
 	start, end, size, err := codexRangeMetadata(resp)
 	if err != nil {
 		return nil, fmt.Errorf("MSIX range probe: %w", err)
@@ -224,8 +231,17 @@ func FetchCodexDesktopWindowsBuild(ctx context.Context, proxyURL string) (string
 	if err != nil {
 		return "", err
 	}
-	url := "https://persistent.oaistatic.com/codex-app-prod/releases/" + packageVersion + "/ChatGPT-x64.msix"
-	ranges, err := newCodexRangeReader(ctx, client, url)
+	// 版本化路径并非每个 Store 版本都会上传，缺失时回退到最新包，由下方主次版本校验兜底。
+	var ranges *codexRangeReader
+	for _, url := range []string{
+		codexMSIXBaseURL + "releases/" + packageVersion + "/ChatGPT-x64.msix",
+		codexMSIXBaseURL + "ChatGPT-x64.msix",
+	} {
+		ranges, err = newCodexRangeReader(ctx, client, url)
+		if !errors.Is(err, errCodexMSIXNotFound) {
+			break
+		}
+	}
 	if err != nil {
 		return "", err
 	}
