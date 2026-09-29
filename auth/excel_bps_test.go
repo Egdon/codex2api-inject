@@ -24,3 +24,37 @@ func TestExcelBPSGateOnlyAllowsOptedInOAuthAccounts(t *testing.T) {
 		t.Fatal("model allowlist was not enforced for Excel BPS")
 	}
 }
+
+func TestExcelBPSGlobalDefaultAndAccountModes(t *testing.T) {
+	t.Cleanup(func() { SetExcelBPSGlobalEnabled(false) })
+	for _, tc := range []struct {
+		name            string
+		global          bool
+		enabled, optOut bool
+		account         Account
+		wantMode        string
+		wantEffective   bool
+	}{
+		{name: "inherit global off", wantMode: ExcelBPSModeInherit},
+		{name: "inherit global on", global: true, wantMode: ExcelBPSModeInherit, wantEffective: true},
+		{name: "on global off", enabled: true, wantMode: ExcelBPSModeOn, wantEffective: true},
+		{name: "off global on", global: true, optOut: true, wantMode: ExcelBPSModeOff},
+		{name: "explicit on wins over stale opt-out", global: true, enabled: true, optOut: true, wantMode: ExcelBPSModeOn, wantEffective: true},
+		{name: "global never enables API-key accounts", global: true, account: Account{APIKey: "api-key"}, wantMode: ExcelBPSModeInherit},
+		{name: "global never enables relay accounts", global: true, account: Account{UpstreamType: UpstreamOpenAIResponses, BaseURL: "https://example.invalid", APIKey: "relay-key"}, wantMode: ExcelBPSModeInherit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			SetExcelBPSGlobalEnabled(tc.global)
+			account := tc.account
+			account.AccessToken = "access-token"
+			account.ExcelBPSEnabled = tc.enabled
+			account.ExcelBPSOptOut = tc.optOut
+			if got := account.ExcelBPSMode(); got != tc.wantMode {
+				t.Fatalf("mode = %q, want %q", got, tc.wantMode)
+			}
+			if got := account.IsExcelBPSEnabled(); got != tc.wantEffective {
+				t.Fatalf("effective = %t, want %t", got, tc.wantEffective)
+			}
+		})
+	}
+}

@@ -82,6 +82,12 @@ type RuntimeSettings struct {
 	// ModelsListReadMaxBytes 是上游 /v1/models 与 Codex 模型清单成功响应的读取上限。
 	ModelsListReadMaxBytes int64
 	CodexForceWebsocket    bool // 强制 Codex 上游走 WebSocket（默认 false）
+	// CodexBasispointsEnabled routes every eligible OAuth account through the
+	// Excel Basispoints adapter unless the account opts out (default false).
+	CodexBasispointsEnabled bool
+	// CodexBasispointsModels optionally limits Basispoints to these models
+	// (normalized, comma-separated). Empty keeps the account model rules only.
+	CodexBasispointsModels string
 	// CodexRequestCompression 对 HTTP /responses 请求体做 zstd 压缩（默认 true，
 	// 与真实 Codex CLI 一致）。与 CodexForceWebsocket 正交：WS 路径走
 	// permessage-deflate（拨号器已开启），本项只作用于 HTTP 路径，两者可同时生效。
@@ -335,6 +341,7 @@ func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	settings.AutoResetCreditsBeforeExpiryMin = database.NormalizeAutoResetCreditsBeforeExpiryMinutes(settings.AutoResetCreditsBeforeExpiryMin)
 	settings.UTLSShutdownTimeoutMin = database.NormalizeUTLSShutdownTimeoutMinutes(settings.UTLSShutdownTimeoutMin)
 	settings.ContinuousRetryPolicy = database.NormalizeContinuousRetryPolicy(settings.ContinuousRetryPolicy)
+	settings.CodexBasispointsModels = database.NormalizeCodexBasispointsModels(settings.CodexBasispointsModels)
 	return settings
 }
 
@@ -357,6 +364,8 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.BillingTierPolicy = settings.BillingTierPolicy
 		next.ModelsListReadMaxBytes = settings.ModelsListReadMaxBytes
 		next.CodexForceWebsocket = settings.CodexForceWebsocket
+		next.CodexBasispointsEnabled = settings.CodexBasispointsEnabled
+		next.CodexBasispointsModels = settings.CodexBasispointsModels
 		next.CodexRequestCompression = settings.CodexRequestCompression
 		next.CodexWSWeakNetworkMode = settings.CodexWSWeakNetworkMode
 		next.CodexWSHideErrors = settings.CodexWSHideUpstreamErrors
@@ -436,6 +445,9 @@ func currentRuntimeSettings() RuntimeSettings {
 func storeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	settings = NormalizeRuntimeSettings(settings)
 	runtimeSettings.Store(settings)
+	// Account-level Basispoints resolution lives in auth; keep its view of the
+	// global default in step with every runtime settings publication.
+	auth.SetExcelBPSGlobalEnabled(settings.CodexBasispointsEnabled)
 	return settings
 }
 
