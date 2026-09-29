@@ -60,9 +60,10 @@ func resetUsageExhausted(usage *proxy.WhamUsage, observedAt, now time.Time) bool
 	if credits := usage.RateLimitResetCredits; credits != nil && (credits.AvailableCount <= 0 || credits.ApplicableAvailableCount <= 0) {
 		return false
 	}
-	// Only shared Codex windows (e.g. 5h, 7d, monthly), not model-specific Spark.
+	// Only the shared long (7d-slot) window counts; a full 5h window recovers on its
+	// own within hours and is not worth a credit. Model-specific Spark is excluded.
 	for _, window := range []*proxy.WhamUsageWindow{usage.RateLimit.PrimaryWindow, usage.RateLimit.SecondaryWindow} {
-		if window == nil || math.IsNaN(window.UsedPercent) || math.IsInf(window.UsedPercent, 0) || window.UsedPercent < 100 || window.LimitWindowSeconds <= 0 {
+		if window == nil || math.IsNaN(window.UsedPercent) || math.IsInf(window.UsedPercent, 0) || window.UsedPercent < 100 || !proxy.IsWhamLongWindowSeconds(window.LimitWindowSeconds) {
 			continue
 		}
 		resetAt := time.Unix(window.ResetAt, 0)

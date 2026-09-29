@@ -27,7 +27,8 @@ func TestExhaustedResetWindowDecision(t *testing.T) {
 		want                  bool
 	}{
 		{"weekly", 100, 604800, now.Add(time.Hour).Unix(), 0, true},
-		{"five_hour", 100, 18000, now.Add(time.Hour).Unix(), 0, true},
+		{"five_hour", 100, 18000, now.Add(time.Hour).Unix(), 0, false},
+		{"unknown_length", 100, 86400, now.Add(time.Hour).Unix(), 0, false},
 		{"monthly", 101, 2592000, now.Add(time.Hour).Unix(), 0, true},
 		{"below", 99.99, 604800, now.Add(time.Hour).Unix(), 0, false},
 		{"expired", 100, 604800, now.Add(-time.Second).Unix(), 3600, false},
@@ -50,6 +51,21 @@ func TestExhaustedResetWindowDecision(t *testing.T) {
 				t.Fatal("stale snapshot consumed")
 			}
 		})
+	}
+}
+
+func TestExhaustedResetOnlyLongWindowTriggers(t *testing.T) {
+	now := time.Now()
+	reset := now.Add(time.Hour).Unix()
+	u := &proxy.WhamUsage{}
+	u.RateLimit.PrimaryWindow = &proxy.WhamUsageWindow{UsedPercent: 100, LimitWindowSeconds: 18000, ResetAt: reset}
+	u.RateLimit.SecondaryWindow = &proxy.WhamUsageWindow{UsedPercent: 80, LimitWindowSeconds: 604800, ResetAt: reset}
+	if resetUsageExhausted(u, now, now) {
+		t.Fatal("full 5h window with 7d below 100% must not consume a credit")
+	}
+	u.RateLimit.SecondaryWindow.UsedPercent = 100
+	if !resetUsageExhausted(u, now, now) {
+		t.Fatal("full 7d window must consume a credit")
 	}
 }
 
