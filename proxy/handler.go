@@ -4198,7 +4198,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				threadKey = affinityKey
 			}
 			scope := fmt.Sprintf("account:%d:key:%d:thread:%s", account.ID(), apiKeyID, affinityKey)
-			h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, false, isStream, "/v1/responses", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start)
+			h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, false, isStream, excelBPSConversationScoped(c.Request.Header, sessionIdentity), "/v1/responses", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start)
 			return
 		}
 
@@ -6131,7 +6131,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				threadKey = affinityKey
 			}
 			scope := fmt.Sprintf("account:%d:key:%d:thread:%s", account.ID(), apiKeyID, affinityKey)
-			h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, true, false, "/v1/responses/compact", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start)
+			h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, true, false, excelBPSConversationScoped(c.Request.Header, sessionIdentity), "/v1/responses/compact", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start)
 			return
 		}
 

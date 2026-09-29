@@ -432,6 +432,7 @@ func main() {
 	deviceCfg := proxy.DeviceProfileConfigFromEnv(os.Getenv)
 	handler := proxy.NewHandler(store, db, cfg, deviceCfg)
 	handler.SetRuntimeCache(tc)
+	proxy.ConfigureExcelBPSReplay(tc)
 	defer handler.CloseAPIKeyAuthCache()
 	adminHandler.SetAPIKeyAuthCacheHandler(handler)
 

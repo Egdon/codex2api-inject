@@ -2735,6 +2735,16 @@ X-Admin-Key: YOUR_ADMIN_SECRET
 
 公开自助接口 `GET /api/key-usage/summary` 与别名 `GET /api/key-usage/me` 在原有 `key`、`range`、`usage` 之外增加相同结构的顶层 `model_request_usage`。传入 `Authorization: Bearer YOUR_API_KEY`，只返回此 Key 的预算，不能通过查询参数读取其他 Key；公开用量页关闭时继续返回 `404`。没有配置时该字段为 `[]`。此字段始终反映当前固定周，与报表的 `range` 参数独立。
 
+该接口的请求日志（`usage.recent_logs`）支持以下可选筛选参数，只影响日志列表与 `recent_logs_total`，不影响 `summary`、`windows` 和模型/端点排行：
+
+- `model`：同时匹配请求模型与实际生效模型；
+- `endpoint`：匹配入站端点（与日志中的 `endpoint` 同口径）；
+- `status`：`success`（< 400）、`error`（≥ 400）、`4xx`、`5xx`、`429`；
+- `stream`：`stream` 或 `sync`；
+- `channel`：上游渠道，`codex`、`grok`、`antigravity` 或 `claude`。
+
+非法的 `status` / `stream` / `channel` 取值或超过 128 字符的 `model` / `endpoint` 返回 `400`。响应中的 `usage.log_models` 与 `usage.log_endpoints` 列出当前 `range` 内出现过的请求模型和入站端点（按请求量降序，各最多 50 个，不受筛选影响），可用于构造筛选下拉；每条日志额外带 `channel` 字段（`codex`、`claude`、`grok`、`antigravity` 或空字符串）。
+
 预算耗尽时 HTTP 返回 `429`，错误码为 `rate_limit_reached`，`Retry-After` 表示距离该规则重置的秒数。`error.details` 包含耗尽规则的用量快照：
 
 ```json

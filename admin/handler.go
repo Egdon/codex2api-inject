@@ -1731,6 +1731,7 @@ type accountResponse struct {
 	ClaudeVersionPolicyOverride   string                      `json:"claude_version_policy_override,omitempty"`
 	ClaudeClientVersionOverride   string                      `json:"claude_client_version_override,omitempty"`
 	Timezone                      string                      `json:"timezone,omitempty"`
+	AccountHref                   string                      `json:"account_href,omitempty"`
 	CustomHeaders                 map[string]string           `json:"custom_headers,omitempty"`
 	HealthTier                    string                      `json:"health_tier"`
 	SchedulerScore                float64                     `json:"scheduler_score"`
@@ -2203,6 +2204,7 @@ type updateAccountSchedulerReq struct {
 	ClaudeVersionPolicy     json.RawMessage `json:"claude_version_policy"`
 	ClaudeClientVersion     json.RawMessage `json:"claude_client_version"`
 	Timezone                json.RawMessage `json:"timezone"`
+	AccountHref             json.RawMessage `json:"account_href"`
 	ExcelBPSEnabled         json.RawMessage `json:"openai_excel_bps"`
 }
 
@@ -2228,6 +2230,7 @@ type accountSchedulerUpdate struct {
 	ClaudeVersionPolicy     database.OptionalString
 	ClaudeClientVersion     database.OptionalString
 	Timezone                database.OptionalString
+	AccountHref             database.OptionalString
 	ExcelBPSEnabled         database.OptionalBool
 	CredentialUpdates       map[string]interface{}
 }
@@ -2335,6 +2338,10 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	if err != nil {
 		return accountSchedulerUpdate{}, err
 	}
+	accountHref, err := parseOptionalStringField(req.AccountHref, "account_href", validateAccountHref)
+	if err != nil {
+		return accountSchedulerUpdate{}, err
+	}
 	excelBPSEnabled, err := parseOptionalBoolField(req.ExcelBPSEnabled, "openai_excel_bps")
 	if err != nil {
 		return accountSchedulerUpdate{}, err
@@ -2370,6 +2377,13 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	}
 	if timezoneField.Set {
 		credentialUpdates[auth.AccountTimezoneCredentialKey] = strings.TrimSpace(timezoneField.Value)
+	}
+	if accountHref.Set {
+		normalized, err := auth.NormalizeAccountHref(accountHref.Value)
+		if err != nil {
+			return accountSchedulerUpdate{}, err
+		}
+		credentialUpdates[auth.AccountHrefCredentialKey] = normalized
 	}
 	if excelBPSEnabled.Set {
 		credentialUpdates[auth.ExcelBPSCredentialKey] = excelBPSEnabled.Value
@@ -2433,6 +2447,7 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 		ClaudeVersionPolicy:     claudeVersionPolicy,
 		ClaudeClientVersion:     claudeClientVersion,
 		Timezone:                timezoneField,
+		AccountHref:             accountHref,
 		ExcelBPSEnabled:         excelBPSEnabled,
 		CredentialUpdates:       credentialUpdates,
 	}, nil
@@ -2485,6 +2500,13 @@ func validateAccountTimezone(value string) error {
 	return nil
 }
 
+// validateAccountHref 允许空串(=清除跳转地址,回退 api-base),其余必须是
+// http/https 绝对地址;归一化在写库前由 auth.NormalizeAccountHref 完成。
+func validateAccountHref(value string) error {
+	_, err := auth.NormalizeAccountHref(value)
+	return err
+}
+
 // validateCodexFingerprintMode 允许空串（等价于默认档 off），其余必须是已知档位。
 func validateCodexFingerprintMode(value string) error {
 	if value == "" || auth.IsValidCodexFingerprintMode(value) {
@@ -2515,6 +2537,7 @@ func (u accountSchedulerUpdate) hasChanges() bool {
 		u.ClaudeVersionPolicy.Set ||
 		u.ClaudeClientVersion.Set ||
 		u.Timezone.Set ||
+		u.AccountHref.Set ||
 		u.ExcelBPSEnabled.Set
 }
 

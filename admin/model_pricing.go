@@ -159,13 +159,15 @@ func (h *Handler) grokBillingModelIDs() []string {
 	return ids
 }
 
-// grokDefaultDisplayModelIDs 是定价页始终展示的 Grok 内置文本模型集(即使没有 Grok 账号),
-// 与 Codex 内置模型的常显行为对齐。取 OAuth 与 API Key 两套默认集的并集(后者为超集)。
-// 仅文本模型:定价页按 token 计费,媒体(生图/生视频)定价模型另计,不在此列。
+// grokDefaultDisplayModelIDs 是定价页始终展示的 Grok 内置模型集(即使没有 Grok 账号),
+// 与 Codex 内置模型的常显行为对齐。取 OAuth 与 API Key 两套文本默认集的并集(后者为超集),
+// 再并入生图/生视频默认集:媒体模型按单位(张/秒)计费,同样需要常显的定价入口。
 func grokDefaultDisplayModelIDs() []string {
-	ids := make([]string, 0, 8)
+	ids := make([]string, 0, 16)
 	ids = append(ids, auth.GrokOAuthDefaultModelIDs()...)
 	ids = append(ids, auth.GrokAPIKeyDefaultModelIDs()...)
+	ids = append(ids, auth.GrokImageDefaultModelIDs()...)
+	ids = append(ids, auth.GrokVideoDefaultModelIDs()...)
 	return ids
 }
 
@@ -177,6 +179,9 @@ type modelPricingRow struct {
 	Pricing        database.ModelPricingOverride `json:"pricing"`
 	CanonicalModel string                        `json:"canonical_model,omitempty"`
 	IsAlias        bool                          `json:"is_alias,omitempty"`
+	// MediaUnit 非空表示媒体模型(image=按张、second=按秒),价格看 media_unit_cost
+	// 而非 token 单价;media_unit_cost 为 0 即未定价。
+	MediaUnit string `json:"media_unit,omitempty"`
 }
 
 // claudeChannelModels 返回定价页要展示的 Claude 模型:各 Claude 账号可见模型的并集。
@@ -314,6 +319,7 @@ func (h *Handler) ListModelPricing(c *gin.Context) {
 				Pricing:        database.ModelPricingOverrideFromPricing(database.GetModelPricing(key), database.ModelPricingSourceFor(key)),
 				CanonicalModel: canonicalModel,
 				IsAlias:        canonicalModel != "",
+				MediaUnit:      database.MediaBillingUnit(key),
 			})
 		}
 	}

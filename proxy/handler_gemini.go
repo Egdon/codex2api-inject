@@ -336,28 +336,42 @@ func geminiInboundEndpoint(stream bool) string {
 	return "/v1beta/models:generateContent"
 }
 
+type geminiNativeStreamResult struct {
+	usage        UsageInfo
+	firstTokenMs int
+	readErr      error
+	writeErr     error
+}
+
 // forwardGeminiNativeStream keeps reads and downstream writes distinguishable
 // for usage logging. Emit complete SSE events and flush each one so a thought
 // does not sit in the HTTP buffer while the upstream prepares its answer.
-func forwardGeminiNativeStream(c *gin.Context, body io.Reader) (readErr, writeErr error) {
+func forwardGeminiNativeStream(c *gin.Context, body io.Reader, startedAt time.Time) geminiNativeStreamResult {
+	var result geminiNativeStreamResult
+	var usage geminiNativeUsage
 	activateContinuousRetryKeepalive(c.Request.Context())
-	readErr = readSSEStreamWithContinuousRetryKeepalive(c.Request.Context(), body, func(_ string, data []byte) bool {
+	result.readErr = readSSEStreamWithContinuousRetryKeepalive(c.Request.Context(), body, func(_ string, data []byte) bool {
 		if c.Request.Context().Err() != nil {
 			return false
 		}
+		usage.observe(data)
+		if result.firstTokenMs == 0 && !startedAt.IsZero() && geminiNativeHasContent(data) {
+			result.firstTokenMs = max(int(time.Since(startedAt).Milliseconds()), 1)
+		}
 		frame := "data: " + string(data) + "\n\n"
 		var written int
-		written, writeErr = c.Writer.WriteString(frame)
-		if writeErr == nil && written != len(frame) {
-			writeErr = io.ErrShortWrite
+		written, result.writeErr = c.Writer.WriteString(frame)
+		if result.writeErr == nil && written != len(frame) {
+			result.writeErr = io.ErrShortWrite
 		}
-		if writeErr != nil {
+		if result.writeErr != nil {
 			return false
 		}
 		c.Writer.Flush()
 		return true
 	})
-	return readErr, writeErr
+	result.usage = usage.usageInfo()
+	return result
 }
 
 // writeGeminiNativeError uses the same native error envelope before and after
@@ -596,7 +610,7 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 			c.Header("Connection", "keep-alive")
 			c.Header("X-Accel-Buffering", "no")
 			c.Status(resp.StatusCode)
-			readErr, writeErr := forwardGeminiNativeStream(c, resp.Body)
+			result := forwardGeminiNativeStream(c, resp.Body, start)
 			_ = resp.Body.Close()
 			upstreamCancel()
 			h.store.Release(account)
@@ -605,8 +619,8 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 			// The native reader only returns a clean EOF after a real Gemini
 			// terminal. A successful upstream read still requires delivery to the
 			// downstream client before this request can be recorded as successful.
-			completed := readErr == nil && writeErr == nil && ctxErr == nil
-			outcome := classifyStreamOutcome(ctxErr, readErr, writeErr, completed)
+			completed := result.readErr == nil && result.writeErr == nil && ctxErr == nil
+			outcome := classifyStreamOutcome(ctxErr, result.readErr, result.writeErr, completed)
 			if !claimContinuousRetrySuccessContext(c.Request.Context()) {
 				outcome = classifyStreamOutcome(errContinuousRetryDeadlineExceeded, nil, nil, false)
 			}
@@ -615,7 +629,7 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 				h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			}
 			if outcome.logStatusCode != http.StatusOK {
-				if !writeContinuousRetryTimeoutResponse(c, continuousRetryProtocolGemini) && ctxErr == nil && writeErr == nil {
+				if !writeContinuousRetryTimeoutResponse(c, continuousRetryProtocolGemini) && ctxErr == nil && result.writeErr == nil {
 					writeGeminiNativeError(c, http.StatusBadGateway, "Upstream Gemini stream failed before completion")
 				}
 			}
@@ -626,6 +640,14 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 				EffectiveModel:    model,
 				StatusCode:        outcome.logStatusCode,
 				DurationMs:        durationMs,
+				FirstTokenMs:      result.firstTokenMs,
+				PromptTokens:      result.usage.PromptTokens,
+				CompletionTokens:  result.usage.CompletionTokens,
+				InputTokens:       result.usage.InputTokens,
+				OutputTokens:      result.usage.OutputTokens,
+				ReasoningTokens:   result.usage.ReasoningTokens,
+				CachedTokens:      result.usage.CachedTokens,
+				TotalTokens:       result.usage.TotalTokens,
 				InboundEndpoint:   inboundEndpoint,
 				UpstreamEndpoint:  upstreamEndpoint,
 				Stream:            true,
@@ -647,7 +669,7 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 			}
 			return
 		}
-		inputTokens, outputTokens, reasoningTokens, totalTokens := geminiNativeUsageFromBody(out)
+		usage := geminiNativeUsageFromBody(out)
 		if !claimContinuousRetrySuccess(c, continuousRetryProtocolGemini) {
 			h.store.Release(account)
 			return
@@ -662,11 +684,14 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 			Model:            model,
 			EffectiveModel:   model,
 			StatusCode:       http.StatusOK,
-			DurationMs:       durationMs,
-			InputTokens:      inputTokens,
-			OutputTokens:     outputTokens,
-			ReasoningTokens:  reasoningTokens,
-			TotalTokens:      totalTokens,
+			DurationMs:       int(time.Since(start).Milliseconds()),
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			InputTokens:      usage.InputTokens,
+			OutputTokens:     usage.OutputTokens,
+			ReasoningTokens:  usage.ReasoningTokens,
+			CachedTokens:     usage.CachedTokens,
+			TotalTokens:      usage.TotalTokens,
 			InboundEndpoint:  inboundEndpoint,
 			UpstreamEndpoint: upstreamEndpoint,
 			Stream:           false,
