@@ -88,6 +88,12 @@ type RuntimeSettings struct {
 	// CodexBasispointsModels optionally limits Basispoints to these models
 	// (normalized, comma-separated). Empty keeps the account model rules only.
 	CodexBasispointsModels string
+	// CodexBasispoints403PauseDisabled turns off the automatic Basispoints
+	// pause after HTTP 403 (default false, i.e. pausing is on).
+	CodexBasispoints403PauseDisabled bool
+	// CodexBasispoints403ProbeIntervalMin is the recovery probe interval for a
+	// paused account or model, 1-10080 minutes (default 1).
+	CodexBasispoints403ProbeIntervalMin int
 	// CodexRequestCompression 对 HTTP /responses 请求体做 zstd 压缩（默认 true，
 	// 与真实 Codex CLI 一致）。与 CodexForceWebsocket 正交：WS 路径走
 	// permessage-deflate（拨号器已开启），本项只作用于 HTTP 路径，两者可同时生效。
@@ -342,6 +348,7 @@ func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	settings.UTLSShutdownTimeoutMin = database.NormalizeUTLSShutdownTimeoutMinutes(settings.UTLSShutdownTimeoutMin)
 	settings.ContinuousRetryPolicy = database.NormalizeContinuousRetryPolicy(settings.ContinuousRetryPolicy)
 	settings.CodexBasispointsModels = database.NormalizeCodexBasispointsModels(settings.CodexBasispointsModels)
+	settings.CodexBasispoints403ProbeIntervalMin = database.NormalizeCodexBasispoints403ProbeIntervalMinutes(settings.CodexBasispoints403ProbeIntervalMin)
 	return settings
 }
 
@@ -366,6 +373,8 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.CodexForceWebsocket = settings.CodexForceWebsocket
 		next.CodexBasispointsEnabled = settings.CodexBasispointsEnabled
 		next.CodexBasispointsModels = settings.CodexBasispointsModels
+		next.CodexBasispoints403PauseDisabled = settings.CodexBasispoints403PauseDisabled
+		next.CodexBasispoints403ProbeIntervalMin = settings.CodexBasispointsProbeMinutes
 		next.CodexRequestCompression = settings.CodexRequestCompression
 		next.CodexWSWeakNetworkMode = settings.CodexWSWeakNetworkMode
 		next.CodexWSHideErrors = settings.CodexWSHideUpstreamErrors

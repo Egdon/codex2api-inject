@@ -30,12 +30,15 @@ func TestHandleExcelBPSNativeFallback(t *testing.T) {
 		{name: "upstream 504", status: 504, wantFallback: true, wantCalls: 1},
 		{name: "model unavailable", status: 403, body: `{"error":{"code":"basispoints_model_access_changed"}}`, wantFallback: true, wantCalls: 1},
 		{name: "transport error", transport: true, wantFallback: true, wantCalls: 1},
-		{name: "invalid token stays visible", status: 401, wantCalls: 1},
+		// Native Codex owns token refresh and auth state for the same credential.
+		{name: "invalid token uses native auth handling", status: 401, wantFallback: true, wantCalls: 1},
+		{name: "rate limited uses native capacity", status: 429, wantFallback: true, wantCalls: 1},
 		{name: "generic forbidden stays visible", status: 403, wantCalls: 1},
 		{name: "ordinary BPS success", status: 200, body: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-ok\",\"status\":\"completed\",\"output\":[]}}\n\n", wantCalls: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			resetExcelBPSHealthForTest(t)
 			old := excelBPSDo
 			t.Cleanup(func() { excelBPSDo = old })
 			calls := 0

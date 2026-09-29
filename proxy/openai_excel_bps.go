@@ -482,7 +482,9 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		_ = response.Body.Close()
 		log.Printf("[excel-bps] account=%d upstream HTTP %d: %s", account.ID(), response.StatusCode, excelBPSErrorShape(snippet))
 		if !excelBPSImageRefusal(response.StatusCode, snippet) || !images.Any() || mode == basispoints.ImagesOmit {
-			return nil, &excelBPSHTTPError{status: response.StatusCode, code: gjson.GetBytes(snippet, "error.code").String()}
+			code := gjson.GetBytes(snippet, "error.code").String()
+			excelBPSHealth.observeFailure(ctx, account, gjson.GetBytes(preparedInput, "model").String(), response.StatusCode, code, response.Header, proxyURL)
+			return nil, &excelBPSHTTPError{status: response.StatusCode, code: code}
 		}
 		next, stale := nextExcelBPSImageMode(images, uploaded)
 		excelBPSAttachments.forget(stale)
@@ -748,6 +750,15 @@ func excelBPSNativeFailureReason(err error) string {
 		}
 		if upstream.status == http.StatusForbidden && upstream.code == "basispoints_model_access_changed" {
 			return "model_access"
+		}
+		// Basispoints throttles its own endpoint; native Codex capacity is separate.
+		if upstream.status == http.StatusTooManyRequests {
+			return "rate_limited"
+		}
+		// Native Codex owns token refresh and account auth state; let it see
+		// the same credential instead of duplicating that handling here.
+		if upstream.status == http.StatusUnauthorized {
+			return "auth"
 		}
 	}
 	var failure *excelBPSFailure

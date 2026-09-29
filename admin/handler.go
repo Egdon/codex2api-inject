@@ -1189,6 +1189,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/accounts/:id/models/sync-upstream", h.SyncAccountUpstreamModels)
 	api.POST("/accounts/:id/models/probe", h.ProbeAccountModels)
 	api.PATCH("/accounts/:id/scheduler", h.UpdateAccountScheduler)
+	api.POST("/accounts/:id/bps-pause/clear", h.ClearAccountExcelBPSPause)
 	api.GET("/channel-monitors", h.ListChannelMonitors)
 	api.GET("/channel-monitors/billing-rates", h.ListChannelMonitorBillingRates)
 	api.POST("/channel-monitors/:id/probe", h.ProbeChannelMonitorNow)
@@ -1686,6 +1687,7 @@ type accountResponse struct {
 	ExcelBPSEnabled               bool                        `json:"openai_excel_bps,omitempty"`
 	ExcelBPSOptOut                bool                        `json:"openai_excel_bps_opt_out,omitempty"`
 	ExcelBPSEffective             bool                        `json:"openai_excel_bps_effective,omitempty"`
+	ExcelBPSPause                 *proxy.ExcelBPSPauseView    `json:"bps_pause,omitempty"`
 	ClaudeAuthKind                string                      `json:"claude_auth_kind,omitempty"`
 	ClaudeBaseURL                 string                      `json:"claude_base_url,omitempty"`
 	AntigravityAuthKind           string                      `json:"antigravity_auth_kind,omitempty"`
@@ -2871,6 +2873,11 @@ func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSch
 	}
 	if value, ok := update.CredentialUpdates[auth.ExcelBPSOptOutCredentialKey].(bool); ok {
 		h.store.ApplyAccountExcelBPSOptOut(id, value)
+	}
+	// Changing an account's Basispoints mode is an explicit decision; it
+	// supersedes any automatic pause or cooldown of that route.
+	if update.ExcelBPSEnabled.Set || update.ExcelBPSOptOut.Set {
+		proxy.ClearExcelBPSPause(id)
 	}
 }
 
@@ -9253,6 +9260,8 @@ type settingsResponse struct {
 	CodexRequestCompression             bool   `json:"codex_request_compression"`
 	CodexBasispointsEnabled             bool   `json:"codex_basispoints_enabled"`
 	CodexBasispointsModels              string `json:"codex_basispoints_models"`
+	CodexBasispoints403AutoPause        bool   `json:"codex_basispoints_403_auto_pause"`
+	CodexBasispoints403ProbeIntervalMin int    `json:"codex_basispoints_403_probe_interval_minutes"`
 	CodexWSWeakNetworkMode              bool   `json:"codex_ws_weak_network_mode"`
 	CodexWSKeepaliveEnabled             bool   `json:"codex_ws_keepalive_enabled"`
 	CodexWSKeepaliveIntervalSec         int    `json:"codex_ws_keepalive_interval_sec"`
@@ -9445,6 +9454,8 @@ type updateSettingsReq struct {
 	CodexRequestCompression             *bool                            `json:"codex_request_compression"`
 	CodexBasispointsEnabled             *bool                            `json:"codex_basispoints_enabled"`
 	CodexBasispointsModels              *string                          `json:"codex_basispoints_models"`
+	CodexBasispoints403AutoPause        *bool                            `json:"codex_basispoints_403_auto_pause"`
+	CodexBasispoints403ProbeIntervalMin *int                             `json:"codex_basispoints_403_probe_interval_minutes"`
 	CodexWSWeakNetworkMode              *bool                            `json:"codex_ws_weak_network_mode"`
 	CodexWSKeepaliveEnabled             *bool                            `json:"codex_ws_keepalive_enabled"`
 	CodexWSKeepaliveIntervalSec         *int                             `json:"codex_ws_keepalive_interval_sec"`
@@ -10280,6 +10291,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		CodexRequestCompression:             h.store.CodexRequestCompression(),
 		CodexBasispointsEnabled:             runtimeCfg.CodexBasispointsEnabled,
 		CodexBasispointsModels:              runtimeCfg.CodexBasispointsModels,
+		CodexBasispoints403AutoPause:        !runtimeCfg.CodexBasispoints403PauseDisabled,
+		CodexBasispoints403ProbeIntervalMin: runtimeCfg.CodexBasispoints403ProbeIntervalMin,
 		CodexWSWeakNetworkMode:              runtimeCfg.CodexWSWeakNetworkMode,
 		CodexWSKeepaliveEnabled:             h.store.CodexWSKeepaliveEnabled(),
 		CodexWSKeepaliveIntervalSec:         h.store.CodexWSKeepaliveIntervalSec(),
@@ -10516,6 +10529,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	var req updateSettingsReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeError(c, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if req.CodexBasispoints403ProbeIntervalMin != nil && !database.ValidCodexBasispoints403ProbeIntervalMinutes(*req.CodexBasispoints403ProbeIntervalMin) {
+		writeError(c, http.StatusBadRequest, "codex_basispoints_403_probe_interval_minutes 必须是 1 到 10080 之间的整数")
 		return
 	}
 	if req.PromptFilterCustomPatternsExpected != nil && req.PromptFilterCustomPatterns == nil {
@@ -10790,9 +10807,13 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	previousAutoResetCreditsOnExhaustionEnabled := runtimeCfg.AutoResetCreditsOnExhaustionEnabled
 	previousBasispointsEnabled := runtimeCfg.CodexBasispointsEnabled
 	previousBasispointsModels := runtimeCfg.CodexBasispointsModels
+	previousBasispoints403PauseDisabled := runtimeCfg.CodexBasispoints403PauseDisabled
+	previousBasispoints403ProbeIntervalMin := runtimeCfg.CodexBasispoints403ProbeIntervalMin
 	if existingSettings != nil {
 		runtimeCfg.CodexBasispointsEnabled = existingSettings.CodexBasispointsEnabled
 		runtimeCfg.CodexBasispointsModels = existingSettings.CodexBasispointsModels
+		runtimeCfg.CodexBasispoints403PauseDisabled = existingSettings.CodexBasispoints403PauseDisabled
+		runtimeCfg.CodexBasispoints403ProbeIntervalMin = database.NormalizeCodexBasispoints403ProbeIntervalMinutes(existingSettings.CodexBasispointsProbeMinutes)
 	}
 	previousAutoResetCreditsBeforeExpiryMin := runtimeCfg.AutoResetCreditsBeforeExpiryMin
 	previousAutoActivate5hWindowEnabled := runtimeCfg.AutoActivate5hWindowEnabled
@@ -11032,6 +11053,14 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	if req.CodexBasispointsModels != nil {
 		runtimeCfg.CodexBasispointsModels = database.NormalizeCodexBasispointsModels(*req.CodexBasispointsModels)
 		log.Printf("设置已更新: codex_basispoints_models = %q", runtimeCfg.CodexBasispointsModels)
+	}
+	if req.CodexBasispoints403AutoPause != nil {
+		runtimeCfg.CodexBasispoints403PauseDisabled = !*req.CodexBasispoints403AutoPause
+		log.Printf("设置已更新: codex_basispoints_403_auto_pause = %t", *req.CodexBasispoints403AutoPause)
+	}
+	if req.CodexBasispoints403ProbeIntervalMin != nil {
+		runtimeCfg.CodexBasispoints403ProbeIntervalMin = *req.CodexBasispoints403ProbeIntervalMin
+		log.Printf("设置已更新: codex_basispoints_403_probe_interval_minutes = %d", *req.CodexBasispoints403ProbeIntervalMin)
 	}
 
 	if req.CodexWSWeakNetworkMode != nil {
@@ -11564,6 +11593,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	// Basispoints routing switches only after the database accepted the change.
 	effectiveRuntimeCfg.CodexBasispointsEnabled = previousBasispointsEnabled
 	effectiveRuntimeCfg.CodexBasispointsModels = previousBasispointsModels
+	effectiveRuntimeCfg.CodexBasispoints403PauseDisabled = previousBasispoints403PauseDisabled
+	effectiveRuntimeCfg.CodexBasispoints403ProbeIntervalMin = previousBasispoints403ProbeIntervalMin
 	if autoResetCreditsChanged {
 		effectiveRuntimeCfg.AutoResetCreditsEnabled = previousAutoResetCreditsEnabled
 		effectiveRuntimeCfg.AutoResetCreditsOnExhaustionEnabled = previousAutoResetCreditsOnExhaustionEnabled
@@ -11832,6 +11863,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexRequestCompression:             h.store.CodexRequestCompression(),
 		CodexBasispointsEnabled:             runtimeCfg.CodexBasispointsEnabled,
 		CodexBasispointsModels:              runtimeCfg.CodexBasispointsModels,
+		CodexBasispoints403PauseDisabled:    runtimeCfg.CodexBasispoints403PauseDisabled,
+		CodexBasispointsProbeMinutes:        runtimeCfg.CodexBasispoints403ProbeIntervalMin,
 		CodexWSWeakNetworkMode:              runtimeCfg.CodexWSWeakNetworkMode,
 		CodexWSKeepaliveEnabled:             h.store.CodexWSKeepaliveEnabled(),
 		CodexWSKeepaliveIntervalSec:         h.store.CodexWSKeepaliveIntervalSec(),
@@ -11932,7 +11965,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
-		if req.CodexBasispointsEnabled != nil || req.CodexBasispointsModels != nil {
+		if req.CodexBasispointsEnabled != nil || req.CodexBasispointsModels != nil || req.CodexBasispoints403AutoPause != nil || req.CodexBasispoints403ProbeIntervalMin != nil {
 			writeError(c, http.StatusInternalServerError, "保存 Basis Points 设置失败，设置未生效")
 			return
 		}
@@ -11978,6 +12011,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		proxy.UpdateRuntimeSettings(func(current proxy.RuntimeSettings) proxy.RuntimeSettings {
 			current.CodexBasispointsEnabled = runtimeCfg.CodexBasispointsEnabled
 			current.CodexBasispointsModels = runtimeCfg.CodexBasispointsModels
+			current.CodexBasispoints403PauseDisabled = runtimeCfg.CodexBasispoints403PauseDisabled
+			current.CodexBasispoints403ProbeIntervalMin = runtimeCfg.CodexBasispoints403ProbeIntervalMin
 			return current
 		})
 		if req.SessionSlotBufferSeconds != nil {
@@ -12178,6 +12213,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexRequestCompression:             h.store.CodexRequestCompression(),
 		CodexBasispointsEnabled:             runtimeCfg.CodexBasispointsEnabled,
 		CodexBasispointsModels:              runtimeCfg.CodexBasispointsModels,
+		CodexBasispoints403AutoPause:        !runtimeCfg.CodexBasispoints403PauseDisabled,
+		CodexBasispoints403ProbeIntervalMin: runtimeCfg.CodexBasispoints403ProbeIntervalMin,
 		CodexWSWeakNetworkMode:              runtimeCfg.CodexWSWeakNetworkMode,
 		CodexWSKeepaliveEnabled:             h.store.CodexWSKeepaliveEnabled(),
 		CodexWSKeepaliveIntervalSec:         h.store.CodexWSKeepaliveIntervalSec(),

@@ -325,6 +325,9 @@ func (h *Handler) buildAccountResponse(
 		resp.UsageLimitOverride = runtimeAccount.GetIgnoreUsageLimitStatusOverride()
 		resp.UsageLimitEffective = runtimeAccount.IgnoresUsageLimitStatus()
 		resp.ExcelBPSEffective = runtimeAccount.IsExcelBPSEnabled()
+		if resp.ExcelBPSEffective {
+			resp.ExcelBPSPause = excelBPSPauseForAccount(row.ID)
+		}
 		if isGrokAccount {
 			if snap, hasSnap := runtimeAccount.GetGrokRateLimitSnapshot(); hasSnap {
 				resp.GrokRateLimit = &snap

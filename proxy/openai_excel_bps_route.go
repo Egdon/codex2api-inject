@@ -16,7 +16,11 @@ func excelBPSRouteAvailable(account *auth.Account, model string) bool {
 	if account == nil || !account.IsExcelBPSAvailableForModel(model) {
 		return false
 	}
-	return excelBPSModelListed(CurrentRuntimeSettings().CodexBasispointsModels, model)
+	if !excelBPSModelListed(CurrentRuntimeSettings().CodexBasispointsModels, model) {
+		return false
+	}
+	// A cooling or paused Basispoints route goes straight to native Codex.
+	return !excelBPSHealth.blocks(account, model)
 }
 
 // excelBPSModelListed reports whether model passes the normalized global list.

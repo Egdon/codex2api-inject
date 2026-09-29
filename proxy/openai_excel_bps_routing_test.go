@@ -16,6 +16,7 @@ import (
 func TestResponsesExcelBPSNativeFallbackRoutesOriginalHistory(t *testing.T) {
 	for _, agent := range []bool{false, true} {
 		t.Run(map[bool]string{false: "upstream_500", true: "agent_context"}[agent], func(t *testing.T) {
+			resetExcelBPSHealthForTest(t)
 			oldDo, oldResin := excelBPSDo, resinCfg.Load()
 			t.Cleanup(func() { excelBPSDo = oldDo; resinCfg.Store(oldResin) })
 			bpsCalls, nativeCalls := 0, 0

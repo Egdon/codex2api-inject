@@ -2205,6 +2205,8 @@ export default function Settings() {
     codex_request_compression: true,
     codex_basispoints_enabled: false,
     codex_basispoints_models: '',
+    codex_basispoints_403_auto_pause: true,
+    codex_basispoints_403_probe_interval_minutes: 1,
     codex_ws_weak_network_mode: false,
     codex_ws_keepalive_enabled: false,
     codex_ws_keepalive_interval_sec: 60,
@@ -3813,6 +3815,39 @@ export default function Settings() {
                         onChange={(e) => setSettingsForm(f => ({ ...f, codex_basispoints_models: e.target.value }))}
                         onBlur={(e) => autoSaveStringField('codex_basispoints_models', e.currentTarget.value)}
                       />
+                    </SettingField>
+                  </div>
+                  <div className={SETTINGS_SWITCH_ROW}>
+                    <SettingField label={t('settings.codexBasispoints403AutoPause')} description={t('settings.codexBasispoints403AutoPauseDesc')} layout="switch">
+                      <Switch
+                        checked={settingsForm.codex_basispoints_403_auto_pause}
+                        onCheckedChange={(checked) => autoSaveBooleanField('codex_basispoints_403_auto_pause', checked)}
+                      />
+                    </SettingField>
+                  </div>
+                  <div className={SETTINGS_FIELD_GRID}>
+                    <SettingField
+                      label={t('settings.codexBasispoints403ProbeInterval')}
+                      description={t('settings.codexBasispoints403ProbeIntervalDesc')}
+                      className={cn(!settingsForm.codex_basispoints_403_auto_pause && 'opacity-60')}
+                    >
+                      <div className="relative">
+                        <DraftNumberInput
+                          min={1}
+                          max={10080}
+                          className="pr-14 tabular-nums"
+                          disabled={!settingsForm.codex_basispoints_403_auto_pause}
+                          value={settingsForm.codex_basispoints_403_probe_interval_minutes}
+                          onValueChange={(value) => setSettingsForm(f => ({ ...f, codex_basispoints_403_probe_interval_minutes: value }))}
+                          onValueCommit={(value) => {
+                            if (!settingsForm.codex_basispoints_403_auto_pause) return
+                            void autoSaveSettingsPatch({ codex_basispoints_403_probe_interval_minutes: value })
+                          }}
+                        />
+                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                          {t('settings.codexBasispoints403ProbeIntervalUnit')}
+                        </span>
+                      </div>
                     </SettingField>
                   </div>
                 </div>

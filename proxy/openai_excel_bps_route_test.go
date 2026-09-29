@@ -82,6 +82,7 @@ type excelBPSRouteHarness struct {
 
 func newExcelBPSRouteHarness(t *testing.T, bpsResponses func(n int) (int, string)) *excelBPSRouteHarness {
 	t.Helper()
+	resetExcelBPSHealthForTest(t)
 	harness := &excelBPSRouteHarness{}
 	oldDo, oldResin := excelBPSDo, resinCfg.Load()
 	t.Cleanup(func() { excelBPSDo = oldDo; resinCfg.Store(oldResin) })

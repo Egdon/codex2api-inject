@@ -45,6 +45,8 @@ import {
 } from "@/components/ui/sheet";
 import ChipInput from "./ChipInput";
 import AccountGroupMultiSelect from "./AccountGroupMultiSelect";
+import ExcelBpsBadge from "./ExcelBpsBadge";
+import { excelBpsCanResume } from "../lib/excelBpsStatus";
 import StateShell from "./StateShell";
 
 function formatSignedNumber(value: number): string {
@@ -90,6 +92,7 @@ export default function AccountQuickConfigSheet({
   const { showToast } = useToast();
 
   const [saving, setSaving] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [loadStatus, setLoadStatus] = useState<QuickConfigLoadStatus>("loading");
   const [loadError, setLoadError] = useState("");
   const [retryNonce, setRetryNonce] = useState(0);
@@ -192,6 +195,19 @@ export default function AccountQuickConfigSheet({
     session: t("accounts.codexFingerprintModeSessionDetail"),
     single_machine_multi_window: t("accounts.codexFingerprintModeSessionIdentityDetail"),
     full: t("accounts.codexFingerprintModeFullDetail"),
+  };
+
+  const handleResumeExcelBps = async () => {
+    setResuming(true);
+    try {
+      await api.clearAccountExcelBpsPause(account.id);
+      showToast(t("accounts.excelBpsResumed"));
+      onSaved();
+    } catch (err) {
+      showToast(`${t("accounts.excelBpsResumeFailed")}: ${getErrorMessage(err)}`, "error");
+    } finally {
+      setResuming(false);
+    }
   };
 
   const excelBpsOptions: { value: ExcelBpsMode; label: string }[] = [
@@ -308,6 +324,18 @@ export default function AccountQuickConfigSheet({
               <p className="text-xs text-muted-foreground leading-relaxed">
                 {t("accounts.excelBpsModeHint")}
               </p>
+              {excelBpsCanResume(account) ? (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                  <div className="flex min-w-0 items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+                    <ExcelBpsBadge account={account} />
+                    <span className="truncate">{t("accounts.excelBpsResumeHint")}</span>
+                  </div>
+                  <Button size="sm" variant="outline" disabled={resuming} onClick={() => void handleResumeExcelBps()}>
+                    {resuming ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                    {t("accounts.excelBpsResume")}
+                  </Button>
+                </div>
+              ) : null}
               <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-border/70 bg-muted/30 p-1" role="radiogroup" aria-label={t("accounts.excelBpsModeTitle")}>
                 {excelBpsOptions.map((opt) => (
                   <button

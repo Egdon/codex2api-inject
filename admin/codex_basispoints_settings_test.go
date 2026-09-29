@@ -94,3 +94,40 @@ func TestParseAccountSchedulerUpdateExcelBPSOptOut(t *testing.T) {
 		t.Fatal("non-boolean opt-out was accepted")
 	}
 }
+
+func TestBasispoints403SettingsPersistValidateAndReload(t *testing.T) {
+	h, db, _ := newImagesSettingsHandler(t)
+	t.Cleanup(func() { proxy.ApplyRuntimeSettings(proxy.DefaultRuntimeSettings()) })
+	get := decodeResponseCacheSettingsResponse(t, invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil))
+	if !get.CodexBasispoints403AutoPause || get.CodexBasispoints403ProbeIntervalMin != 1 {
+		t.Fatalf("defaults = auto_pause %t interval %d, want true/1", get.CodexBasispoints403AutoPause, get.CodexBasispoints403ProbeIntervalMin)
+	}
+	for _, invalid := range []int{0, -1, 10081} {
+		response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{"codex_basispoints_403_probe_interval_minutes": invalid})
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("interval %d accepted with %d", invalid, response.Code)
+		}
+	}
+	response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{
+		"codex_basispoints_403_auto_pause":             false,
+		"codex_basispoints_403_probe_interval_minutes": 10080,
+	})
+	if response.Code != 200 {
+		t.Fatalf("PUT: %d %s", response.Code, response.Body.String())
+	}
+	got := decodeResponseCacheSettingsResponse(t, response)
+	runtime := proxy.CurrentRuntimeSettings()
+	if got.CodexBasispoints403AutoPause || got.CodexBasispoints403ProbeIntervalMin != 10080 || !runtime.CodexBasispoints403PauseDisabled || runtime.CodexBasispoints403ProbeIntervalMin != 10080 {
+		t.Fatalf("PUT/runtime mismatch: %+v", got)
+	}
+	saved, err := db.GetSystemSettings(context.Background())
+	if err != nil || !saved.CodexBasispoints403PauseDisabled || saved.CodexBasispointsProbeMinutes != 10080 {
+		t.Fatalf("persisted mismatch: %+v %v", saved, err)
+	}
+	proxy.ApplyRuntimeSettings(proxy.DefaultRuntimeSettings())
+	proxy.ApplyRuntimeSettingsFromSystem(saved)
+	reloaded := decodeResponseCacheSettingsResponse(t, invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil))
+	if reloaded.CodexBasispoints403AutoPause || reloaded.CodexBasispoints403ProbeIntervalMin != 10080 {
+		t.Fatal("reload/GET mismatch")
+	}
+}
