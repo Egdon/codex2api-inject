@@ -31,7 +31,8 @@ func TestExcelBPSGlobalDefaultAndAccountModes(t *testing.T) {
 		name            string
 		global          bool
 		enabled, optOut bool
-		account         Account
+		apiKey          string
+		relay           bool
 		wantMode        string
 		wantEffective   bool
 	}{
@@ -40,15 +41,15 @@ func TestExcelBPSGlobalDefaultAndAccountModes(t *testing.T) {
 		{name: "on global off", enabled: true, wantMode: ExcelBPSModeOn, wantEffective: true},
 		{name: "off global on", global: true, optOut: true, wantMode: ExcelBPSModeOff},
 		{name: "explicit on wins over stale opt-out", global: true, enabled: true, optOut: true, wantMode: ExcelBPSModeOn, wantEffective: true},
-		{name: "global never enables API-key accounts", global: true, account: Account{APIKey: "api-key"}, wantMode: ExcelBPSModeInherit},
-		{name: "global never enables relay accounts", global: true, account: Account{UpstreamType: UpstreamOpenAIResponses, BaseURL: "https://example.invalid", APIKey: "relay-key"}, wantMode: ExcelBPSModeInherit},
+		{name: "global never enables API-key accounts", global: true, apiKey: "api-key", wantMode: ExcelBPSModeInherit},
+		{name: "global never enables relay accounts", global: true, apiKey: "relay-key", relay: true, wantMode: ExcelBPSModeInherit},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			SetExcelBPSGlobalEnabled(tc.global)
-			account := tc.account
-			account.AccessToken = "access-token"
-			account.ExcelBPSEnabled = tc.enabled
-			account.ExcelBPSOptOut = tc.optOut
+			account := &Account{AccessToken: "access-token", APIKey: tc.apiKey, ExcelBPSEnabled: tc.enabled, ExcelBPSOptOut: tc.optOut}
+			if tc.relay {
+				account.UpstreamType, account.BaseURL = UpstreamOpenAIResponses, "https://example.invalid"
+			}
 			if got := account.ExcelBPSMode(); got != tc.wantMode {
 				t.Fatalf("mode = %q, want %q", got, tc.wantMode)
 			}
