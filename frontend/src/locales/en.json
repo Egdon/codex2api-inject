@@ -4397,7 +4397,7 @@
     "codexForceWebsocket": "Force Codex Upstream WebSocket",
     "codexForceWebsocketDesc": "When enabled, requests to the Codex upstream use a persistent WebSocket (with connection pooling), cutting per-request TLS/handshake overhead to better match the official CLI. Disabled by default; when off, requests use the existing HTTP path.",
     "codexBasispoints": "Excel Basispoints (BPS)",
-    "codexBasispointsDesc": "Send Codex requests through the ChatGPT Excel Basispoints endpoint. Only ordinary OAuth accounts are affected; relay, API-key and Agent Identity accounts are not. Before any output is sent, unsupported requests, upstream 5xx errors and transport failures fall back to native Codex on the same account.",
+    "codexBasispointsDesc": "Send Codex requests through the ChatGPT Excel Basispoints endpoint. Only ordinary OAuth accounts are affected; relay, API-key and Agent Identity accounts are not. Requests that need live web search or image generation stay on native Codex. Before any output is sent, unsupported requests, upstream 5xx, 429 and 401 errors and transport failures fall back to native Codex on the same account.",
     "codexBasispointsEnabled": "Use BPS for all eligible accounts by default",
     "codexBasispointsEnabledDesc": "When enabled, accounts whose BPS setting follows the global default use BPS. Accounts set to Off are unaffected, and accounts set to On use BPS regardless of this switch. Disabled by default.",
     "codexBasispointsModels": "BPS model list",

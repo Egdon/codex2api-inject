@@ -4394,7 +4394,7 @@
     "codexForceWebsocket": "Codex 上游强制 WebSocket",
     "codexForceWebsocketDesc": "启用后，对 Codex 上游的请求将走 WebSocket 长连接（复用连接池），减少每次请求的 TLS/连接握手开销，更接近官方 CLI 体验。默认关闭，关闭时走原有 HTTP 请求。",
     "codexBasispoints": "Excel Basispoints（BPS）",
-    "codexBasispointsDesc": "把 Codex 请求改走 ChatGPT Excel Basispoints 通道。只对普通 OAuth 账号生效，中转、API Key、Agent Identity 账号不受影响。尚未输出时遇到不支持的请求、上游 5xx 或传输故障，会在同一账号上自动回退原 Codex 通道。",
+    "codexBasispointsDesc": "把 Codex 请求改走 ChatGPT Excel Basispoints 通道。只对普通 OAuth 账号生效，中转、API Key、Agent Identity 账号不受影响。需要实时联网搜索或生图的请求留在原 Codex；尚未输出时遇到不支持的请求、上游 5xx、429、401 或传输故障，会在同一账号上自动回退原 Codex 通道。",
     "codexBasispointsEnabled": "所有合格账号默认使用 BPS",
     "codexBasispointsEnabledDesc": "开启后，账号级 BPS 设为“跟随全局”的账号都优先走 BPS；设为“关闭”的账号不受影响，设为“开启”的账号不论此开关都会走 BPS。默认关闭。",
     "codexBasispointsModels": "BPS 模型名单",

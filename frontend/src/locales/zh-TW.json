@@ -485,7 +485,7 @@
   },
   "settings": {
     "codexBasispoints": "Excel Basispoints（BPS）",
-    "codexBasispointsDesc": "把 Codex 請求改走 ChatGPT Excel Basispoints 通道。只對一般 OAuth 帳號生效，中轉、API Key、Agent Identity 帳號不受影響。尚未輸出時遇到不支援的請求、上游 5xx 或傳輸故障，會在同一帳號上自動回退原 Codex 通道。",
+    "codexBasispointsDesc": "把 Codex 請求改走 ChatGPT Excel Basispoints 通道。只對一般 OAuth 帳號生效，中轉、API Key、Agent Identity 帳號不受影響。需要即時聯網搜尋或生圖的請求留在原 Codex；尚未輸出時遇到不支援的請求、上游 5xx、429、401 或傳輸故障，會在同一帳號上自動回退原 Codex 通道。",
     "codexBasispointsEnabled": "所有合格帳號預設使用 BPS",
     "codexBasispointsEnabledDesc": "開啟後，帳號級 BPS 設為「跟隨全域」的帳號都優先走 BPS；設為「關閉」的帳號不受影響，設為「開啟」的帳號不論此開關都會走 BPS。預設關閉。",
     "codexBasispointsModels": "BPS 模型名單",
