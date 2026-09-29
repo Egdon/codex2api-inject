@@ -40,6 +40,9 @@ type Bridge struct {
 	// keepalive overrides the idle interval between response.in_progress
 	// frames; zero uses defaultKeepalive.
 	keepalive time.Duration
+	// clientTools is the client's own tool declaration, reported back on
+	// response objects instead of the Excel server's native tools.
+	clientTools any
 }
 
 func decode(raw []byte, target any) error {
@@ -143,7 +146,7 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 		effort = "medium"
 	}
 	parallel, explicit := source["parallel_tool_calls"].(bool)
-	b := &Bridge{RequestedEffort: requested, Effort: effort, Parallel: parallel || !explicit, tools: make(map[string]tool), unsupportedTools: make(map[string]bool), replay: replay, scope: scope}
+	b := &Bridge{RequestedEffort: requested, Effort: effort, Parallel: parallel || !explicit, tools: make(map[string]tool), unsupportedTools: make(map[string]bool), replay: replay, scope: scope, clientTools: source["tools"]}
 	choice := parseToolChoice(source["tool_choice"])
 	var catalog []any
 	if !choice.none {

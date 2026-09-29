@@ -227,6 +227,7 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 					started = response
 				}
 			}
+			b.presentResponse(response)
 		}
 		terminal = kind == "response.completed" || kind == "response.incomplete" || kind == "response.failed" || kind == "error"
 		return emit(kind, payload)
@@ -424,4 +425,18 @@ func readEvents(reader io.Reader, consume func(string, []byte) error) error {
 		return err
 	}
 	return flush()
+}
+
+// presentResponse removes the Excel server configuration a Basispoints
+// response object echoes: its instructions, input and native tool list belong
+// to the adapter's wire request, not to the client's. The client sees its own
+// tool declaration, as a native Responses response would report it.
+func (b *Bridge) presentResponse(response object) {
+	delete(response, "instructions")
+	delete(response, "input")
+	if tools, ok := b.clientTools.([]any); ok {
+		response["tools"] = tools
+	} else {
+		response["tools"] = []any{}
+	}
 }

@@ -6880,6 +6880,8 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	accountFilter = applyAffinityGroupRouting(c, sessionIdentity, accountFilter)
 	apiKeyID := requestAPIKeyID(c)
 	affinityKey := sessionAffinityKey(sessionIdentity.affinityID, apiKeyID)
+	// A pre-output Basispoints fallback keeps later attempts of this request native.
+	excelBPSFallback := ""
 
 	// 3. 带重试的上游请求
 	maxRetries := h.getMaxRetries()
@@ -7060,6 +7062,20 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			upstreamCtx = WithCodexTurnStateAffinityKey(upstreamCtx, affinityKey)
 			guardCodexTurnStateEcho(affinityKey, account, downstreamHeaders)
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(upstreamCtx, func() (*http.Response, error) {
+				if excelBPSRouteAvailable(account, effectiveModel) {
+					bpsResp, served, bpsErr := h.openExcelBPSStream(upstreamCtx, c, account, codexBody, excelBPSIngress{
+						Endpoint: "/v1/chat/completions", LogModel: logModel, EffectiveModel: effectiveModel,
+						ReasoningEffort: reasoningEffort, Scope: excelBPSIngressScope(account, apiKeyID, affinityKey),
+						ThreadKey: firstNonEmptyString(sessionIdentity.affinityID, affinityKey), ProxyURL: proxyURL,
+						PersistReplay: excelBPSConversationScoped(c.Request.Header, sessionIdentity), Fallback: &excelBPSFallback,
+					})
+					if served {
+						if bpsErr == nil {
+							useWebsocket, upstreamEndpoint, serviceTier = false, excelBPSUpstreamURL, ""
+						}
+						return bpsResp, bpsErr
+					}
+				}
 				return ExecuteRequest(upstreamCtx, account, upstreamBody, upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
 			})
 		}
