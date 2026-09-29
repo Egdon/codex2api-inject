@@ -5,6 +5,7 @@ import {
   Fingerprint,
   Gauge,
   Globe,
+  Layers,
   Loader2,
   Save,
   Tag,
@@ -24,6 +25,7 @@ import {
   formStateFromAccount,
   isAbortError,
   isQuickConfigFormCurrent,
+  type ExcelBpsMode,
   type QuickConfigFormState,
   type QuickConfigLoadStatus,
   type QuickConfigReadySaveError,
@@ -192,6 +194,12 @@ export default function AccountQuickConfigSheet({
     full: t("accounts.codexFingerprintModeFullDetail"),
   };
 
+  const excelBpsOptions: { value: ExcelBpsMode; label: string }[] = [
+    { value: "inherit", label: t("accounts.excelBpsModeInherit") },
+    { value: "on", label: t("accounts.excelBpsModeOn") },
+    { value: "off", label: t("accounts.excelBpsModeOff") },
+  ];
+
   const fingerprintMode = form?.fingerprintMode ?? "off";
   const scoreMode = form?.scoreMode ?? "default";
   const concurrencyMode = form?.concurrencyMode ?? "default";
@@ -281,6 +289,45 @@ export default function AccountQuickConfigSheet({
               {fingerprintDetails[fingerprintMode]}
             </div>
           </div>
+
+          {form.excelBpsMode != null ? (
+            <div className="rounded-xl border border-border/70 bg-card p-4 shadow-2xs space-y-3">
+              <div className="flex items-center justify-between gap-2 border-b border-border/50 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Layers className="size-4 text-emerald-500" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-foreground">
+                    {t("accounts.excelBpsModeTitle")}
+                  </span>
+                </div>
+                <Badge variant={account.openai_excel_bps_effective ? "default" : "outline"} className="text-[11px]">
+                  {account.openai_excel_bps_effective
+                    ? t("accounts.excelBpsEffectiveOn")
+                    : t("accounts.excelBpsEffectiveOff")}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {t("accounts.excelBpsModeHint")}
+              </p>
+              <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-border/70 bg-muted/30 p-1" role="radiogroup" aria-label={t("accounts.excelBpsModeTitle")}>
+                {excelBpsOptions.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={form.excelBpsMode === opt.value}
+                    onClick={() => patchForm({ excelBpsMode: opt.value })}
+                    className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-all duration-150 ${
+                      form.excelBpsMode === opt.value
+                        ? "bg-primary text-primary-foreground font-bold shadow-xs ring-1 ring-primary/30"
+                        : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="rounded-xl border border-border/70 bg-card p-4 shadow-2xs space-y-3.5">
             <div className="flex items-center gap-2 border-b border-border/50 pb-2.5">

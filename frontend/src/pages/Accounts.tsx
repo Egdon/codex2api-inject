@@ -46,6 +46,7 @@ import Pagination from "../components/Pagination";
 import StateShell from "../components/StateShell";
 import StatusBadge from "../components/StatusBadge";
 import DaybreakBadge from "../components/DaybreakBadge";
+import ExcelBpsBadge, { accountShowsExcelBpsBadge } from "../components/ExcelBpsBadge";
 import { useDataLoader, type LoadOptions } from "../hooks/useDataLoader";
 import {
   useConfirmDialog,
@@ -1323,6 +1324,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                     account.openai_responses_api ||
                                     account.grok_api ||
                                     account.agent_identity ||
+                                    accountShowsExcelBpsBadge(account) ||
                                     account.locked ||
                                     (account.rate_limit_reset_credits ?? 0) >
                                       0 ||
@@ -1345,6 +1347,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                           Responses API
                                         </span>
                                       )}
+                                      <ExcelBpsBadge account={account} />
                                       {account.grok_api && (
                                         <span className="inline-flex items-center gap-0.5 rounded-md bg-zinc-900 px-1.5 py-0.5 text-[10px] font-medium text-white ring-1 ring-inset ring-zinc-700 dark:bg-white dark:text-zinc-900 dark:ring-zinc-300">
                                           <Sparkles className="size-2.5" />
@@ -13842,6 +13845,7 @@ function AccountMobileCard({
               {account.openai_responses_api && (
                 <span className="codex-account-card__flag">Responses API</span>
               )}
+              <ExcelBpsBadge account={account} variant="card" />
               {account.grok_api && (
                 <span className="codex-account-card__flag">
                   <Sparkles className="size-3" />

@@ -329,6 +329,15 @@
     }
   },
   "accounts": {
+    "excelBpsModeTitle": "Excel Basispoints（BPS）",
+    "excelBpsModeHint": "跟隨全域：由系統設定中的「所有合格帳號預設使用 BPS」決定；開啟：不論全域開關都走 BPS；關閉：全域開啟時也不走 BPS。尚未輸出時遇到不支援的請求或上游故障，會自動回退原 Codex 通道。",
+    "excelBpsModeInherit": "跟隨全域",
+    "excelBpsModeOn": "開啟",
+    "excelBpsModeOff": "關閉",
+    "excelBpsEffectiveOn": "目前走 BPS",
+    "excelBpsEffectiveOff": "目前不走 BPS",
+    "excelBpsBadgeForcedTitle": "此帳號已單獨開啟 Excel BPS",
+    "excelBpsBadgeGlobalTitle": "此帳號依全域設定使用 Excel BPS",
     "refreshAllUsage": "一鍵重新整理用量",
     "refreshAllUsageHint": "查詢執行池中所有支援 WHAM 的 Codex 帳號，更新 5 小時和週用量進度條。",
     "batchUsageRefreshing": "正在重新整理用量",
@@ -465,6 +474,13 @@
     "hrefClickHint": "點擊開啟跳轉位址（未設定時開啟 api-base）；Alt/Option+點擊 設定自訂連結"
   },
   "settings": {
+    "codexBasispoints": "Excel Basispoints（BPS）",
+    "codexBasispointsDesc": "把 Codex 請求改走 ChatGPT Excel Basispoints 通道。只對一般 OAuth 帳號生效，中轉、API Key、Agent Identity 帳號不受影響。尚未輸出時遇到不支援的請求、上游 5xx 或傳輸故障，會在同一帳號上自動回退原 Codex 通道。",
+    "codexBasispointsEnabled": "所有合格帳號預設使用 BPS",
+    "codexBasispointsEnabledDesc": "開啟後，帳號級 BPS 設為「跟隨全域」的帳號都優先走 BPS；設為「關閉」的帳號不受影響，設為「開啟」的帳號不論此開關都會走 BPS。預設關閉。",
+    "codexBasispointsModels": "BPS 模型名單",
+    "codexBasispointsModelsDesc": "只有名單內的模型走 BPS，多個模型以逗號分隔；留空表示不限，由帳號模型設定與上游回應決定。對單獨開啟的帳號同樣生效。",
+    "codexBasispointsModelsPlaceholder": "例如 gpt-5.6-sol, gpt-6-astra",
     "clientVersionSyncSuccess": "用戶端版本已同步",
     "clientVersionSyncPartial": "部分來源同步失敗，已保留原有版本",
     "autoResetCreditsTitle": "主動重置次數自動消耗",

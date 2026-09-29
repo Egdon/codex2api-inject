@@ -2203,6 +2203,8 @@ export default function Settings() {
     codex_telemetry_enabled: false,
     codex_telemetry_timing_debug: false,
     codex_request_compression: true,
+    codex_basispoints_enabled: false,
+    codex_basispoints_models: '',
     codex_ws_weak_network_mode: false,
     codex_ws_keepalive_enabled: false,
     codex_ws_keepalive_interval_sec: 60,
@@ -3787,6 +3789,29 @@ export default function Settings() {
                             codex_ws_stateless_slots: value,
                           })
                         }}
+                      />
+                    </SettingField>
+                  </div>
+                </div>
+              </SettingsCard>
+
+              <SettingsCard title={t('settings.codexBasispoints')} description={t('settings.codexBasispointsDesc')} icon={<Layers className="size-4" />}>
+                <div className="space-y-4">
+                  <div className={SETTINGS_SWITCH_ROW}>
+                    <SettingField label={t('settings.codexBasispointsEnabled')} description={t('settings.codexBasispointsEnabledDesc')} layout="switch">
+                      <Switch
+                        checked={settingsForm.codex_basispoints_enabled}
+                        onCheckedChange={(checked) => autoSaveBooleanField('codex_basispoints_enabled', checked)}
+                      />
+                    </SettingField>
+                  </div>
+                  <div className={SETTINGS_FIELD_GRID}>
+                    <SettingField label={t('settings.codexBasispointsModels')} description={t('settings.codexBasispointsModelsDesc')}>
+                      <Input
+                        value={settingsForm.codex_basispoints_models}
+                        placeholder={t('settings.codexBasispointsModelsPlaceholder')}
+                        onChange={(e) => setSettingsForm(f => ({ ...f, codex_basispoints_models: e.target.value }))}
+                        onBlur={(e) => autoSaveStringField('codex_basispoints_models', e.currentTarget.value)}
                       />
                     </SettingField>
                   </div>
