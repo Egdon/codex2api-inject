@@ -9,7 +9,7 @@ import { useDataLoader } from '../hooks/useDataLoader'
 import { useToast } from '../hooks/useToast'
 import type { AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
 import { ANTIGRAVITY_DEFAULT_MODELS } from '../lib/antigravityModels'
-import { countPayloadRules } from './PayloadRules'
+import { countPayloadRules, PAYLOAD_RULE_GROUPS } from './PayloadRules'
 import { getErrorMessage } from '../utils/error'
 import { DEFAULT_CLAUDE_MODEL_MAP } from '../lib/modelMapping'
 import {
@@ -60,6 +60,7 @@ import {
   SheetBody,
   SheetContent,
   SheetDescription,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
@@ -71,6 +72,9 @@ import {
 } from '@/components/ui/tooltip'
 import {
   Activity,
+  ArrowRight,
+  ArrowUpRight,
+  Braces,
   Brain,
   Check,
   ChevronDown,
@@ -89,9 +93,11 @@ import {
   Link2,
   Loader2,
   Palette,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Server,
   Shield,
   ShieldAlert,
@@ -113,6 +119,13 @@ import { useVisibleChannels } from '../visibleChannels'
 import { ALL_VISIBLE_CHANNEL_OPTIONS, FALLBACK_VISIBLE_CHANNEL, toggleVisibleChannel } from '../lib/visibleChannels'
 
 type ModelPanelKey = 'registry' | 'anthropic' | 'codex' | 'reasoning'
+const MODEL_PANEL_FIELDS = {
+  anthropic: 'model_mapping',
+  codex: 'codex_model_mapping',
+  reasoning: 'reasoning_effort_models',
+} as const satisfies Partial<Record<ModelPanelKey, keyof SystemSettings>>
+const MODEL_REGISTRY_PREVIEW_LIMIT = 6
+const MODEL_RULE_PREVIEW_LIMIT = 3
 
 type ModelMappingEntry = [string, string]
 const EMPTY_MODEL_MAPPING_ENTRIES: ModelMappingEntry[] = []
@@ -502,25 +515,45 @@ function ModelMappingEditor({
     updateMappings(next)
   }
 
+  const listRef = useRef<HTMLDivElement>(null)
+  const focusLastRowRef = useRef(false)
   const handleAdd = () => {
     const defaultSource = sourceOptions && targetOptions
       ? sourceOptions[1]?.value ?? sourceOptions[0]?.value ?? ''
       : sourceOptions?.[0]?.value ?? ''
+    focusLastRowRef.current = true
     updateMappings([...mappings, [defaultSource, targetOptions?.[0]?.value ?? '']])
   }
 
+  useEffect(() => {
+    if (!focusLastRowRef.current) return
+    focusLastRowRef.current = false
+    const input = listRef.current?.querySelector<HTMLInputElement>('[data-mapping-row]:last-child input')
+    input?.focus()
+    input?.select()
+    input?.scrollIntoView({ block: 'nearest' })
+  }, [mappings.length])
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="hidden shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2rem] gap-1.5 px-1 text-xs font-semibold text-muted-foreground sm:grid">
-        <span>{sourceLabel}</span>
-        <span>{targetLabel}</span>
-        <span />
-      </div>
-      <div className="min-h-[180px] flex-1 space-y-2 overflow-y-auto pr-0.5 sm:space-y-1.5 sm:pr-1">
+      {mappings.length > 0 ? (
+        <div className="hidden shrink-0 grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_2rem] gap-1.5 px-1 text-xs font-semibold text-muted-foreground sm:grid">
+          <span>{sourceLabel}</span>
+          <span />
+          <span>{targetLabel}</span>
+          <span />
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-border/70 py-8 text-center text-xs text-muted-foreground">
+          {t('settings2.mappingEmpty')}
+        </div>
+      )}
+      <div ref={listRef} className="space-y-2 sm:space-y-1.5">
         {mappings.map(([k, v], i) => (
           <div
             key={i}
-            className="grid grid-cols-1 gap-2 rounded-xl border border-border bg-background/70 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2rem] sm:items-center sm:gap-1.5 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0"
+            data-mapping-row
+            className="grid grid-cols-1 gap-2 rounded-xl border border-border bg-background/70 p-3 sm:grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_2rem] sm:items-center sm:gap-1.5 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0"
           >
             <div className="min-w-0 space-y-1 sm:space-y-0">
               <span className="text-[11px] font-semibold text-muted-foreground sm:hidden">
@@ -534,6 +567,7 @@ function ModelMappingEditor({
                 onChange={(e: ChangeEvent<HTMLInputElement>) => handleChange(i, 0, e.target.value)}
               />
             </div>
+            <ArrowRight className="hidden size-3.5 justify-self-center text-muted-foreground/60 sm:block" aria-hidden="true" />
             <div className="min-w-0 space-y-1 sm:space-y-0">
               <span className="text-[11px] font-semibold text-muted-foreground sm:hidden">
                 {targetLabel}
@@ -571,8 +605,9 @@ function ModelMappingEditor({
           ))}
         </datalist>
       ) : null}
-      <Button type="button" variant="outline" size="sm" className="self-start" onClick={handleAdd}>
-        + {t('settings2.addMapping')}
+      <Button type="button" variant="outline" size="sm" className="w-full border-dashed text-muted-foreground hover:text-foreground" onClick={handleAdd}>
+        <Plus className="size-3.5" />
+        {t('settings2.addMapping')}
       </Button>
     </div>
   )
@@ -628,8 +663,13 @@ function ReasoningEffortModelsEditor({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
+      {entries.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border/70 py-8 text-center text-xs text-muted-foreground">
+          {t('settings2.reasoningEmpty')}
+        </div>
+      ) : null}
       {/* Mobile: stacked cards */}
-      <div className="max-h-[320px] space-y-2 overflow-y-auto pr-0.5 sm:hidden">
+      <div className="space-y-2 sm:hidden">
         {entries.map((entry, i) => (
           <div
             key={i}
@@ -682,14 +722,14 @@ function ReasoningEffortModelsEditor({
       </div>
 
       {/* Desktop: compact grid */}
-      <div className="hidden min-h-0 flex-1 flex-col gap-2 sm:flex">
+      <div className={cn('hidden min-h-0 flex-1 flex-col gap-2', entries.length > 0 && 'sm:flex')}>
         <div className="grid shrink-0 grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,1fr)_2rem] gap-2 px-1 text-xs font-semibold text-muted-foreground">
           <span>{t('settings2.baseModel')}</span>
           <span>{t('settings2.reasoningEffort')}</span>
           <span>{t('settings2.generatedModel')}</span>
           <span />
         </div>
-        <div className="max-h-[220px] space-y-1.5 overflow-y-auto pr-1">
+        <div className="space-y-1.5">
           {entries.map((entry, i) => (
             <div
               key={i}
@@ -726,8 +766,9 @@ function ReasoningEffortModelsEditor({
           ))}
         </div>
       </div>
-      <Button type="button" variant="outline" size="sm" className="self-start" onClick={handleAdd}>
-        + {t('settings2.addReasoningModel')}
+      <Button type="button" variant="outline" size="sm" className="w-full border-dashed text-muted-foreground hover:text-foreground" onClick={handleAdd}>
+        <Plus className="size-3.5" />
+        {t('settings2.addReasoningModel')}
       </Button>
     </div>
   )
@@ -1532,46 +1573,314 @@ function SettingsSkeleton() {
   )
 }
 
-function ModelSummaryCard({
+function UnsavedDot({ label }: { label: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-amber-600 dark:text-amber-400">
+      <span className="size-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+      {label}
+    </span>
+  )
+}
+
+function ModelSourceBadge({ source }: { source: string }) {
+  const { t } = useTranslation()
+  const label =
+    source === 'official_codex_docs'
+      ? t('settings.modelSourceOfficial')
+      : source === 'upstream_manifest'
+        ? t('settings.modelSourceUpstream')
+        : source === 'reasoning_effort'
+          ? t('settings.modelSourceReasoning')
+          : source === 'manual'
+            ? t('settings.modelSourceManual')
+            : source === 'daybreak'
+              ? 'Daybreak'
+              : t('settings.modelSourceBuiltin')
+  return (
+    <Badge
+      variant={source === 'official_codex_docs' ? 'default' : source === 'builtin' ? 'outline' : 'secondary'}
+      className="text-[10px]"
+    >
+      {label}
+    </Badge>
+  )
+}
+
+function ModelRegistryOverview({
+  items,
+  lastSyncedLabel,
+  sourceUrl,
+  syncing,
+  onSync,
+  onOpen,
+}: {
+  items: ModelInfo[]
+  lastSyncedLabel: string
+  sourceUrl: string
+  syncing: boolean
+  onSync: () => void
+  onOpen: () => void
+}) {
+  const { t } = useTranslation()
+  const enabled = items.filter((model) => model.enabled)
+  const imageCount = enabled.filter((model) => model.category === 'image').length
+  const preview = enabled.slice(0, MODEL_REGISTRY_PREVIEW_LIMIT)
+  const stats = [
+    { label: t('settings.modelsEnabled'), value: `${enabled.length}/${items.length}` },
+    { label: t('settings.modelCategoryText'), value: String(enabled.length - imageCount) },
+    { label: t('settings.modelImage'), value: String(imageCount) },
+    { label: t('settings.modelsLastSynced'), value: lastSyncedLabel },
+  ]
+
+  return (
+    <SettingsCard
+      title={t('settings.modelRegistry')}
+      description={t('settings.modelRegistryDesc')}
+      icon={<Layers className="size-4" />}
+      badge={
+        <a
+          href={sourceUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
+        >
+          {t('settings.nav.openSource')}
+          <ExternalLink className="size-3" />
+        </a>
+      }
+    >
+      <div className="space-y-3.5">
+        <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-border/60 bg-muted/20 sm:grid-cols-[repeat(3,minmax(0,1fr))_minmax(0,1.9fr)]">
+          {stats.map((stat, index) => (
+            <div
+              key={stat.label}
+              className={cn(
+                'min-w-0 px-3.5 py-2.5',
+                index % 2 === 1 && 'border-l border-border/60',
+                index >= 2 && 'max-sm:border-t max-sm:border-border/60',
+                index === 2 && 'sm:border-l',
+              )}
+            >
+              <div className="text-[11px] font-medium text-muted-foreground">{stat.label}</div>
+              <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-foreground" title={stat.value}>{stat.value}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <button
+            type="button"
+            onClick={onOpen}
+            className="group flex min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            {preview.map((model) => (
+              <span
+                key={model.id}
+                className="rounded-md border border-border/70 bg-background px-2 py-0.5 font-mono text-[11px] text-foreground/90 transition-colors group-hover:border-primary/30"
+              >
+                {model.id}
+              </span>
+            ))}
+            {enabled.length > preview.length ? (
+              <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
+                +{enabled.length - preview.length}
+              </span>
+            ) : null}
+          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={onOpen}>
+              {t('settings.modelRegistryViewAll', { count: items.length })}
+              <ChevronRight className="size-3.5" />
+            </Button>
+            <Button size="sm" variant="outline" onClick={onSync} disabled={syncing}>
+              <RefreshCw className={cn('size-3.5', syncing && 'animate-spin')} />
+              {syncing ? t('settings.modelsSyncing') : t('settings.syncUpstreamModels')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </SettingsCard>
+  )
+}
+
+function ModelRuleCard({
+  icon,
   title,
   description,
-  meta,
+  count,
+  preview,
+  dirty = false,
+  external = false,
   onOpen,
-  openLabel,
 }: {
+  icon: ReactNode
   title: string
   description: string
-  meta: string
+  count: number
+  preview?: ReactNode
+  dirty?: boolean
+  external?: boolean
   onOpen: () => void
-  openLabel: string
 }) {
+  const { t } = useTranslation()
+  const configured = count > 0
   return (
     <button
       type="button"
       onClick={onOpen}
-      className="group flex w-full items-start gap-3.5 rounded-xl border border-border/70 bg-card p-4 text-left shadow-2xs transition-all hover:border-primary/40 hover:bg-muted/10 hover:shadow-xs"
+      className="group flex h-full w-full flex-col rounded-xl border border-border/70 bg-card p-4 text-left shadow-2xs transition-all hover:-translate-y-px hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
-      <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:bg-primary/10 group-hover:text-primary group-hover:ring-primary/20">
-        <Layers className="size-4" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold leading-snug text-foreground">{title}</div>
-            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-              {description}
-            </p>
-          </div>
-          <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+      <div className="flex items-start gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-muted-foreground ring-1 ring-inset ring-border/60 transition-colors group-hover:bg-primary/10 group-hover:text-primary group-hover:ring-primary/20 [&_svg]:size-4">
+          {icon}
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Badge variant="secondary" className="text-xs font-semibold tabular-nums">
-            {meta}
-          </Badge>
-          <span className="text-xs font-semibold text-primary group-hover:underline">{openLabel}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold leading-snug text-foreground">{title}</span>
+            {dirty ? <UnsavedDot label={t('settings.modelRuleUnsaved')} /> : null}
+          </div>
+          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground" title={description}>{description}</p>
+        </div>
+        {external ? (
+          <ArrowUpRight className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-primary" />
+        ) : (
+          <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+        )}
+      </div>
+      <div className="mt-3.5 flex flex-1 flex-col justify-end gap-3 border-t border-border/50 pt-3">
+        {configured ? (
+          preview ? <div className="min-h-[3.25rem]">{preview}</div> : null
+        ) : (
+          <div className="flex min-h-[3.25rem] items-center justify-center rounded-lg border border-dashed border-border/70 px-3 text-center text-[11px] text-muted-foreground transition-colors group-hover:border-primary/30 group-hover:text-foreground/80">
+            {t('settings.modelRuleAddFirst')}
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-2 text-xs">
+          {configured ? (
+            <Badge variant="secondary" className="font-semibold tabular-nums">
+              {t('settings.nav.mappingCount', { count })}
+            </Badge>
+          ) : (
+            <span className="text-muted-foreground">{t('settings.modelRuleEmpty')}</span>
+          )}
+          <span className="font-medium text-muted-foreground transition-colors group-hover:text-primary">
+            {external ? t('settings.modelRuleOpenPage') : t('settings.nav.manage')}
+          </span>
         </div>
       </div>
     </button>
+  )
+}
+
+function ModelMappingPreview({ entries }: { entries: ModelMappingEntry[] }) {
+  return (
+    <ul className="space-y-1">
+      {entries.slice(0, MODEL_RULE_PREVIEW_LIMIT).map(([from, to], index) => (
+        <li key={`${from}-${index}`} className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] leading-4">
+          <span className="min-w-0 truncate text-muted-foreground">{from}</span>
+          <ArrowRight className="size-3 shrink-0 text-muted-foreground/60" />
+          <span className="min-w-0 truncate font-medium text-foreground">{to}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function ModelChipPreview({ labels }: { labels: string[] }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {labels.map((label) => (
+        <span key={label} className="rounded-md border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[11px] text-foreground/90">
+          {label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function ModelRegistryPanel({
+  items,
+  lastSyncedLabel,
+  syncing,
+  onSync,
+}: {
+  items: ModelInfo[]
+  lastSyncedLabel: string
+  syncing: boolean
+  onSync: () => void
+}) {
+  const { t } = useTranslation()
+  const [query, setQuery] = useState('')
+  const [category, setCategory] = useState<'all' | 'text' | 'image'>('all')
+  const imageCount = items.filter((model) => model.category === 'image').length
+  const needle = query.trim().toLowerCase()
+  const filtered = items.filter((model) => {
+    if (category === 'image' && model.category !== 'image') return false
+    if (category === 'text' && model.category === 'image') return false
+    return !needle || model.id.toLowerCase().includes(needle)
+  })
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        <span className="tabular-nums">
+          {t('settings.modelsEnabled')}{' '}
+          <span className="font-semibold text-foreground">{items.filter((model) => model.enabled).length}/{items.length}</span>
+          <span className="mx-2 text-border">·</span>
+          {t('settings.modelsLastSynced')} <span className="font-semibold text-foreground">{lastSyncedLabel}</span>
+        </span>
+        <Button size="sm" variant="outline" onClick={onSync} disabled={syncing}>
+          <RefreshCw className={cn('size-3.5', syncing && 'animate-spin')} />
+          {syncing ? t('settings.modelsSyncing') : t('settings.syncUpstreamModels')}
+        </Button>
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
+            placeholder={t('settings.modelRegistrySearch')}
+            className="h-8 pl-8 font-mono text-xs"
+          />
+        </div>
+        <SegmentedPillGroup
+          className="sm:w-auto"
+          value={category}
+          onChange={setCategory}
+          options={[
+            { value: 'all', label: `${t('settings.modelCategoryAll')} ${items.length}` },
+            { value: 'text', label: `${t('settings.modelCategoryText')} ${items.length - imageCount}` },
+            { value: 'image', label: `${t('settings.modelImage')} ${imageCount}` },
+          ]}
+        />
+      </div>
+      {filtered.length > 0 ? (
+        <div className="grid gap-1.5 sm:grid-cols-2">
+          {filtered.map((model) => (
+            <div
+              key={model.id}
+              className={cn(
+                'flex min-w-0 items-center justify-between gap-2 rounded-lg border border-border/60 bg-background px-3 py-2',
+                !model.enabled && 'opacity-60',
+              )}
+            >
+              <span className="min-w-0 truncate font-mono text-xs font-semibold text-foreground" title={model.id}>
+                {model.id}
+              </span>
+              <div className="flex shrink-0 items-center gap-1">
+                {!model.enabled ? <Badge variant="outline" className="text-[10px]">{t('settings.modelDisabled')}</Badge> : null}
+                {model.pro_only ? <Badge variant="outline" className="text-[10px]">{t('settings.modelProOnly')}</Badge> : null}
+                <ModelSourceBadge source={model.source} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-border/70 py-10 text-center text-xs text-muted-foreground">
+          {t('settings.modelRegistryEmpty')}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -2947,7 +3256,6 @@ export default function Settings() {
       !model.id.includes(')')
     )
     .map((model) => ({ label: model.id, value: model.id }))
-  const enabledModelCount = visibleModelItems.filter((model) => model.enabled).length
   const imagesDefaultMainModel = settingsForm.codex_images_default_main_model || 'gpt-5.6-luna'
   const imagesMainModelOptions = [
     { value: '', label: t('settings.codexImagesDefault', { model: imagesDefaultMainModel }) },
@@ -2958,22 +3266,33 @@ export default function Settings() {
   }
   const modelsLastSyncedLabel = modelsLastSyncedAt ? formatBeijingTime(modelsLastSyncedAt) : t('settings.modelsNeverSynced')
   const modelsSourceLabel = modelsSourceURL || 'https://developers.openai.com/codex/models'
-  const anthropicMappingCount = useMemo(
-    () => parseModelMappingEntries(settingsForm.model_mapping, defaultClaudeModelMappingEntries).length,
+  const anthropicMappingEntries = useMemo(
+    () => parseModelMappingEntries(settingsForm.model_mapping, defaultClaudeModelMappingEntries),
     [defaultClaudeModelMappingEntries, settingsForm.model_mapping],
   )
-  const codexMappingCount = useMemo(
-    () => parseModelMappingEntries(settingsForm.codex_model_mapping).length,
+  const codexMappingEntries = useMemo(
+    () => parseModelMappingEntries(settingsForm.codex_model_mapping),
     [settingsForm.codex_model_mapping],
   )
-  const reasoningEffortCount = useMemo(
-    () => parseReasoningEffortModelEntries(settingsForm.reasoning_effort_models).length,
+  const reasoningEffortAliases = useMemo(
+    () => parseReasoningEffortModelEntries(settingsForm.reasoning_effort_models).map(reasoningEffortAlias).filter(Boolean),
     [settingsForm.reasoning_effort_models],
   )
   const payloadRuleCount = useMemo(
     () => countPayloadRules(settingsForm.payload_rules),
     [settingsForm.payload_rules],
   )
+  const payloadRuleGroupLabels = useMemo(() => {
+    try {
+      const parsed = JSON.parse(settingsForm.payload_rules || '{}') as Record<string, unknown>
+      return PAYLOAD_RULE_GROUPS.flatMap((group) => {
+        const rules = parsed[group]
+        return Array.isArray(rules) && rules.length > 0 ? [`${group} ×${rules.length}`] : []
+      })
+    } catch {
+      return []
+    }
+  }, [settingsForm.payload_rules])
   const showInitialSkeleton = loading && !health
   const codexUserAgentConfig = useMemo(
     () => parseCodexUserAgentConfig(settingsForm.codex_user_agent_config),
@@ -3178,6 +3497,11 @@ export default function Settings() {
     commitSettingsForm(persistedSettings)
     setResponseCacheValidationError(null)
   }, [commitSettingsForm, persistedSettings])
+  const dirtyKeySet = useMemo(() => new Set(dirtyKeys), [dirtyKeys])
+  const discardSettingsField = useCallback((field: keyof SystemSettings) => {
+    if (!persistedSettings) return
+    setSettingsForm((form) => ({ ...form, [field]: persistedSettings[field] }))
+  }, [persistedSettings])
   // 有未保存改动时保存按钮才是主色；没改动也保留可点，脏检查漏判时用户仍能强制保存。
   const renderSaveButton = (className?: string) => (
     <Button
@@ -3208,6 +3532,23 @@ export default function Settings() {
   const tabParam = searchParams.get('tab')
   const activeTab: SettingsTabKey = isSettingsTabKey(tabParam) ? tabParam : DEFAULT_SETTINGS_TAB
   const [modelPanel, setModelPanel] = useState<ModelPanelKey | null>(null)
+  const modelPanelMeta = (() => {
+    switch (modelPanel) {
+      case 'registry':
+        return { title: t('settings.modelRegistry'), description: t('settings.modelRegistryDesc'), icon: <Layers />, count: visibleModelItems.length }
+      case 'anthropic':
+        return { title: t('settings2.anthropicModelMapping'), description: t('settings2.anthropicModelMappingDesc'), icon: <ChannelLogo channel="claude" size={16} />, count: anthropicMappingEntries.length }
+      case 'codex':
+        return { title: t('settings2.codexModelMapping'), description: t('settings2.codexModelMappingDesc'), icon: <Shuffle />, count: codexMappingEntries.length }
+      case 'reasoning':
+        return { title: t('settings2.reasoningEffortModels'), description: t('settings2.reasoningEffortModelsDesc'), icon: <Brain />, count: reasoningEffortAliases.length }
+      default:
+        return null
+    }
+  })()
+  const modelPanelField = modelPanel && modelPanel !== 'registry' ? MODEL_PANEL_FIELDS[modelPanel] : null
+  const modelPanelDirty = modelPanelField ? dirtyKeySet.has(modelPanelField) : false
+  const modelPanelOtherDirtyCount = dirtyCount - (modelPanelDirty ? 1 : 0)
   const settingsNavRef = useRef<HTMLElement | null>(null)
 
   // 切换 Tab 后要定位的 section id：面板内容在下一次渲染才挂载，滚动动作放到 effect 里。
@@ -4501,133 +4842,91 @@ export default function Settings() {
               </SettingsSection>
 
               <SettingsSection id="settings-models" title={t('settings.nav.models')} description={t('settings.nav.modelsDesc')} icon={<Layers className="size-4" />}>
-                <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border/80 bg-card/80 px-3.5 py-2.5 shadow-sm">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="secondary" className="tabular-nums">
-                      {t('settings.modelsEnabled')}: {enabledModelCount}
-                    </Badge>
-                    <span className="hidden sm:inline text-border">·</span>
-                    <span className="truncate">
-                      {t('settings.modelsLastSynced')}: {modelsLastSyncedLabel}
-                    </span>
+                <ModelRegistryOverview
+                  items={visibleModelItems}
+                  lastSyncedLabel={modelsLastSyncedLabel}
+                  sourceUrl={modelsSourceLabel}
+                  syncing={syncingModels}
+                  onSync={() => void handleSyncModels()}
+                  onOpen={() => setModelPanel('registry')}
+                />
+                <div className="space-y-2.5">
+                  <div className="px-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/90">
+                    {t('settings.modelRulesTitle')}
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <a
-                      href={modelsSourceLabel}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                    >
-                      <ExternalLink className="size-3.5" />
-                      {t('settings.nav.openSource')}
-                    </a>
-                    <Button size="sm" variant="outline" onClick={() => void handleSyncModels()} disabled={syncingModels}>
-                      <RefreshCw className={cn('size-3.5', syncingModels && 'animate-spin')} />
-                      {syncingModels ? t('settings.modelsSyncing') : t('settings.syncUpstreamModels')}
-                    </Button>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <ModelRuleCard
+                      icon={<ChannelLogo channel="claude" size={16} />}
+                      title={t('settings2.anthropicModelMapping')}
+                      description={t('settings2.anthropicModelMappingDesc')}
+                      count={anthropicMappingEntries.length}
+                      preview={<ModelMappingPreview entries={anthropicMappingEntries} />}
+                      dirty={dirtyKeySet.has(MODEL_PANEL_FIELDS.anthropic)}
+                      onOpen={() => setModelPanel('anthropic')}
+                    />
+                    <ModelRuleCard
+                      icon={<Shuffle />}
+                      title={t('settings2.codexModelMapping')}
+                      description={t('settings2.codexModelMappingDesc')}
+                      count={codexMappingEntries.length}
+                      preview={<ModelMappingPreview entries={codexMappingEntries} />}
+                      dirty={dirtyKeySet.has(MODEL_PANEL_FIELDS.codex)}
+                      onOpen={() => setModelPanel('codex')}
+                    />
+                    <ModelRuleCard
+                      icon={<Brain />}
+                      title={t('settings2.reasoningEffortModels')}
+                      description={t('settings2.reasoningEffortModelsDesc')}
+                      count={reasoningEffortAliases.length}
+                      preview={<ModelChipPreview labels={reasoningEffortAliases.slice(0, MODEL_REGISTRY_PREVIEW_LIMIT)} />}
+                      dirty={dirtyKeySet.has(MODEL_PANEL_FIELDS.reasoning)}
+                      onOpen={() => setModelPanel('reasoning')}
+                    />
+                    <ModelRuleCard
+                      icon={<Braces />}
+                      title={t('settings2.payloadRules')}
+                      description={t('settings2.payloadRulesDesc')}
+                      count={payloadRuleCount}
+                      preview={<ModelChipPreview labels={payloadRuleGroupLabels} />}
+                      external
+                      onOpen={() => navigate('/payload-rules')}
+                    />
                   </div>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ModelSummaryCard
-                    title={t('settings.modelRegistry')}
-                    description={t('settings.modelRegistryDesc')}
-                    meta={t('settings.nav.modelCount', { count: enabledModelCount })}
-                    openLabel={t('settings.nav.manage')}
-                    onOpen={() => setModelPanel('registry')}
-                  />
-                  <ModelSummaryCard
-                    title={t('settings2.anthropicModelMapping')}
-                    description={t('settings2.anthropicModelMappingDesc')}
-                    meta={t('settings.nav.mappingCount', { count: anthropicMappingCount })}
-                    openLabel={t('settings.nav.manage')}
-                    onOpen={() => setModelPanel('anthropic')}
-                  />
-                  <ModelSummaryCard
-                    title={t('settings2.codexModelMapping')}
-                    description={t('settings2.codexModelMappingDesc')}
-                    meta={t('settings.nav.mappingCount', { count: codexMappingCount })}
-                    openLabel={t('settings.nav.manage')}
-                    onOpen={() => setModelPanel('codex')}
-                  />
-                  <ModelSummaryCard
-                    title={t('settings2.reasoningEffortModels')}
-                    description={t('settings2.reasoningEffortModelsDesc')}
-                    meta={t('settings.nav.mappingCount', { count: reasoningEffortCount })}
-                    openLabel={t('settings.nav.manage')}
-                    onOpen={() => setModelPanel('reasoning')}
-                  />
-                  <ModelSummaryCard
-                    title={t('settings2.payloadRules')}
-                    description={t('settings2.payloadRulesDesc')}
-                    meta={t('settings.nav.mappingCount', { count: payloadRuleCount })}
-                    openLabel={t('settings.nav.manage')}
-                    onOpen={() => navigate('/payload-rules')}
-                  />
                 </div>
 
                 <Sheet open={modelPanel !== null} onOpenChange={(open) => { if (!open) setModelPanel(null) }}>
                   <SheetContent
                     side="right"
                     className="sm:w-[min(calc(100%-2rem),720px)] sm:max-w-[min(calc(100%-2rem),720px)]"
+                    onOpenAutoFocus={(event) => {
+                      event.preventDefault()
+                      ;(event.currentTarget as HTMLElement | null)?.focus()
+                    }}
                   >
-                    <SheetHeader>
-                      <SheetTitle>
-                        {modelPanel === 'registry'
-                          ? t('settings.modelRegistry')
-                          : modelPanel === 'anthropic'
-                            ? t('settings2.anthropicModelMapping')
-                            : modelPanel === 'codex'
-                              ? t('settings2.codexModelMapping')
-                              : t('settings2.reasoningEffortModels')}
-                      </SheetTitle>
-                      <SheetDescription>
-                        {modelPanel === 'registry'
-                          ? t('settings.modelRegistryDesc')
-                          : modelPanel === 'anthropic'
-                            ? t('settings2.anthropicModelMappingDesc')
-                            : modelPanel === 'codex'
-                              ? t('settings2.codexModelMappingDesc')
-                              : t('settings2.reasoningEffortModelsDesc')}
-                      </SheetDescription>
-                    </SheetHeader>
-                    <SheetBody className="space-y-4">
-                      {modelPanel === 'registry' ? (
-                        <div className="space-y-3">
-                          <div className="grid grid-cols-2 gap-3">
-                            <StatusTile label={t('settings.modelsEnabled')}>{enabledModelCount}</StatusTile>
-                            <StatusTile label={t('settings.modelsLastSynced')}>
-                              <span className="text-xs font-semibold">{modelsLastSyncedLabel}</span>
-                            </StatusTile>
+                    {modelPanelMeta ? (
+                      <SheetHeader>
+                        <div className="flex items-start gap-3">
+                          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20 [&_svg]:size-4">
+                            {modelPanelMeta.icon}
                           </div>
-                          <div className="flex max-h-[min(60dvh,520px)] flex-wrap content-start gap-2 overflow-auto rounded-xl border border-border bg-muted/20 p-3">
-                            {visibleModelItems.map((model) => (
-                              <div
-                                key={model.id}
-                                className="flex h-fit flex-wrap items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5"
-                              >
-                                <span className="font-mono text-xs font-semibold text-foreground">{model.id}</span>
-                                <Badge
-                                  variant={model.source === 'official_codex_docs' ? 'default' : 'secondary'}
-                                  className="text-[11px]"
-                                >
-                                  {model.source === 'official_codex_docs'
-                                    ? t('settings.modelSourceOfficial')
-                                    : model.source === 'reasoning_effort'
-                                      ? t('settings.modelSourceReasoning')
-                                      : model.source === 'daybreak'
-                                        ? 'Daybreak'
-                                        : t('settings.modelSourceBuiltin')}
-                                </Badge>
-                                {model.pro_only ? (
-                                  <Badge variant="outline" className="text-[11px]">{t('settings.modelProOnly')}</Badge>
-                                ) : null}
-                                {model.category === 'image' ? (
-                                  <Badge variant="outline" className="text-[11px]">{t('settings.modelImage')}</Badge>
-                                ) : null}
-                              </div>
-                            ))}
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <SheetTitle>{modelPanelMeta.title}</SheetTitle>
+                              <Badge variant="secondary" className="tabular-nums">{modelPanelMeta.count}</Badge>
+                            </div>
+                            <SheetDescription className="text-xs leading-relaxed">{modelPanelMeta.description}</SheetDescription>
                           </div>
                         </div>
+                      </SheetHeader>
+                    ) : null}
+                    <SheetBody className="space-y-4">
+                      {modelPanel === 'registry' ? (
+                        <ModelRegistryPanel
+                          items={visibleModelItems}
+                          lastSyncedLabel={modelsLastSyncedLabel}
+                          syncing={syncingModels}
+                          onSync={() => void handleSyncModels()}
+                        />
                       ) : null}
                       {modelPanel === 'anthropic' ? (
                         <ModelMappingEditor
@@ -4660,6 +4959,49 @@ export default function Settings() {
                         />
                       ) : null}
                     </SheetBody>
+                    {modelPanelField ? (
+                      <SheetFooter className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex min-w-0 items-start gap-2 text-xs">
+                          <span
+                            className={cn('mt-1 size-2 shrink-0 rounded-full', modelPanelDirty ? 'bg-amber-500' : 'bg-emerald-500')}
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0">
+                            <div className="font-medium text-foreground">
+                              {modelPanelDirty ? t('settings.modelPanelUnsaved') : t('settings.saveStatusSaved')}
+                            </div>
+                            {modelPanelOtherDirtyCount > 0 ? (
+                              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                                {t('settings.modelPanelOtherDirty', { n: modelPanelOtherDirtyCount })}
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 max-sm:w-full">
+                          {modelPanelDirty ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="max-sm:flex-1"
+                              onClick={() => discardSettingsField(modelPanelField)}
+                              disabled={savingSettings}
+                            >
+                              <RotateCcw className="size-3.5" />
+                              {t('settings.discardChanges')}
+                            </Button>
+                          ) : null}
+                          <Button
+                            size="sm"
+                            className="max-sm:flex-1"
+                            onClick={() => void handleSaveSettings()}
+                            disabled={dirtyCount === 0 || savingSettings || autoSaveStatus === 'saving'}
+                          >
+                            <Save className="size-3.5" />
+                            {saveButtonLabel}
+                          </Button>
+                        </div>
+                      </SheetFooter>
+                    ) : null}
                   </SheetContent>
                 </Sheet>
               </SettingsSection>
