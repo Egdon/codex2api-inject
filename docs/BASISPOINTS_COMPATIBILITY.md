@@ -62,6 +62,12 @@ BPS 完成的回合写入调用方响应缓存，后续 `previous_response_id` �
 - **探测**：后台按「探测间隔」（1–10080 分钟，默认 1 分钟）检查暂停的路由。先请求 BPS access 端点：模型级暂停要求返回的模型列表包含该模型；模型列表读取 `model_catalog.models[].id` 并排除 `model_catalog.restricted_models`，兼容旧版顶层 `models`。账号级暂停要求 `allowed=true`（实测被使用策略 403 的账号 access 仍返回 `allowed=true`，所以不能只看 access），并再发一次要求原样返回随机令牌的最小生成（带 Excel 服务端提示词，约 2.2 万输入 token，大部分命中缓存）。探测成功即恢复，失败保持暂停并等待下一次。
 - **管理**：系统设置可关闭自动暂停，调整探测间隔和限流冷却时间（`codex_basispoints_429_cooldown_seconds`，越界返回 400）。账号列表显示 BPS 暂停或冷却状态，管理员可立即恢复（`POST /api/admin/accounts/:id/bps-pause/clear`）。账号被删除、失去资格或不再启用 BPS 时，其暂停在下一次探测时清除。
 
+## 用量中的缓存写入
+
+BPS 的 usage 会带 `input_tokens_details.cache_write_tokens`（每个缓存窗口的第一轮约 2.25 万，之后每轮几十到几百）。这部分已经计在 `input_tokens` 里；原生 Codex 不报告缓存写入，下游网关读到这个字段后可能按缓存创建价格另计。
+
+「创建缓存按普通输入计费」（`codex_basispoints_cache_creation_as_input`，默认关闭）开启后，在桥接层把下发给客户端的所有缓存写入计数置 0，包括 `usage` 与 `response.usage` 两处，以及 `cache_write_tokens`、`cache_creation_tokens`、`cache_creation_input_tokens`、`cache_write_input_tokens`、`cache_creation.ephemeral_*` 等别名。`input_tokens`、`cached_tokens` 和 `total_tokens` 保持不变，所以这部分 token 按普通输入计费。HTTP 流式与非流式、compact、Chat、Messages 和下游 WS 都经过同一处处理，原本不存在的字段不会补出来。该设置只改用量字段，不影响上游缓存；网关自己的 usage 记录本来就按“输入减去缓存读取”计费，不受开关影响。关闭时原样透传上游计数。
+
 ## 验证边界
 
 单元和 handler 集成测试覆盖参数、历史、图片 detail、托管工具判定、reasoning 重试、回退、暂停与探测及账号释放。模拟 agent 协议通过不代表所有客户端的真实子代理流程已端到端验证。

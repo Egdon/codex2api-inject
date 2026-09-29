@@ -425,6 +425,9 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 		log.Printf("[excel-bps] account=%d prepare rejected: %v", account.ID(), err)
 		return nil, &excelBPSFailure{status: http.StatusBadRequest, code: "request_unsupported", detail: err.Error()}
 	}
+	// Client usage reports Basispoints cache creation as ordinary input when
+	// the operator enabled it; otherwise the upstream counters pass through.
+	bridge.CacheWritesAsInput = CurrentRuntimeSettings().CodexBasispointsCacheWriteAsInput
 	uploaded := make(map[string]bool)
 	upload := func(image basispoints.InlineImage) (string, error) {
 		key := fmt.Sprintf("%d\x00%s", account.ID(), image.Digest)

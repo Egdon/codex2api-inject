@@ -97,6 +97,10 @@ type RuntimeSettings struct {
 	// CodexBasispoints429CooldownSec is the Basispoints route cooldown after a
 	// rate limit without Retry-After, 1-600 seconds (default 5).
 	CodexBasispoints429CooldownSec int
+	// CodexBasispointsCacheWriteAsInput zeroes Basispoints cache-creation
+	// counters in client usage; input_tokens already counts them, so they bill
+	// as ordinary input (default false: the counters pass through unchanged).
+	CodexBasispointsCacheWriteAsInput bool
 	// CodexRequestCompression 对 HTTP /responses 请求体做 zstd 压缩（默认 true，
 	// 与真实 Codex CLI 一致）。与 CodexForceWebsocket 正交：WS 路径走
 	// permessage-deflate（拨号器已开启），本项只作用于 HTTP 路径，两者可同时生效。
@@ -380,6 +384,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.CodexBasispoints403PauseDisabled = settings.CodexBasispoints403PauseDisabled
 		next.CodexBasispoints403ProbeIntervalMin = settings.CodexBasispointsProbeMinutes
 		next.CodexBasispoints429CooldownSec = settings.CodexBasispoints429CooldownSeconds
+		next.CodexBasispointsCacheWriteAsInput = settings.CodexBasispointsCacheWriteAsInput
 		next.CodexRequestCompression = settings.CodexRequestCompression
 		next.CodexWSWeakNetworkMode = settings.CodexWSWeakNetworkMode
 		next.CodexWSHideErrors = settings.CodexWSHideUpstreamErrors

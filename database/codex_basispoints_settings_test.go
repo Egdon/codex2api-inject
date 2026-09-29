@@ -80,3 +80,31 @@ func TestNormalizeCodexBasispoints429CooldownSeconds(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexBasispointsCacheWriteAsInputRoundTrip(t *testing.T) {
+	db, err := New("sqlite", filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatalf("New(sqlite): %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	// Zero-value settings keep the upstream counters.
+	if err := db.UpdateSystemSettings(ctx, &SystemSettings{}); err != nil {
+		t.Fatalf("UpdateSystemSettings(zero): %v", err)
+	}
+	got, err := db.GetSystemSettings(ctx)
+	if err != nil || got == nil || got.CodexBasispointsCacheWriteAsInput {
+		t.Fatalf("zero-value settings = %+v, %v", got, err)
+	}
+	for _, asInput := range []bool{true, false} {
+		got.CodexBasispointsCacheWriteAsInput = asInput
+		if err := db.UpdateSystemSettings(ctx, got); err != nil {
+			t.Fatalf("UpdateSystemSettings(%t): %v", asInput, err)
+		}
+		again, err := db.GetSystemSettings(ctx)
+		if err != nil || again == nil || again.CodexBasispointsCacheWriteAsInput != asInput {
+			t.Fatalf("round trip %t = %+v, %v", asInput, again, err)
+		}
+		got = again
+	}
+}

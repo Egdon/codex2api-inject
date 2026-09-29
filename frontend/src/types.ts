@@ -2181,6 +2181,7 @@ export interface SystemSettings {
   codex_basispoints_403_auto_pause: boolean
   codex_basispoints_403_probe_interval_minutes: number
   codex_basispoints_429_cooldown_seconds: number
+  codex_basispoints_cache_creation_as_input: boolean
   codex_ws_weak_network_mode: boolean
   codex_ws_keepalive_enabled: boolean
   codex_ws_keepalive_interval_sec: number

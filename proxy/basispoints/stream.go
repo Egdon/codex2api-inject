@@ -229,6 +229,9 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 			}
 			b.presentResponse(response)
 		}
+		if b.CacheWritesAsInput {
+			reportCacheWritesAsInput(payload)
+		}
 		terminal = kind == "response.completed" || kind == "response.incomplete" || kind == "response.failed" || kind == "error"
 		return emit(kind, payload)
 	}

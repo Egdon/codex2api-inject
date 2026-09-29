@@ -504,6 +504,8 @@
     "codexBasispoints429Cooldown": "BPS 限流冷卻時間",
     "codexBasispoints429CooldownDesc": "BPS 回傳限流後，該帳號的 BPS 暫停多久再嘗試；期間請求走原 Codex。1–600 秒，預設 5 秒。上游明確給出 Retry-After 時以上游為準（最長 600 秒）。",
     "codexBasispoints429CooldownUnit": "秒",
+    "codexBasispointsCacheCreationAsInput": "建立快取按一般輸入計費",
+    "codexBasispointsCacheCreationAsInputDesc": "BPS 回傳的快取寫入（cache_write_tokens 等）在下發給用戶端的用量中歸零，這部分 token 仍計在 input_tokens 裡，按一般輸入計費；總輸入與快取讀取不變，與原 Codex 的用量格式一致。只修改用量欄位，不關閉上游快取。本站自身的用量記錄本來就按一般輸入計。預設關閉，關閉時原樣轉送上游計數。",
     "clientVersionSyncSuccess": "用戶端版本已同步",
     "clientVersionSyncPartial": "部分來源同步失敗，已保留原有版本",
     "autoResetCreditsTitle": "主動重置次數自動消耗",

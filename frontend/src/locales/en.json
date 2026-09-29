@@ -4416,6 +4416,8 @@
     "codexBasispoints429Cooldown": "BPS rate-limit cooldown",
     "codexBasispoints429CooldownDesc": "How long an account stops using BPS after a BPS rate limit; requests use native Codex meanwhile. 1-600 seconds, default 5. An upstream Retry-After takes precedence (up to 600 seconds).",
     "codexBasispoints429CooldownUnit": "s",
+    "codexBasispointsCacheCreationAsInput": "Bill cache creation as regular input",
+    "codexBasispointsCacheCreationAsInputDesc": "Zero the BPS cache-write counters (cache_write_tokens and aliases) in the usage sent to clients. Those tokens stay in input_tokens and bill as regular input; total input and cache reads are unchanged, matching native Codex usage. Only the usage fields change; upstream caching stays on. This gateway's own usage records already count them as input. Off by default, which forwards the upstream counters unchanged.",
     "codexRequestCompression": "Codex HTTP Request Body Compression",
     "codexRequestCompressionDesc": "Compresses Codex /responses request bodies sent over HTTP with zstd (Content-Encoding: zstd), matching the real Codex CLI, which compresses by default against the ChatGPT backend — sending plaintext is itself a detectable signal. Enabled by default. Independent of Force WebSocket above: WebSocket uses permessage-deflate, while this setting only affects the HTTP path (1009 size fallback, image generation, Agent Identity accounts), so there is no need to disable WebSocket to use it.",
     "codexWSWeakNetworkMode": "WS Weak-Network Mode",

@@ -43,6 +43,9 @@ type Bridge struct {
 	// clientTools is the client's own tool declaration, reported back on
 	// response objects instead of the Excel server's native tools.
 	clientTools any
+	// CacheWritesAsInput zeroes cache-creation counters in client usage;
+	// input_tokens already counts them, so they bill as ordinary input.
+	CacheWritesAsInput bool
 }
 
 func decode(raw []byte, target any) error {

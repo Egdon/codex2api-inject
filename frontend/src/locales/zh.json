@@ -4413,6 +4413,8 @@
     "codexBasispoints429Cooldown": "BPS 限流冷却时间",
     "codexBasispoints429CooldownDesc": "BPS 返回限流后，该账号的 BPS 暂停多久再尝试；期间请求走原 Codex。1–600 秒，默认 5 秒。上游明确给出 Retry-After 时以上游为准（最长 600 秒）。",
     "codexBasispoints429CooldownUnit": "秒",
+    "codexBasispointsCacheCreationAsInput": "创建缓存按普通输入计费",
+    "codexBasispointsCacheCreationAsInputDesc": "BPS 返回的缓存写入（cache_write_tokens 等）在下发给客户端的用量里清零，这部分 token 仍计在 input_tokens 里，按普通输入计费；总输入和缓存读取不变，与原 Codex 的用量格式一致。只改用量字段，不关闭上游缓存。本站自身的用量记录本来就按普通输入计。默认关闭，关闭时原样透传上游计数。",
     "codexRequestCompression": "Codex HTTP 请求体压缩",
     "codexRequestCompressionDesc": "对走 HTTP 路径的 Codex /responses 请求体做 zstd 压缩（Content-Encoding: zstd），与真实 Codex CLI 的默认行为一致——它对 ChatGPT 后端本来就压，不压反而是可被识别的特征。默认开启。与上面的强制 WebSocket 互不影响：WebSocket 走 permessage-deflate 压缩，本项只作用于 HTTP 路径（大请求 1009 降级、生图、Agent Identity 账号），无需为了压缩关闭 WebSocket。",
     "codexWSWeakNetworkMode": "WS 弱网模式",

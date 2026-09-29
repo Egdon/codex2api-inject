@@ -170,3 +170,62 @@ func TestBasispointsRateLimitCooldownPersistValidateAndReload(t *testing.T) {
 		t.Fatalf("reload/GET cooldown = %d", reloaded.CodexBasispoints429CooldownSec)
 	}
 }
+
+func TestBasispointsCacheCreationAsInputPersistAndReload(t *testing.T) {
+	h, db, _ := newImagesSettingsHandler(t)
+	t.Cleanup(func() { proxy.ApplyRuntimeSettings(proxy.DefaultRuntimeSettings()) })
+	if get := decodeResponseCacheSettingsResponse(t, invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil)); get.CodexBasispointsCacheWriteAsInput {
+		t.Fatal("cache creation is billed as input by default")
+	}
+	response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{"codex_basispoints_cache_creation_as_input": true})
+	if response.Code != 200 {
+		t.Fatalf("PUT: %d %s", response.Code, response.Body.String())
+	}
+	if got := decodeResponseCacheSettingsResponse(t, response); !got.CodexBasispointsCacheWriteAsInput || !proxy.CurrentRuntimeSettings().CodexBasispointsCacheWriteAsInput {
+		t.Fatalf("PUT/runtime mismatch: %t/%t", got.CodexBasispointsCacheWriteAsInput, proxy.CurrentRuntimeSettings().CodexBasispointsCacheWriteAsInput)
+	}
+	saved, err := db.GetSystemSettings(context.Background())
+	if err != nil || !saved.CodexBasispointsCacheWriteAsInput {
+		t.Fatalf("persisted mismatch: %+v %v", saved, err)
+	}
+	// An unrelated update from a stale instance keeps the persisted value.
+	proxy.UpdateRuntimeSettings(func(s proxy.RuntimeSettings) proxy.RuntimeSettings {
+		s.CodexBasispointsCacheWriteAsInput = false
+		return s
+	})
+	if response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{"site_name": "unrelated"}); response.Code != 200 {
+		t.Fatalf("unrelated PUT: %d", response.Code)
+	}
+	if saved, err := db.GetSystemSettings(context.Background()); err != nil || !saved.CodexBasispointsCacheWriteAsInput {
+		t.Fatalf("unrelated update overwrote the setting: %+v %v", saved, err)
+	}
+	proxy.ApplyRuntimeSettings(proxy.DefaultRuntimeSettings())
+	proxy.ApplyRuntimeSettingsFromSystem(saved)
+	if reloaded := decodeResponseCacheSettingsResponse(t, invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil)); !reloaded.CodexBasispointsCacheWriteAsInput {
+		t.Fatal("reload/GET lost the setting")
+	}
+	if response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{"codex_basispoints_cache_creation_as_input": false}); response.Code != 200 || proxy.CurrentRuntimeSettings().CodexBasispointsCacheWriteAsInput {
+		t.Fatalf("disable PUT: %d", response.Code)
+	}
+}
+
+func TestBasispointsCacheCreationAsInputFailedSavePreservesRuntime(t *testing.T) {
+	h, db, path := newImagesSettingsHandler(t)
+	t.Cleanup(func() { proxy.ApplyRuntimeSettings(proxy.DefaultRuntimeSettings()) })
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`CREATE TRIGGER reject_bps_settings BEFORE INSERT ON system_settings BEGIN SELECT RAISE(ABORT, 'forced write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	response := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{"codex_basispoints_cache_creation_as_input": true})
+	if response.Code != 500 {
+		t.Fatalf("PUT status=%d", response.Code)
+	}
+	saved, err := db.GetSystemSettings(context.Background())
+	if err != nil || (saved != nil && saved.CodexBasispointsCacheWriteAsInput) || proxy.CurrentRuntimeSettings().CodexBasispointsCacheWriteAsInput {
+		t.Fatal("failed save changed the cache-creation setting")
+	}
+}
