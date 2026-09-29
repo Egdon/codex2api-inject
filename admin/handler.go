@@ -10592,11 +10592,6 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	h.settingsUpdateMu.Lock()
 	defer h.settingsUpdateMu.Unlock()
-	bpsEnabled, bpsErr := h.db.GetOpenAIExcelBPSEnabled(c.Request.Context())
-	if bpsErr != nil {
-		writeError(c, http.StatusInternalServerError, "读取 Basispoints 总开关失败")
-		return
-	}
 	if req.ResponseCacheConfigGeneration != nil {
 		writeError(c, http.StatusBadRequest, "response_cache_config_generation 为只读字段")
 		return
@@ -10742,6 +10737,14 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if err := database.ValidateResponseCacheSettings(responseCacheSettings); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Keep the existing validation/read boundary: invalid explicit settings
+	// must fail with 400 before an unrelated master-setting database read.
+	bpsEnabled, bpsErr := h.db.GetOpenAIExcelBPSEnabled(c.Request.Context())
+	if bpsErr != nil {
+		writeError(c, http.StatusInternalServerError, "读取 Basispoints 总开关失败")
 		return
 	}
 
