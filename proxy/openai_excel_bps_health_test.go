@@ -329,6 +329,58 @@ func TestProbeExcelBPSUsesAccessAndExactNonce(t *testing.T) {
 	}
 }
 
+func TestParseExcelBPSAccessReadsCatalogAndLegacyShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw  string
+		allowed    bool
+		models     string
+		denial     string
+		wantErrors bool
+	}{
+		{name: "catalog", raw: `{"allowed":true,"model_catalog":{"models":[{"id":"gpt-5.6-sol"},{"id":"GPT-6-Astra"}],"restricted_models":[]}}`, allowed: true, models: "gpt-5.6-sol,gpt-6-astra"},
+		{name: "restricted catalog model", raw: `{"allowed":true,"model_catalog":{"models":[{"id":"gpt-5.6-sol"},{"id":"gpt-6-astra"}],"restricted_models":["gpt-6-astra"]}}`, allowed: true, models: "gpt-5.6-sol"},
+		{name: "legacy names", raw: `{"allowed":true,"models":["gpt-6-astra","gpt-6-astra"]}`, allowed: true, models: "gpt-6-astra"},
+		{name: "denied", raw: `{"allowed":false,"model_catalog":null,"denial_reason":"workspace disabled"}`, denial: "workspace disabled"},
+		{name: "not an object", raw: `[]`, wantErrors: true},
+		{name: "invalid", raw: `{`, wantErrors: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			access, err := parseExcelBPSAccess([]byte(tc.raw))
+			if tc.wantErrors {
+				if err == nil {
+					t.Fatalf("parse(%s) accepted", tc.raw)
+				}
+				return
+			}
+			if err != nil || access.Allowed != tc.allowed || strings.Join(access.Models, ",") != tc.models || access.DenialReason != tc.denial {
+				t.Fatalf("parse(%s) = %+v, %v", tc.raw, access, err)
+			}
+		})
+	}
+}
+
+func TestExcelBPSModelProbeUsesTheCatalogShape(t *testing.T) {
+	resetExcelBPSHealthForTest(t)
+	old := excelBPSDo
+	t.Cleanup(func() { excelBPSDo = old })
+	catalog := `{"allowed":true,"model_catalog":{"models":[{"id":"gpt-6-astra"}],"restricted_models":[]}}`
+	excelBPSDo = func(req *http.Request, _ *auth.Account, _ string) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(catalog))}, nil
+	}
+	account := excelBPSHealthTestAccount(311)
+	if err := excelBPSHealth.checkRecovered(context.Background(), account, "", &excelBPSPause{AccountID: 311, Model: "gpt-6-astra", Reason: excelBPSPauseModelAccess}); err != nil {
+		t.Fatalf("listed catalog model did not recover: %v", err)
+	}
+	catalog = `{"allowed":true,"model_catalog":{"models":[{"id":"gpt-6-astra"}],"restricted_models":["gpt-6-astra"]}}`
+	if err := excelBPSHealth.checkRecovered(context.Background(), account, "", &excelBPSPause{AccountID: 311, Model: "gpt-6-astra", Reason: excelBPSPauseModelAccess}); err == nil {
+		t.Fatal("a restricted catalog model counted as recovered")
+	}
+	catalog = `{"allowed":false,"model_catalog":null,"denial_reason":"workspace disabled"}`
+	if err := excelBPSHealth.checkRecovered(context.Background(), account, "", &excelBPSPause{AccountID: 311, Model: "gpt-6-astra", Reason: excelBPSPauseModelAccess}); err == nil || !strings.Contains(err.Error(), "workspace disabled") {
+		t.Fatalf("denied access error = %v", err)
+	}
+}
+
 func TestResponsesExcelBPSPausedRoutesGoStraightToNative(t *testing.T) {
 	for _, tc := range []struct {
 		name, body   string

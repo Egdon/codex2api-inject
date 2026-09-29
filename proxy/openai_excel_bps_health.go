@@ -76,8 +76,11 @@ type ExcelBPSPauseView struct {
 }
 
 type excelBPSAccess struct {
-	Allowed bool     `json:"allowed"`
-	Models  []string `json:"models"`
+	Allowed bool
+	// Models are the lowercased ids the account may use.
+	Models []string
+	// DenialReason is the upstream explanation when Allowed is false.
+	DenialReason string
 }
 
 type excelBPSHealthState struct {
@@ -514,6 +517,12 @@ func (s *excelBPSHealthState) checkRecovered(ctx context.Context, account *auth.
 		return err
 	}
 	if !access.Allowed {
+		if reason := strings.TrimSpace(access.DenialReason); reason != "" {
+			if runes := []rune(reason); len(runes) > 120 {
+				reason = string(runes[:120])
+			}
+			return fmt.Errorf("Basispoints access is not allowed: %s", reason)
+		}
 		return errors.New("Basispoints access is not allowed")
 	}
 	if pause.Model != "" {
@@ -558,10 +567,45 @@ func probeExcelBPSAccess(ctx context.Context, account *auth.Account, proxyURL st
 	if resp.StatusCode != http.StatusOK {
 		return excelBPSAccess{}, fmt.Errorf("Basispoints access returned HTTP %d", resp.StatusCode)
 	}
-	var access excelBPSAccess
-	if err := json.Unmarshal(raw, &access); err != nil {
+	return parseExcelBPSAccess(raw)
+}
+
+// parseExcelBPSAccess reads the access response. Models were once a top-level
+// list of names; the endpoint now returns model_catalog.models objects with
+// an id and lists withheld ones in model_catalog.restricted_models. Both
+// shapes are read, and a restricted model is not reported as available.
+func parseExcelBPSAccess(raw []byte) (excelBPSAccess, error) {
+	if !gjson.ValidBytes(raw) {
 		return excelBPSAccess{}, errors.New("Basispoints access response is invalid")
 	}
+	root := gjson.ParseBytes(raw)
+	if !root.IsObject() {
+		return excelBPSAccess{}, errors.New("Basispoints access response is invalid")
+	}
+	modelID := func(value gjson.Result) string {
+		if value.IsObject() {
+			value = value.Get("id")
+		}
+		return strings.ToLower(strings.TrimSpace(value.String()))
+	}
+	restricted := map[string]bool{}
+	root.Get("model_catalog.restricted_models").ForEach(func(_, value gjson.Result) bool {
+		if id := modelID(value); id != "" {
+			restricted[id] = true
+		}
+		return true
+	})
+	access := excelBPSAccess{Allowed: root.Get("allowed").Bool(), DenialReason: root.Get("denial_reason").String()}
+	seen := map[string]bool{}
+	collect := func(_, value gjson.Result) bool {
+		if id := modelID(value); id != "" && !seen[id] && !restricted[id] {
+			seen[id] = true
+			access.Models = append(access.Models, id)
+		}
+		return true
+	}
+	root.Get("models").ForEach(collect)
+	root.Get("model_catalog.models").ForEach(collect)
 	return access, nil
 }
 
