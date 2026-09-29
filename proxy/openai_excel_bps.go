@@ -521,6 +521,9 @@ type excelBPSResult struct {
 	// Synthesized marks a completion rebuilt after the upstream closed early;
 	// it has no usage, so its token counts are unknown rather than zero.
 	Synthesized bool
+	// Completed is the translated response.completed event data, kept so the
+	// caller can index the turn for later previous_response_id expansion.
+	Completed []byte
 }
 
 func (r *excelBPSResult) usageFrom(payload []byte) {
@@ -603,6 +606,9 @@ func forwardExcelBPS(ctx context.Context, c *gin.Context, account *auth.Account,
 				}
 			}
 			result.usageFrom(data)
+			if result.Terminal == "response.completed" {
+				result.Completed = append([]byte(nil), data...)
+			}
 			if !stream {
 				completed = append(completed[:0], data...)
 				return false
@@ -768,7 +774,7 @@ func markExcelBPSNativeFallback(c *gin.Context, account *auth.Account, reason st
 
 // It deliberately does not report provider failures to the account scheduler:
 // BPS is an opt-in alternate provider surface, not a Codex health probe.
-func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream, persistReplay bool, endpoint, logModel, effectiveModel, reasoningEffort string, affinityKey string, affinityGuard auth.SessionAffinityGuard, start time.Time) bool {
+func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []byte, scope, threadKey, proxyURL string, compact, stream, persistReplay bool, endpoint, logModel, effectiveModel, reasoningEffort string, affinityKey string, affinityGuard auth.SessionAffinityGuard, start time.Time, onCompleted func(completed []byte)) bool {
 	if c.GetString(excelBPSNativeFallbackKey) != "" {
 		return false
 	}
@@ -825,6 +831,9 @@ func (h *Handler) handleExcelBPS(c *gin.Context, account *auth.Account, raw []by
 		h.logUsageForRequest(c, logInput)
 	}
 	if err == nil && result.Terminal == "response.completed" {
+		if onCompleted != nil && len(result.Completed) > 0 {
+			onCompleted(result.Completed)
+		}
 		if h != nil && h.store != nil {
 			h.store.ReleaseForSessionWithGuard(account, affinityKey, affinityGuard)
 		}
