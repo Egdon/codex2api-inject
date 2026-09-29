@@ -45,7 +45,8 @@ BPS 完成的回合写入调用方响应缓存，后续 `previous_response_id` �
 | BPS 上游 HTTP 5xx | `upstream_5xx` |
 | 精确 HTTP 403 + `basispoints_model_access_changed` | `model_access` |
 | 去掉 reasoning 重试后仍为 HTTP 400 `invalid_encrypted_content` | `encrypted_context` |
-| BPS 上游 HTTP 429 | `rate_limited` |
+| BPS 上游 HTTP 429，或 HTTP 200 后、任何输出前的 `rate_limit_exceeded` 事件 | `rate_limited` |
+| HTTP 200 后、任何输出前的 `server_is_overloaded` 事件 | `upstream_5xx` |
 | BPS 上游 HTTP 401（由原生链路负责刷新令牌） | `auth` |
 | 传输错误或空响应 | `transport_error` |
 | 账号或模型的 BPS 路由处于暂停或 429 冷却中 | 不尝试 BPS，直接原生 |
@@ -56,9 +57,9 @@ BPS 完成的回合写入调用方响应缓存，后续 `previous_response_id` �
 
 ## 403 暂停、429 冷却与自动探测
 
-- **429**：只冷却该账号的 BPS 路由，时长取 `Retry-After`（1 秒至 10 分钟，缺省 60 秒），不影响原生 Codex 调度。
+- **429**：只冷却该账号的 BPS 路由，时长取 `Retry-After`（1 秒至 10 分钟，缺省 60 秒），不影响原生 Codex 调度。BPS 的 token 速率限制通常以 HTTP 200 加 `error`/`response.failed` 事件返回；网关在输出前最多检查 3 秒的生命周期事件，识别到后按 429 处理，已读取的事件原样交给桥接层。
 - **403**：`basispoints_model_access_changed` 暂停该账号的该模型，其他 403 暂停该账号全部 BPS 路由。暂停是运行时状态，不修改账号配置或 Codex 调度状态。账号级暂停保存在共享运行时缓存中，重启后保留；模型级暂停只在内存中。
-- **探测**：后台按「探测间隔」（1–10080 分钟，默认 1 分钟）检查暂停的路由。先请求 BPS access 端点：模型级暂停要求返回的模型列表包含该模型；账号级暂停要求 `allowed=true`，并再发一次要求原样返回随机令牌的最小生成（带 Excel 服务端提示词，约 2.2 万输入 token，大部分命中缓存）。探测成功即恢复，失败保持暂停并等待下一次。
+- **探测**：后台按「探测间隔」（1–10080 分钟，默认 1 分钟）检查暂停的路由。先请求 BPS access 端点：模型级暂停要求返回的模型列表包含该模型；模型列表读取 `model_catalog.models[].id` 并排除 `model_catalog.restricted_models`，兼容旧版顶层 `models`。账号级暂停要求 `allowed=true`（实测被使用策略 403 的账号 access 仍返回 `allowed=true`，所以不能只看 access），并再发一次要求原样返回随机令牌的最小生成（带 Excel 服务端提示词，约 2.2 万输入 token，大部分命中缓存）。探测成功即恢复，失败保持暂停并等待下一次。
 - **管理**：系统设置可关闭自动暂停或调整探测间隔。账号列表显示 BPS 暂停或冷却状态，管理员可立即恢复（`POST /api/admin/accounts/:id/bps-pause/clear`）。账号被删除、失去资格或不再启用 BPS 时，其暂停在下一次探测时清除。
 
 ## 验证边界

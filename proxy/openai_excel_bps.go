@@ -479,7 +479,13 @@ func prepareExcelBPSUpstream(ctx context.Context, account *auth.Account, raw []b
 			return nil, &excelBPSFailure{status: http.StatusBadGateway, code: "empty_response"}
 		}
 		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
-			return &excelBPSUpstream{response: response, bridge: bridge, model: gjson.GetBytes(preparedInput, "model").String()}, nil
+			model := gjson.GetBytes(preparedInput, "model").String()
+			if rejected := inspectExcelBPSStart(ctx, response, excelBPSPreOutputWindow); rejected != nil {
+				log.Printf("[excel-bps] account=%d upstream rejected before output: status=%d code=%q", account.ID(), rejected.status, rejected.code)
+				excelBPSHealth.observeFailure(ctx, account, model, rejected.status, rejected.code, response.Header, proxyURL)
+				return nil, rejected
+			}
+			return &excelBPSUpstream{response: response, bridge: bridge, model: model}, nil
 		}
 		// The body stays out of the client response; operators still need the
 		// provider reason to tell unsupported input from account problems.
