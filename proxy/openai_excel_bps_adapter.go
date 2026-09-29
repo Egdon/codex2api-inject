@@ -92,6 +92,11 @@ func (h *Handler) openExcelBPSStream(ctx context.Context, c *gin.Context, accoun
 	if reason := excelBPSNativeRequestReason(body); reason != "" {
 		return fallback(reason)
 	}
+	// Chat translation keeps tool_choice and search_context_size on web_search
+	// tools, so the translated body still tells a required live search apart.
+	if reason := excelBPSLiveWebSearchReason(body); reason != "" {
+		return fallback(reason)
+	}
 	effectiveModel := in.EffectiveModel
 	if h != nil {
 		if mappedBody, mappedModel, ok := h.applyAccountModelMappingToBodyForModels(body, account, in.LogModel, in.EffectiveModel); ok {

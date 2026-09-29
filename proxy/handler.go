@@ -4207,7 +4207,9 @@ func (h *Handler) Responses(c *gin.Context) {
 			cacheCompleted := func(completed []byte) {
 				cacheCompletedResponseWithOutputItems(respCacheOwner, []byte(expandedInputRaw), completed, nil)
 			}
-			if h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, false, isStream, excelBPSConversationScoped(c.Request.Header, sessionIdentity), "/v1/responses", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start, cacheCompleted) {
+			if reason := excelBPSLiveWebSearchReason(rawBody); reason != "" && c.GetString(excelBPSNativeFallbackKey) == "" {
+				markExcelBPSNativeFallback(c, account, reason)
+			} else if h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, false, isStream, excelBPSConversationScoped(c.Request.Header, sessionIdentity), "/v1/responses", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start, cacheCompleted) {
 				return
 			}
 		}

@@ -733,6 +733,12 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		// caller-owned response cache before the adapter sees the body.
 		excelBPSRoute := excelBPSFallback == "" && excelBPSRouteAvailable(account, effectiveModel)
 		if excelBPSRoute {
+			if reason := excelBPSLiveWebSearchReason(rawBody); reason != "" {
+				excelBPSFallback, excelBPSRoute = reason, false
+				log.Printf("[excel-bps] account=%d native fallback reason=%s before_output=true endpoint=/v1/responses", account.ID(), reason)
+			}
+		}
+		if excelBPSRoute {
 			useWebsocket = false
 		}
 		// WebSocket 上游下剥离自动注入的图片工具，防止模型自主生图卡死。
