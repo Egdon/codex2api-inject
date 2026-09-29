@@ -407,7 +407,7 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 				entry["parameters"] = item["input_schema"]
 			}
 		}
-		definition := fingerprint(item)
+		definition := toolDefinitionFingerprint(item)
 		if previous, exists := b.tools[key]; exists {
 			if previous.Definition != definition || previous.Namespace != namespace || previous.Name != name {
 				return nil, fmt.Errorf("conflicting duplicate Basispoints client tool %q", key)
@@ -559,7 +559,7 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 			if native := b.replay.getForCall(b.scope, id, item); native != nil {
 				item = native
 			} else {
-				native, err := rebuildNativeHistoryCall(item)
+				native, err := b.rebuildHistoryCall(item)
 				if err != nil {
 					return nil, err
 				}
@@ -752,7 +752,7 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 	// The model bypassed run_officejs, so the bare native name is not a BPS tool.
 	// Cache a transport-wrapped replay so the next turn presents a BPS-known
 	// run_officejs item, matching how absent history is rebuilt.
-	wrapped, err := rebuildNativeHistoryCall(result)
+	wrapped, err := b.rebuildHistoryCall(result)
 	if err != nil {
 		return nil, err
 	}

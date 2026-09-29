@@ -357,6 +357,19 @@ export interface SubscriptionRefreshResponse {
   subscription_expires_at?: ISODateString
 }
 
+/** Excel Basispoints route health of one account (automatic 403 pause / 429 cooldown). */
+export interface ExcelBpsPauseView {
+  /** "account" pauses every model; "models" pauses only `models`. */
+  scope?: 'account' | 'models'
+  reason?: 'forbidden' | 'model_access' | string
+  models?: string[]
+  paused_at?: string
+  last_probe_at?: string
+  next_probe_at?: string
+  failures?: number
+  rate_limited_until?: string
+}
+
 export interface AccountRow {
   codex_last_refresh_at?: string
   codex_refresh_error?: string
@@ -388,6 +401,14 @@ export interface AccountRow {
   claude_base_url?: string
   antigravity_auth_kind?: 'oauth' | 'api_key' | string
   agent_identity?: boolean
+  /** Account-level Excel Basispoints opt-in (forces BPS on). */
+  openai_excel_bps?: boolean
+  /** Excludes the account from the global Basispoints default. */
+  openai_excel_bps_opt_out?: boolean
+  /** Whether requests from this account currently use Basispoints. */
+  openai_excel_bps_effective?: boolean
+  /** Basispoints route health; absent when the route is healthy. */
+  bps_pause?: ExcelBpsPauseView
   grok_auth_kind?: string
   /** Safe, allowlisted User-Agent observed/generated for Claude upstream calls. */
   claude_user_agent?: string
@@ -1562,6 +1583,8 @@ export interface UpdateAccountSchedulerRequest {
   claude_client_version?: string | null
   timezone?: string | null
   account_href?: string | null
+  openai_excel_bps?: boolean
+  openai_excel_bps_opt_out?: boolean
 }
 
 export interface BatchUpdateAccountsRequest extends UpdateAccountSchedulerRequest {
@@ -2153,6 +2176,12 @@ export interface SystemSettings {
   codex_telemetry_enabled: boolean
   codex_telemetry_timing_debug: boolean
   codex_request_compression: boolean
+  codex_basispoints_enabled: boolean
+  codex_basispoints_models: string
+  codex_basispoints_403_auto_pause: boolean
+  codex_basispoints_403_probe_interval_minutes: number
+  codex_basispoints_429_cooldown_seconds: number
+  codex_basispoints_cache_creation_as_input: boolean
   codex_ws_weak_network_mode: boolean
   codex_ws_keepalive_enabled: boolean
   codex_ws_keepalive_interval_sec: number

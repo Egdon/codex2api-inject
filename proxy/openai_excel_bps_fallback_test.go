@@ -30,12 +30,15 @@ func TestHandleExcelBPSNativeFallback(t *testing.T) {
 		{name: "upstream 504", status: 504, wantFallback: true, wantCalls: 1},
 		{name: "model unavailable", status: 403, body: `{"error":{"code":"basispoints_model_access_changed"}}`, wantFallback: true, wantCalls: 1},
 		{name: "transport error", transport: true, wantFallback: true, wantCalls: 1},
-		{name: "invalid token stays visible", status: 401, wantCalls: 1},
+		// Native Codex owns token refresh and auth state for the same credential.
+		{name: "invalid token uses native auth handling", status: 401, wantFallback: true, wantCalls: 1},
+		{name: "rate limited uses native capacity", status: 429, wantFallback: true, wantCalls: 1},
 		{name: "generic forbidden stays visible", status: 403, wantCalls: 1},
 		{name: "ordinary BPS success", status: 200, body: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-ok\",\"status\":\"completed\",\"output\":[]}}\n\n", wantCalls: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			resetExcelBPSHealthForTest(t)
 			old := excelBPSDo
 			t.Cleanup(func() { excelBPSDo = old })
 			calls := 0
@@ -54,7 +57,7 @@ func TestHandleExcelBPSNativeFallback(t *testing.T) {
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(raw))
 			var h *Handler
-			h.handleExcelBPS(c, testExcelBPSAccount(), []byte(raw), t.Name(), t.Name(), "", false, false, false, "/v1/responses", "gpt-5.5", "gpt-5.5", "medium", "", auth.SessionAffinityGuard{}, time.Now())
+			h.handleExcelBPS(c, testExcelBPSAccount(), []byte(raw), t.Name(), t.Name(), "", false, false, false, "/v1/responses", "gpt-5.5", "gpt-5.5", "medium", "", auth.SessionAffinityGuard{}, time.Now(), nil)
 			reason := c.GetString("codex2api.excel_bps_native_fallback")
 			if (reason != "") != tc.wantFallback {
 				t.Fatalf("fallback=%q want=%t; status=%d body=%s", reason, tc.wantFallback, rec.Code, rec.Body.String())
@@ -79,7 +82,7 @@ func TestHandleExcelBPSDoesNotFallbackAfterOutput(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	var h *Handler
-	h.handleExcelBPS(c, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"probe","stream":true}`), t.Name(), t.Name(), "", false, true, false, "/v1/responses", "gpt-5.5", "gpt-5.5", "medium", "", auth.SessionAffinityGuard{}, time.Now())
+	h.handleExcelBPS(c, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"probe","stream":true}`), t.Name(), t.Name(), "", false, true, false, "/v1/responses", "gpt-5.5", "gpt-5.5", "medium", "", auth.SessionAffinityGuard{}, time.Now(), nil)
 	if c.GetString("codex2api.excel_bps_native_fallback") != "" {
 		t.Fatal("must not replay after output")
 	}
@@ -97,7 +100,7 @@ func TestHandleExcelBPSCanceledRequestDoesNotFallback(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
 	var h *Handler
-	h.handleExcelBPS(c, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"probe"}`), t.Name(), t.Name(), "", false, true, false, "/v1/responses", "gpt-5.5", "gpt-5.5", "medium", "", auth.SessionAffinityGuard{}, time.Now())
+	h.handleExcelBPS(c, testExcelBPSAccount(), []byte(`{"model":"gpt-5.5","input":"probe"}`), t.Name(), t.Name(), "", false, true, false, "/v1/responses", "gpt-5.5", "gpt-5.5", "medium", "", auth.SessionAffinityGuard{}, time.Now(), nil)
 	if c.GetString("codex2api.excel_bps_native_fallback") != "" {
 		t.Fatal("canceled request retried")
 	}
