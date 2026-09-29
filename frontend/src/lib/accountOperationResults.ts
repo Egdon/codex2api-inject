@@ -1,4 +1,5 @@
 export interface AccountOperationEvent {
+  upstream_source?: import('./upstreamSource').UpstreamSource;
   type: "start" | "progress" | "complete";
   action: string;
   account_id?: number;
@@ -11,6 +12,7 @@ export interface AccountOperationEvent {
 }
 
 export interface AccountOperationResult {
+  upstream_source?: import('./upstreamSource').UpstreamSource;
   accountId: number;
   accountName?: string;
   accountEmail?: string;
@@ -82,6 +84,7 @@ export function collectAccountOperationResult(
     accountId: event.account_id,
     ...(accountName ? { accountName } : {}),
     ...(accountEmail ? { accountEmail } : {}),
+    ...(event.upstream_source !== undefined ? { upstream_source: event.upstream_source } : {}),
     status,
     httpStatus:
       event.http_status && event.http_status > 0

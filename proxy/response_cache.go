@@ -372,6 +372,12 @@ func admitResponseCache(storeKey string, items []json.RawMessage) ([]json.RawMes
 func admitResponseCacheWithTicket(storeKey string, items []json.RawMessage) ([]json.RawMessage, bool, bool, uint64) {
 	respCache.mu.Lock()
 	defer respCache.mu.Unlock()
+	return admitResponseCacheWithTicketLocked(storeKey, items)
+}
+
+// admitResponseCacheWithTicketLocked requires respCache.mu's write lock. Route
+// claims use it to keep the existing-binding check and bounded insertion atomic.
+func admitResponseCacheWithTicketLocked(storeKey string, items []json.RawMessage) ([]json.RawMessage, bool, bool, uint64) {
 	respCache.entrySerial++
 	serial := respCache.entrySerial
 
@@ -1240,5 +1246,164 @@ func isCodexToolCallContextType(typ string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// responseRouteBinding is only provenance, never a promise that missing history
+// can be reconstructed. Markers share the existing owner scope, L1 size limits,
+// eviction and TTL. They are deliberately process-local and carry no content.
+type responseRouteBinding struct {
+	Source    string `json:"source"`
+	AccountID int64  `json:"account_id,omitempty"`
+}
+
+type responseRouteContextKey struct{}
+type responseRouteContext struct {
+	owner   string
+	session string
+}
+
+func responseRouteKey(owner, key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return responseCacheStoreKey("route:"+owner, fmt.Sprintf("%x", sum))
+}
+
+func cachedResponseRoute(owner, key string) responseRouteBinding {
+	if key == "" {
+		return responseRouteBinding{}
+	}
+	storeKey := responseRouteKey(owner, key)
+	respCache.mu.RLock()
+	defer respCache.mu.RUnlock()
+	return cachedResponseRouteLocked(storeKey)
+}
+
+// cachedResponseRouteLocked requires at least respCache.mu's read lock.
+func cachedResponseRouteLocked(storeKey string) responseRouteBinding {
+	entry := respCache.store[storeKey]
+	var result responseRouteBinding
+	if entry != nil && time.Now().Before(entry.expiresAt) && len(entry.items) == 1 {
+		_ = json.Unmarshal(entry.items[0], &result)
+	}
+	return result
+}
+
+func responseRoutesCompatible(known, next responseRouteBinding) bool {
+	return known.Source == next.Source && (known.Source != UpstreamSourceBPS || known.AccountID == next.AccountID)
+}
+
+// claimResponseRoute atomically checks and inserts provenance across independent
+// request gates. A live binding is never overwritten, including by late response
+// observation. Expired/evicted entries remain unknown under the existing limits.
+func claimResponseRoute(owner, key string, binding responseRouteBinding) bool {
+	if key == "" || binding.Source == "" {
+		return false
+	}
+	storeKey := responseRouteKey(owner, key)
+	raw, _ := json.Marshal(binding)
+	respCache.mu.Lock()
+	defer respCache.mu.Unlock()
+	if known := cachedResponseRouteLocked(storeKey); known.Source != "" {
+		return responseRoutesCompatible(known, binding)
+	}
+	// No separate unbounded registry or backend history write. BPS requires a
+	// retained claim. Unknown native traffic keeps its legacy behavior when
+	// caching is disabled/unavailable; a BPS request cannot claim that absent
+	// storage either. Known live bindings were checked above, never bypassed.
+	_, admitted, _, _ := admitResponseCacheWithTicketLocked(storeKey, []json.RawMessage{raw})
+	return admitted || binding.Source == "native"
+}
+
+func rememberResponseRoute(owner, key string, binding responseRouteBinding) {
+	_ = claimResponseRoute(owner, key, binding)
+}
+
+func responseRouteItemKeys(input gjson.Result) []string {
+	var keys []string
+	if !input.IsArray() {
+		return keys
+	}
+	input.ForEach(func(_, item gjson.Result) bool {
+		if id := item.Get("call_id").String(); id != "" {
+			keys = append(keys, "call:"+id)
+		}
+		if kind := item.Get("type").String(); kind == "compaction" || kind == "reasoning" {
+			if encrypted := item.Get("encrypted_content").String(); encrypted != "" {
+				keys = append(keys, "encrypted:"+encrypted)
+			}
+		}
+		return len(keys) < 64
+	})
+	return keys
+}
+
+func responseRouteHistory(owner, session string, body []byte) (responseRouteBinding, bool) {
+	keys := responseRouteItemKeys(gjson.GetBytes(body, "input"))
+	if previous := gjson.GetBytes(body, "previous_response_id").String(); previous != "" {
+		keys = append(keys, "response:"+previous)
+	}
+	if session != "" {
+		keys = append(keys, "session:"+session)
+	}
+	var binding responseRouteBinding
+	for _, key := range keys {
+		known := cachedResponseRoute(owner, key)
+		if known.Source == "" {
+			continue
+		}
+		if binding.Source != "" && (binding.Source != known.Source || (binding.Source == UpstreamSourceBPS && binding.AccountID != known.AccountID)) {
+			return responseRouteBinding{}, false
+		}
+		binding = known
+	}
+	return binding, true
+}
+
+func withResponseRouteContext(ctx context.Context, owner, session string) context.Context {
+	return context.WithValue(ctx, responseRouteContextKey{}, responseRouteContext{owner: owner, session: session})
+}
+
+func responseRouteFromTrace(ctx context.Context) (responseRouteContext, responseRouteBinding, bool) {
+	if ctx == nil {
+		return responseRouteContext{}, responseRouteBinding{}, false
+	}
+	route, ok := ctx.Value(responseRouteContextKey{}).(responseRouteContext)
+	trace := snapshotUpstreamTrace(ctx)
+	if !ok || trace.UpstreamSource == "" {
+		return route, responseRouteBinding{}, false
+	}
+	binding := responseRouteBinding{Source: "native"}
+	if trace.UpstreamSource == UpstreamSourceBPS {
+		binding = responseRouteBinding{Source: UpstreamSourceBPS, AccountID: trace.accountID}
+	}
+	return route, binding, true
+}
+
+func rememberDispatchedResponseRoute(ctx context.Context) {
+	if route, binding, ok := responseRouteFromTrace(ctx); ok && route.session != "" {
+		rememberResponseRoute(route.owner, "session:"+route.session, binding)
+	}
+}
+
+func rememberResponseRoutePayload(ctx context.Context, payload []byte) {
+	route, binding, ok := responseRouteFromTrace(ctx)
+	if !ok {
+		return
+	}
+	root := gjson.ParseBytes(payload)
+	response := root.Get("response")
+	if !response.IsObject() {
+		response = root
+	}
+	if id := response.Get("id").String(); id != "" {
+		rememberResponseRoute(route.owner, "response:"+id, binding)
+	}
+	for _, key := range responseRouteItemKeys(response.Get("output")) {
+		rememberResponseRoute(route.owner, key, binding)
+	}
+	if item := root.Get("item"); item.IsObject() {
+		for _, key := range responseRouteItemKeys(gjson.Parse("[" + item.Raw + "]")) {
+			rememberResponseRoute(route.owner, key, binding)
+		}
 	}
 }

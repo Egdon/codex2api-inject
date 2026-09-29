@@ -59,7 +59,22 @@ func (h *Harvester) publishAttempt(ctx context.Context, task scheduledCell, tick
 	if ctx.Err() != nil || h.generations[task.key] != task.generation || task.generation.version != task.version {
 		return false
 	}
-	h.persistTicket(ctx, ticket)
+	if savedBPSFlag(h.store.FindByID(task.accountID)) {
+		return false
+	}
+	if h.db != nil {
+		if !task.bpsCaptured {
+			return false
+		}
+		applied, err := h.db.UpsertHarvestedTurnStateTicket(ctx, ticketRow(ticket), task.expectedGroups.BPSRevision)
+		if err != nil || !applied {
+			return false
+		}
+	}
+	if savedBPSFlag(h.store.FindByID(task.accountID)) {
+		return false
+	}
+	h.cache.Put(ticket)
 	return true
 }
 
@@ -126,7 +141,7 @@ func (h *Harvester) attempt(ctx context.Context, cfg Config, acc *auth.Account, 
 	if ctx.Err() != nil {
 		return cancelledResult()
 	}
-	if !h.generationCurrent(task.key, task.generation, task.version) {
+	if !h.generationCurrent(task.key, task.generation, task.version) || !h.harvestBPSCurrent(ctx, acc, task) {
 		return staleResult()
 	}
 	// Snapshot the provider, region and Litport session for the entire pair.
@@ -147,7 +162,7 @@ func (h *Harvester) attempt(ctx context.Context, cfg Config, acc *auth.Account, 
 	if ctx.Err() != nil {
 		return cancelledResult()
 	}
-	if !h.generationCurrent(task.key, task.generation, task.version) {
+	if !h.generationCurrent(task.key, task.generation, task.version) || !h.harvestBPSCurrent(ctx, acc, task) {
 		return staleResult()
 	}
 	detail := ""
@@ -224,10 +239,35 @@ func (h *Harvester) harvestCell(ctx context.Context, cfg Config, acc *auth.Accou
 	g, version := h.retainGeneration(acc.ID(), model)
 	task := scheduledCell{key: ticketKey(acc.ID(), model), accountID: acc.ID(), model: model, generation: g, version: version, max: max(cfg.MaxAttempts, 1)}
 	task.regionPlan = newBatchRegionPlan(cfg)
+	h.preparePolicyBatch(ctx, &task, cfg)
 	defer h.releaseGeneration(task.key, g)
 	for task.attempt = 1; task.attempt <= task.max; task.attempt++ {
 		if result := h.attempt(ctx, cfg, acc, task, func() {}); result.phase != "retrying" {
 			return
 		}
 	}
+}
+
+// Read the persisted opt-in snapshot, not the route eligibility/master switch.
+func savedBPSFlag(acc *auth.Account) bool {
+	if acc == nil {
+		return false
+	}
+	acc.Mu().RLock()
+	defer acc.Mu().RUnlock()
+	return acc.ExcelBPSEnabled
+}
+
+func (h *Harvester) harvestBPSCurrent(ctx context.Context, acc *auth.Account, task scheduledCell) bool {
+	if acc == nil || savedBPSFlag(acc) {
+		return false
+	}
+	if h.db == nil {
+		return true
+	}
+	if !task.bpsCaptured || task.expectedGroups.BPSEnabled {
+		return false
+	}
+	current, err := h.db.HarvestBPSCurrent(ctx, task.accountID, task.expectedGroups.BPSRevision)
+	return err == nil && current
 }

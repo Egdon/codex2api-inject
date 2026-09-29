@@ -1,4 +1,30 @@
 {
+  "bps": {
+    "masterTitle": "Codex BPS 总开关",
+    "masterHint": "仅作用于 Responses、compact 及相关连接测试和 HTML 质量测试。关闭总开关不会修改账号已保存的 BPS 配置。",
+    "masterBehavior": "关闭后，新的未绑定请求使用原生 Codex；已在途请求不变。发生错误不会自动回退，已知不兼容的续接会明确失败。",
+    "accountTitle": "BPS 偏好配置",
+    "accountHint": "默认关闭。总开关开启时，符合条件的普通 OAuth 账号可为 Responses/compact 及相关测试使用 BPS 通道。这不代表每个请求的实际来源。",
+    "unsupported": "仅支持普通 Codex OAuth 账号。中转/API Key、代理身份和其他渠道账号不能开启；已有的不适用配置仍可关闭清除。",
+    "masterOffHint": "BPS 总开关已关闭。此偏好仍会保存，但新的未绑定请求使用原生 Codex。",
+    "preferenceBadge": "BPS",
+    "masterOffBadge": "BPS配置-总开关关闭",
+    "preferenceHint": "这是已保存的 BPS 偏好，不是实际请求路由。实际来源请查看用量记录或测试结果。",
+    "batchHint": "仅在明确选择时修改 BPS。将获取所有已选 ID（含其他页）的元数据核实资格；不支持或无法确认的账号会跳过并计数。关闭也可清除已有的不适用配置，其他选中字段独立更新。",
+    "unchanged": "保持不变",
+    "on": "开启",
+    "off": "关闭",
+    "batchDone": "保存成功 {{success}}，失败 {{fail}}。BPS 跳过：不支持 {{unsupported}}，无法确认 {{unknown}}。其他选中字段独立更新。"
+  },
+  "upstreamSource": {
+    "title": "实际上游来源",
+    "all": "全部上游来源",
+    "bps": "BPS",
+    "codex": "原生 Codex",
+    "other": "其他上游",
+    "unknown": "未知 / 未记录",
+    "hint": "仅使用后端为本次请求或测试记录的实际来源，不根据账号当前配置推断。旧记录未记录来源时显示未知。"
+  },
   "updates": {
     "buildMetadata": "上游基线：{{base}} · 修订：{{revision}}",
     "identityUnavailable": "无法核实当前运行构建身份，未开始安装。",

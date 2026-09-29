@@ -1,4 +1,30 @@
 {
+  "bps": {
+    "masterTitle": "Codex BPS 總開關",
+    "masterHint": "僅作用於 Responses、compact 及相關連線測試和 HTML 品質測試。關閉總開關不會修改帳號已儲存的 BPS 設定。",
+    "masterBehavior": "關閉後，新的未綁定請求使用原生 Codex；已在途請求不變。發生錯誤不會自動回退，已知不相容的續接會明確失敗。",
+    "accountTitle": "BPS 偏好設定",
+    "accountHint": "預設關閉。總開關開啟時，符合條件的一般 OAuth 帳號可為 Responses/compact 及相關測試使用 BPS 通道。這不代表每個請求的實際來源。",
+    "unsupported": "僅支援一般 Codex OAuth 帳號。中轉/API Key、代理身分和其他渠道帳號不能開啟；已有的不適用設定仍可關閉清除。",
+    "masterOffHint": "BPS 總開關已關閉。此偏好仍會儲存，但新的未綁定請求使用原生 Codex。",
+    "preferenceBadge": "BPS",
+    "masterOffBadge": "BPS設定-總開關關閉",
+    "preferenceHint": "這是已儲存的 BPS 偏好，不是實際請求路由。實際來源請查看用量記錄或測試結果。",
+    "batchHint": "僅在明確選擇時修改 BPS。將取得所有已選 ID（含其他頁）的中繼資料確認資格；不支援或無法確認的帳號會略過並計數。關閉也可清除已有的不適用設定，其他選中欄位獨立更新。",
+    "unchanged": "保持不變",
+    "on": "開啟",
+    "off": "關閉",
+    "batchDone": "儲存成功 {{success}}，失敗 {{fail}}。BPS 略過：不支援 {{unsupported}}，無法確認 {{unknown}}。其他選中欄位獨立更新。"
+  },
+  "upstreamSource": {
+    "title": "實際上游來源",
+    "all": "全部上游來源",
+    "bps": "BPS",
+    "codex": "原生 Codex",
+    "other": "其他上游",
+    "unknown": "未知 / 未記錄",
+    "hint": "僅使用後端為本次請求或測試記錄的實際來源，不根據帳號目前設定推斷。舊記錄未記錄來源時顯示未知。"
+  },
   "qualityTest": {
     "studioTab": "檢測工作台",
     "recordsTab": "檢測記錄",

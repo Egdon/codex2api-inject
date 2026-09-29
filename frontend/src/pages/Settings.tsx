@@ -2145,6 +2145,7 @@ export default function Settings() {
     const cacheNormalized = normalizeResponseCacheSettings(settings)
     const normalized = {
       ...cacheNormalized,
+      openai_excel_bps_enabled: cacheNormalized.openai_excel_bps_enabled ?? true,
       codex_images_main_model: cacheNormalized.codex_images_main_model ?? '',
       codex_telemetry_enabled: cacheNormalized.codex_telemetry_enabled ?? false,
       codex_telemetry_timing_debug: cacheNormalized.codex_telemetry_timing_debug ?? false,
@@ -2200,6 +2201,7 @@ export default function Settings() {
     auto_reset_credits_before_expiry_min: 60,
     auto_activate_5h_window_enabled: false,
     codex_force_websocket: false,
+    openai_excel_bps_enabled: true,
     codex_telemetry_enabled: false,
     codex_telemetry_timing_debug: false,
     codex_request_compression: true,
@@ -3638,6 +3640,13 @@ export default function Settings() {
               </SettingsSection>
 
               <SettingsSection id="settings-codex-transport" title={t('settings.nav.codexTransport')} description={t('settings.nav.codexTransportDesc')} icon={<Wifi className="size-4" />}>
+              <SettingsCard title={t('bps.masterTitle')} description={t('bps.masterHint')} icon={<Wifi className="size-4" />}>
+                <SettingField label={t('bps.masterTitle')} description={t('bps.masterBehavior')} layout="switch">
+                  <Switch checked={settingsForm.openai_excel_bps_enabled ?? true}
+                    aria-label={t('bps.masterTitle')}
+                    onCheckedChange={(checked) => autoSaveBooleanField('openai_excel_bps_enabled', checked)} />
+                </SettingField>
+              </SettingsCard>
               <SettingsCard title={t('settings.codexWebsocket')} description={t('settings.codexWebsocketDesc')} icon={<Wifi className="size-4" />}>
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">

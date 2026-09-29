@@ -151,6 +151,36 @@ func (db *DB) ListTurnStateTickets(ctx context.Context) ([]TurnStateTicket, erro
 }
 
 func (db *DB) UpsertTurnStateTicket(ctx context.Context, t TurnStateTicket) error {
+	return db.withSQLiteWriteLock(ctx, func() error { return db.upsertTurnStateTicket(ctx, db.conn, t) })
+}
+
+// UpsertHarvestedTurnStateTicket atomically fences workers against saved BPS
+// transitions. The account lock is shared with credential writers; policy rows
+// are always accessed after that lock. Only a committed true result may enter
+// the in-memory cache. Manual ticket operations retain their existing API.
+func (db *DB) UpsertHarvestedTurnStateTicket(ctx context.Context, t TurnStateTicket, expectedRevision int64) (applied bool, err error) {
+	err = db.withWriteTx(ctx, func(tx *sql.Tx) error {
+		applied = false
+		if err := db.lockPolicyAccount(ctx, tx, t.AccountID); err != nil {
+			return err
+		}
+		revision, enabled, err := harvestBPSState(ctx, tx, t.AccountID)
+		if err != nil {
+			return err
+		}
+		if enabled || revision != expectedRevision {
+			return nil
+		}
+		if err := db.upsertTurnStateTicket(ctx, tx, t); err != nil {
+			return err
+		}
+		applied = true
+		return nil
+	})
+	return applied && err == nil, err
+}
+
+func (db *DB) upsertTurnStateTicket(ctx context.Context, execer sqlExecer, t TurnStateTicket) error {
 	t.Model = strings.TrimSpace(t.Model)
 	if t.AccountID <= 0 || t.Model == "" {
 		return fmt.Errorf("invalid ticket key")
@@ -168,8 +198,7 @@ func (db *DB) UpsertTurnStateTicket(ctx context.Context, t TurnStateTicket) erro
 	if !t.LastHarvestAt.IsZero() {
 		harvest = db.timeArg(t.LastHarvestAt.UTC())
 	}
-	return db.withSQLiteWriteLock(ctx, func() error {
-		_, err := db.conn.ExecContext(ctx, `
+	_, err := execer.ExecContext(ctx, `
 				INSERT INTO codex_turn_state_tickets (
 					account_id, model, token, issued_unix, length, blocks, confirm_warning,
 					exhausted, attempts, last_error, last_harvest_at, cooldown_until, updated_at
@@ -187,9 +216,8 @@ func (db *DB) UpsertTurnStateTicket(ctx context.Context, t TurnStateTicket) erro
 					cooldown_until = EXCLUDED.cooldown_until,
 					updated_at = EXCLUDED.updated_at
 			`, t.AccountID, t.Model, t.Token, t.IssuedUnix, t.Length, t.Blocks, warning,
-			exhausted, t.Attempts, strings.TrimSpace(t.LastError), harvest, t.CooldownUntil, db.timeArg(now))
-		return err
-	})
+		exhausted, t.Attempts, strings.TrimSpace(t.LastError), harvest, t.CooldownUntil, db.timeArg(now))
+	return err
 }
 
 func (db *DB) DeleteTurnStateTicket(ctx context.Context, accountID int64, model string) error {

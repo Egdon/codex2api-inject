@@ -170,6 +170,9 @@ func networkOutcome(ctx context.Context, hdr http.Header, err error) (observe, f
 }
 
 func (h *Harvester) observedProbe(ctx context.Context, cfg Config, acc *auth.Account, task scheduledCell, inject string) (string, http.Header, error) {
+	if !h.harvestBPSCurrent(ctx, acc, task) {
+		return "", nil, context.Canceled
+	}
 	if inject == "" {
 		h.mu.Lock()
 		if h.scheduler != nil {

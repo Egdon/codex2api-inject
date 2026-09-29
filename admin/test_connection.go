@@ -26,11 +26,12 @@ var batchTestWhamTimeout = 5 * time.Second
 
 // testEvent SSE 测试事件
 type testEvent struct {
-	Type    string `json:"type"`              // test_start | content | diagnostics | test_complete | error
-	Text    string `json:"text,omitempty"`    // 内容文本
-	Model   string `json:"model,omitempty"`   // 测试模型
-	Success bool   `json:"success,omitempty"` // 是否成功
-	Error   string `json:"error,omitempty"`   // 错误信息
+	UpstreamSource string `json:"upstream_source,omitempty"`
+	Type           string `json:"type"`              // test_start | content | diagnostics | test_complete | error
+	Text           string `json:"text,omitempty"`    // 内容文本
+	Model          string `json:"model,omitempty"`   // 测试模型
+	Success        bool   `json:"success,omitempty"` // 是否成功
+	Error          string `json:"error,omitempty"`   // 错误信息
 	// diagnostics 事件按渠道携带各自形态的诊断对象:Claude 原生 Messages 测连用
 	// diagnostics,Codex/Responses 测连用 codex_diagnostics,两者不会同时出现。
 	Diagnostics      *claudeTestDiagnostics `json:"diagnostics,omitempty"`
@@ -181,6 +182,10 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 	c.Header("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
+	// Attach once for all providers, including BPS and failed transports.
+	proxy.AttachUpstreamTraceForAdmin(c, h.store)
+	routeCtx, useBPS := proxy.WithExcelBPSRouteSnapshot(c.Request.Context(), account, testModel)
+	c.Request = c.Request.WithContext(routeCtx)
 	// 发送 test_start
 	sendTestEvent(c, testEvent{Type: "test_start", Model: testModel})
 
@@ -201,7 +206,7 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 
 	// 发送请求
 	start := time.Now()
-	if account.IsExcelBPSAvailableForModel(testModel) {
+	if useBPS {
 		// Keep account probes on the same Responses-shaped adapter as normal
 		// traffic. This also covers quality tests, whose HTML prompt is already
 		// represented as a standard Responses input item.
@@ -216,7 +221,6 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 	var resp *http.Response
 	var reqErr error
 	if !isClaudeAccount && !isAntigravityAccount && !isOpenAIResponsesAccount {
-		proxy.AttachUpstreamTraceForAdmin(c, h.store)
 		c.Request = c.Request.WithContext(proxy.WithCodexClientModel(c.Request.Context(), testModel))
 	}
 	if isClaudeAccount {
@@ -807,6 +811,9 @@ func applyUsageLimitedTestState(store *auth.Store, account *auth.Account, state 
 
 // sendTestEvent 发送 SSE 事件
 func sendTestEvent(c *gin.Context, event testEvent) {
+	if event.UpstreamSource == "" && c != nil && c.Request != nil {
+		event.UpstreamSource = proxy.UpstreamSourceFromContext(c.Request.Context())
+	}
 	rememberConnectionTestError(c, event)
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -1235,22 +1242,23 @@ func (h *Handler) persistRecycleBinTestResult(id int64, status string) {
 }
 
 type batchOperationEvent struct {
-	Type         string `json:"type"` // start | progress | complete
-	Action       string `json:"action"`
-	Status       string `json:"status,omitempty"`
-	HTTPStatus   int    `json:"http_status,omitempty"`
-	Current      int    `json:"current"`
-	Total        int    `json:"total"`
-	Success      int64  `json:"success"`
-	Failed       int64  `json:"failed"`
-	Banned       int64  `json:"banned,omitempty"`
-	RateLimited  int64  `json:"rate_limited,omitempty"`
-	Deleted      int64  `json:"deleted,omitempty"`
-	AccountID    int64  `json:"account_id,omitempty"`
-	AccountName  string `json:"account_name,omitempty"`
-	AccountEmail string `json:"account_email,omitempty"`
-	Message      string `json:"message,omitempty"`
-	Error        string `json:"error,omitempty"`
+	UpstreamSource string `json:"upstream_source,omitempty"`
+	Type           string `json:"type"` // start | progress | complete
+	Action         string `json:"action"`
+	Status         string `json:"status,omitempty"`
+	HTTPStatus     int    `json:"http_status,omitempty"`
+	Current        int    `json:"current"`
+	Total          int    `json:"total"`
+	Success        int64  `json:"success"`
+	Failed         int64  `json:"failed"`
+	Banned         int64  `json:"banned,omitempty"`
+	RateLimited    int64  `json:"rate_limited,omitempty"`
+	Deleted        int64  `json:"deleted,omitempty"`
+	AccountID      int64  `json:"account_id,omitempty"`
+	AccountName    string `json:"account_name,omitempty"`
+	AccountEmail   string `json:"account_email,omitempty"`
+	Message        string `json:"message,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 func runtimeAccountOperationIdentity(account *auth.Account) (string, string) {
@@ -1544,7 +1552,8 @@ func (h *Handler) runBatchTest(ctx context.Context, accounts []*auth.Account, mi
 			}
 			defer func() { <-sem }()
 
-			status, message := testFn(ctx, acc)
+			testCtx := proxy.ContextWithUpstreamTrace(ctx, h.store)
+			status, message := testFn(testCtx, acc)
 			switch status {
 			case "success":
 				atomic.AddInt64(&successCount, 1)
@@ -1555,7 +1564,7 @@ func (h *Handler) runBatchTest(ctx context.Context, accounts []*auth.Account, mi
 			default:
 				atomic.AddInt64(&failedCount, 1)
 			}
-			h.emitBatchTestProgress(onProgress, acc.DBID, total, &completedCount, &successCount, &failedCount, &bannedCount, &rateLimitCount, status, message)
+			h.emitBatchTestProgress(onProgress, acc.DBID, total, &completedCount, &successCount, &failedCount, &bannedCount, &rateLimitCount, status, message, proxy.UpstreamSourceFromContext(testCtx))
 		}(account)
 	}
 
@@ -1580,6 +1589,7 @@ func (h *Handler) emitBatchTestProgress(
 	rateLimitCount *int64,
 	status string,
 	message string,
+	upstreamSource ...string,
 ) {
 	if onProgress == nil {
 		return
@@ -1601,6 +1611,9 @@ func (h *Handler) emitBatchTestProgress(
 		AccountName:  accountName,
 		AccountEmail: accountEmail,
 		Message:      message,
+	}
+	if len(upstreamSource) > 0 {
+		event.UpstreamSource = upstreamSource[0]
 	}
 	if status == "failed" {
 		event.Error = message
@@ -1628,14 +1641,6 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 	if status, msg, done := h.batchTestSkipDeactivatedWorkspace(acc); done {
 		return status, msg
 	}
-	if acc.IsExcelBPSEnabled() {
-		return h.runExcelBPSBatchTest(testCtx, acc)
-	}
-
-	if status, msg, done := h.batchTestWhamPreflight(testCtx, acc); done {
-		return status, msg
-	}
-
 	testModel, modelErr := h.connectionTestModelForAccount(testCtx, acc, "")
 	if modelErr != nil {
 		if msg, ok := batchTestContextFailure(testCtx, modelErr); ok {
@@ -1644,6 +1649,14 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 		h.store.MarkError(acc, "批量测试失败: "+modelErr.Error())
 		return "failed", modelErr.Error()
 	}
+	testCtx, useBPS := proxy.WithExcelBPSRouteSnapshot(testCtx, acc, testModel)
+	if useBPS {
+		return h.runExcelBPSBatchTest(testCtx, acc)
+	}
+	if status, msg, done := h.batchTestWhamPreflight(testCtx, acc); done {
+		return status, msg
+	}
+
 	securityCfg := h.store.ClaudeSecurityConfig()
 	payload := h.buildAccountConnectionTestPayload(testCtx, acc, testModel, securityCfg)
 	start := time.Now()

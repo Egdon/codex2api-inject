@@ -54,6 +54,7 @@ type harvestCandidate struct {
 }
 
 type scheduledCell struct {
+	bpsCaptured          bool
 	batchSequence        int64
 	batchID              string
 	policyEpoch          int64
@@ -288,10 +289,15 @@ func (h *Harvester) submit(ctx context.Context, accountID int64, ids []int64, mo
 			break
 		}
 		generation, version := h.retainGeneration(c.acc.ID(), c.model)
-		index := h.historySlotLocked(s, key)
-		task := &scheduledCell{key: key, accountID: c.acc.ID(), model: c.model, index: index, manual: manual, force: force, max: cfg.MaxAttempts, generation: generation, version: version}
+		task := &scheduledCell{key: key, accountID: c.acc.ID(), model: c.model, manual: manual, force: force, max: cfg.MaxAttempts, generation: generation, version: version}
 		task.syncRegionPlan(cfg)
 		h.preparePolicyBatch(ctx, task, cfg)
+		if h.db != nil && (!task.bpsCaptured || task.expectedGroups.BPSEnabled) {
+			h.releaseGeneration(task.key, generation)
+			continue
+		}
+		index := h.historySlotLocked(s, key)
+		task.index = index
 		task.policyRecovery = cfg.AstraPolicyEnabled && strings.EqualFold(task.model, astraModel) && h.PolicySnapshot(task.accountID).Demoted
 		task.waitingSince = time.Now()
 		s.cells[key] = task

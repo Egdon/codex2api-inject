@@ -3,6 +3,14 @@ import test from "node:test";
 
 import { buildUsageLogSearchParams } from "../api.ts";
 
+test("usage log source filters serialize actual source categories without changing channel", () => {
+  for (const upstream_source of ['', 'bps', 'codex', 'other', 'unknown']) {
+    const params = buildUsageLogSearchParams({ start: 'start', end: 'end', channel: 'codex', upstream_source });
+    assert.equal(params.get('upstream_source'), upstream_source || null);
+    assert.equal(params.get('channel'), 'codex');
+  }
+});
+
 test("usage log search params include diagnostic and traffic filters", () => {
   const params = buildUsageLogSearchParams({
     start: "2026-08-05T00:00:00Z",

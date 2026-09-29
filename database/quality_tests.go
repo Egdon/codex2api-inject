@@ -26,6 +26,7 @@ type QualityTestMetrics struct {
 
 // Account identity is a snapshot, so renaming/deleting an account cannot rewrite history.
 type QualityTestJob struct {
+	UpstreamSource  string `json:"upstream_source,omitempty"`
 	ID              int64  `json:"id"`
 	AccountID       int64  `json:"account_id"`
 	AccountName     string `json:"account_name"`
@@ -53,6 +54,7 @@ type QualityTestJob struct {
 // ReasoningEffort filters on the stored value, so "" cannot be expressed here;
 // HasEffort marks an explicit effort filter (including the model default "").
 type QualityTestFilter struct {
+	UpstreamSource  string
 	PlanType        string
 	Model           string
 	ReasoningEffort string
@@ -97,6 +99,13 @@ func (f QualityTestFilter) where() (string, []any) {
 	add := func(column string, value any) {
 		args = append(args, value)
 		clauses = append(clauses, fmt.Sprintf("%s=$%d", column, len(args)))
+	}
+	if source := strings.ToLower(strings.TrimSpace(f.UpstreamSource)); source != "" {
+		if source == "unknown" {
+			clauses = append(clauses, "COALESCE(upstream_source, '') = ''")
+		} else {
+			add("upstream_source", source)
+		}
 	}
 	if f.PlanType != "" {
 		add("plan_type", f.PlanType)
@@ -158,23 +167,31 @@ func (db *DB) ensureQualityTestSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	if db.isSQLite() {
+		if err := db.ensureSQLiteColumn(ctx, "quality_test_jobs", "upstream_source", "TEXT"); err != nil {
+			return err
+		}
+	} else if _, err := db.conn.ExecContext(ctx, `ALTER TABLE quality_test_jobs ADD COLUMN IF NOT EXISTS upstream_source TEXT`); err != nil {
+		return err
+	}
 	return db.ensureQualityTestPromptSchema(ctx)
 }
 
 // Nullable UNIQUE slots enforce the limit across processes and replicas, not just browsers.
 // A failed/conflicting insert never creates a record or starts upstream work.
 func (db *DB) CreateQualityTestJob(ctx context.Context, job QualityTestJob) (*QualityTestJob, error) {
+	job.UpstreamSource = NormalizeUpstreamSource(job.UpstreamSource)
 	if err := db.ExpireQualityTests(ctx, time.Now()); err != nil {
 		return nil, err
 	}
-	query := `INSERT INTO quality_test_jobs(slot,account_id,account_name,plan_type,channel,model,reasoning_effort,prompt,created_at,updated_at,deadline_at,preset_kind,preset_ref,preset_name)
-	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING`
+	query := `INSERT INTO quality_test_jobs(slot,account_id,account_name,plan_type,channel,model,reasoning_effort,prompt,created_at,updated_at,deadline_at,preset_kind,preset_ref,preset_name,upstream_source)
+	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13,$14) ON CONFLICT DO NOTHING`
 	now := time.Now().UTC()
 	for slot := 1; slot <= QualityTestConcurrency; slot++ {
 		var id int64
 		err := db.withSQLiteWriteLock(ctx, func() error {
 			var err error
-			id, err = db.insertRowID(ctx, query+" RETURNING id", query, slot, job.AccountID, job.AccountName, job.PlanType, job.Channel, job.Model, job.ReasoningEffort, job.Prompt, db.timeArg(now), db.timeArg(now.Add(10*time.Minute)), job.PresetKind, job.PresetRef, job.PresetName)
+			id, err = db.insertRowID(ctx, query+" RETURNING id", query, slot, job.AccountID, job.AccountName, job.PlanType, job.Channel, job.Model, job.ReasoningEffort, job.Prompt, db.timeArg(now), db.timeArg(now.Add(10*time.Minute)), job.PresetKind, job.PresetRef, job.PresetName, nullableUpstreamSource(job.UpstreamSource))
 			return err
 		})
 		if err == nil {
@@ -202,13 +219,13 @@ func (db *DB) ExpireQualityTests(ctx context.Context, now time.Time) error {
 	return err
 }
 
-const qualityTestColumns = `id,account_id,account_name,plan_type,channel,model,reasoning_effort,status,metrics_json,error,created_at,updated_at,completed_at,deadline_at,preset_kind,preset_ref,preset_name`
+const qualityTestColumns = `id,account_id,account_name,plan_type,channel,model,reasoning_effort,status,metrics_json,error,created_at,updated_at,completed_at,deadline_at,preset_kind,preset_ref,preset_name,COALESCE(upstream_source,'')`
 
 func scanQualityTestJob(scanner interface{ Scan(...any) error }, detail bool) (*QualityTestJob, error) {
 	var job QualityTestJob
 	var metrics string
 	var created, updated, completed, deadline any
-	args := []any{&job.ID, &job.AccountID, &job.AccountName, &job.PlanType, &job.Channel, &job.Model, &job.ReasoningEffort, &job.Status, &metrics, &job.Error, &created, &updated, &completed, &deadline, &job.PresetKind, &job.PresetRef, &job.PresetName}
+	args := []any{&job.ID, &job.AccountID, &job.AccountName, &job.PlanType, &job.Channel, &job.Model, &job.ReasoningEffort, &job.Status, &metrics, &job.Error, &created, &updated, &completed, &deadline, &job.PresetKind, &job.PresetRef, &job.PresetName, &job.UpstreamSource}
 	if detail {
 		args = append(args, &job.Prompt, &job.Output)
 	}
@@ -350,7 +367,7 @@ func (db *DB) SaveQualityTestProgress(ctx context.Context, job QualityTestJob) e
 	if err != nil {
 		return err
 	}
-	_, err = db.conn.ExecContext(ctx, `UPDATE quality_test_jobs SET output=$1,metrics_json=$2,updated_at=$3 WHERE id=$4 AND slot IS NOT NULL`, job.Output, string(metrics), db.timeArg(time.Now()), job.ID)
+	_, err = db.conn.ExecContext(ctx, `UPDATE quality_test_jobs SET output=$1,metrics_json=$2,updated_at=$3,upstream_source=COALESCE($5,upstream_source) WHERE id=$4 AND slot IS NOT NULL`, job.Output, string(metrics), db.timeArg(time.Now()), job.ID, nullableUpstreamSource(job.UpstreamSource))
 	return err
 }
 
@@ -359,7 +376,7 @@ func (db *DB) FinishQualityTest(ctx context.Context, job QualityTestJob) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.conn.ExecContext(ctx, `UPDATE quality_test_jobs SET status=CASE WHEN status='cancelling' THEN 'stopped' ELSE $1 END,slot=NULL,output=$2,metrics_json=$3,error=CASE WHEN status='cancelling' THEN '' ELSE $4 END,updated_at=$5,completed_at=$5 WHERE id=$6 AND slot IS NOT NULL`, job.Status, job.Output, string(metrics), job.Error, db.timeArg(time.Now()), job.ID)
+	_, err = db.conn.ExecContext(ctx, `UPDATE quality_test_jobs SET status=CASE WHEN status='cancelling' THEN 'stopped' ELSE $1 END,slot=NULL,output=$2,metrics_json=$3,error=CASE WHEN status='cancelling' THEN '' ELSE $4 END,updated_at=$5,completed_at=$5,upstream_source=COALESCE($7,upstream_source) WHERE id=$6 AND slot IS NOT NULL`, job.Status, job.Output, string(metrics), job.Error, db.timeArg(time.Now()), job.ID, nullableUpstreamSource(job.UpstreamSource))
 	return err
 }
 

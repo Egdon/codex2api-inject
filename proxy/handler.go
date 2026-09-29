@@ -3949,6 +3949,14 @@ func (h *Handler) Responses(c *gin.Context) {
 	// OpenAI Responses relay body 仅在实际命中 relay 账号时惰性生成，避免 Codex 路径重复转换。
 	// previous_response_id 缓存按下游 API Key 隔离，防止跨用户注入他人对话历史。
 	respCacheOwner := responseCacheOwner(apiKeyID)
+	routeSession := ""
+	if excelBPSConversationScoped(c.Request.Header, sessionIdentity) {
+		routeSession = affinityKey
+	}
+	routeGate, routeOK := newResponsesRouteGate(c, h.store, respCacheOwner, routeSession, rawBody)
+	if !routeOK {
+		return
+	}
 	bodyPreparation := prepareResponsesBodyForOwnerDetailed(rawBody, respCacheOwner)
 	codexBody, expandedInputRaw := bodyPreparation.Body, bodyPreparation.ExpandedInputRaw
 	continuationStatus, continuationReason, continuationUnavailable := responseCachePreparationFailure(bodyPreparation)
@@ -3989,6 +3997,10 @@ func (h *Handler) Responses(c *gin.Context) {
 		accountFilter = accountFilterForResponsesModelWithOriginal(logModel, effectiveModel, allowCodexAccounts)
 	}
 	accountFilter = h.withModelCooldownFilter(c.Request.Context(), effectiveModel, accountFilter)
+	baseRouteFilter := accountFilter
+	accountFilter = func(a *auth.Account) bool {
+		return (baseRouteFilter == nil || baseRouteFilter(a)) && routeGate.permits(a, effectiveModel)
+	}
 	if continuationUnavailable {
 		accountFilter = relayOnlyAccountFilter(accountFilter)
 	}
@@ -4152,7 +4164,14 @@ func (h *Handler) Responses(c *gin.Context) {
 		attemptLogEffectiveModel := logEffectiveModel
 		// relay/Grok 账号默认走 HTTP，这里排除全局强制 WS，避免日志把它们错标成 via_websocket。
 		// 打开了上游 WebSocket 的 OpenAI Responses 中转账号在体积判断之后单独改回 WS。
-		useWebsocket := h.shouldUseWebsocketForHTTP() && !wsHTTPFallback.ForceHTTP() && !account.IsRelayStyle() && !account.IsExcelBPSAvailableForModel(effectiveModel)
+		routeCtx, useBPS, admitted := routeGate.admit(c.Request.Context(), account, effectiveModel)
+		if !admitted {
+			h.store.Release(account)
+			sendResponseRouteUnavailable(c)
+			return
+		}
+		c.Request = c.Request.WithContext(routeCtx)
+		useWebsocket := h.shouldUseWebsocketForHTTP() && !wsHTTPFallback.ForceHTTP() && !account.IsRelayStyle() && !useBPS
 		// 生图请求强制走 HTTP：WebSocket 传输大体积图片数据会卡死（issue #220）；
 		// 自然语言生图意图也需保留 image_generation 工具（issue #288）。
 		if useWebsocket && rawResponsesBodyShouldForceHTTPForImageGeneration(rawBody) {
@@ -4186,7 +4205,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		// 透传下游请求头用于指纹学习
 		downstreamHeaders := c.Request.Header.Clone()
 
-		if account.IsExcelBPSAvailableForModel(effectiveModel) {
+		if useBPS {
 			bpsBody := codexBody
 			if mappedBody, mappedModel, ok := h.applyAccountModelMappingToBodyForModels(bpsBody, account, logModel, effectiveModel); ok {
 				bpsBody = mappedBody
@@ -4630,6 +4649,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					if account.IsGrokAPI() || continuousRetryBuffersAttempts(continuousRetryPolicy) {
 						compactionDigests.addPayload(data)
 					} else {
+						rememberResponseRoutePayload(c.Request.Context(), data)
 						h.recordCompactionProvenanceFromPayload(context.Background(), account, data)
 					}
 					parsed := gjson.ParseBytes(data)
@@ -4904,6 +4924,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			} else if !isStream && outcome.logStatusCode == http.StatusOK && len(nonStreamResponseBody) > 0 {
 				copyGrokNativeResponseHeaders(c, resp.Header)
 				c.Data(http.StatusOK, nonStreamContentType, nonStreamResponseBody)
+				rememberResponseRoutePayload(c.Request.Context(), nonStreamResponseBody)
 				h.recordCompactionProvenanceFromPayload(context.Background(), account, nonStreamResponseBody)
 			}
 			if outcome.logStatusCode != http.StatusOK {
@@ -5296,6 +5317,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				if continuousRetryBuffersAttempts(continuousRetryPolicy) {
 					compactionProvenancePayloads = append(compactionProvenancePayloads, bytes.Clone(data))
 				} else {
+					rememberResponseRoutePayload(c.Request.Context(), data)
 					h.recordCompactionProvenanceFromPayload(context.Background(), account, data)
 				}
 				downstreamMu.Lock()
@@ -5554,6 +5576,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				if continuousRetryBuffersAttempts(continuousRetryPolicy) {
 					compactionProvenancePayloads = append(compactionProvenancePayloads, bytes.Clone(data))
 				} else {
+					rememberResponseRoutePayload(c.Request.Context(), data)
 					h.recordCompactionProvenanceFromPayload(context.Background(), account, data)
 				}
 				parsed := gjson.ParseBytes(data)
@@ -5717,6 +5740,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 			} else {
 				for _, payload := range compactionProvenancePayloads {
+					rememberResponseRoutePayload(c.Request.Context(), payload)
 					h.recordCompactionProvenanceFromPayload(context.Background(), account, payload)
 				}
 				if isStream && len(completedResponseData) > 0 {
@@ -5801,6 +5825,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				c.Status(http.StatusOK)
 				if err := writeAll(c.Writer, responseJSON); err == nil {
 					for _, payload := range compactionProvenancePayloads {
+						rememberResponseRoutePayload(c.Request.Context(), payload)
 						h.recordCompactionProvenanceFromPayload(context.Background(), account, payload)
 					}
 					if len(completedResponseData) > 0 {
@@ -5973,6 +5998,14 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	rawBody, _ = sjson.SetBytes(rawBody, "stream", false)
 
 	// 准备上游请求体（previous_response_id 缓存按下游 API Key 隔离）
+	routeSession := ""
+	if excelBPSConversationScoped(c.Request.Header, sessionIdentity) {
+		routeSession = affinityKey
+	}
+	routeGate, routeOK := newResponsesRouteGate(c, h.store, responseCacheOwner(apiKeyID), routeSession, rawBody)
+	if !routeOK {
+		return
+	}
 	bodyPreparation := prepareCompactResponsesBodyForOwnerDetailed(rawBody, responseCacheOwner(apiKeyID))
 	codexBody := bodyPreparation.Body
 	continuationStatus, continuationReason, continuationUnavailable := responseCachePreparationFailure(bodyPreparation)
@@ -5999,6 +6032,10 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	accountFilter := accountFilterForCompactResponsesModelWithOriginal(routingModel, effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
 	accountFilter = h.withModelCooldownFilter(c.Request.Context(), effectiveModel, accountFilter)
 	accountFilter = excludeClaudeAccountsFilter(accountFilter)
+	baseRouteFilter := accountFilter
+	accountFilter = func(a *auth.Account) bool {
+		return (baseRouteFilter == nil || baseRouteFilter(a)) && routeGate.permits(a, effectiveModel)
+	}
 	if continuationUnavailable {
 		accountFilter = relayOnlyAccountFilter(accountFilter)
 	}
@@ -6119,7 +6156,14 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		}
 		downstreamHeaders := c.Request.Header.Clone()
 
-		if account.IsExcelBPSAvailableForModel(effectiveModel) {
+		routeCtx, useBPS, admitted := routeGate.admit(c.Request.Context(), account, effectiveModel)
+		if !admitted {
+			h.store.Release(account)
+			sendResponseRouteUnavailable(c)
+			return
+		}
+		c.Request = c.Request.WithContext(routeCtx)
+		if useBPS {
 			bpsBody := codexBody
 			if mappedBody, mappedModel, ok := h.applyAccountCompactModelMappingToBody(bpsBody, account, routingModel, effectiveModel); ok {
 				bpsBody = mappedBody
@@ -6374,6 +6418,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				contentType = "application/json"
 			}
 			c.Data(http.StatusOK, contentType, respBody)
+			rememberResponseRoutePayload(c.Request.Context(), respBody)
 			h.recordCompactionProvenanceFromPayload(context.Background(), account, respBody)
 			return
 		}
@@ -6751,6 +6796,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		h.store.ReportRequestSuccess(account, time.Duration(totalDuration)*time.Millisecond)
 		h.store.ReleaseForSessionWithGuard(account, affinityKey, affinityGuard)
 		c.Data(http.StatusOK, "application/json", respBody)
+		rememberResponseRoutePayload(c.Request.Context(), respBody)
 		h.recordCompactionProvenanceFromPayload(context.Background(), account, respBody)
 		return
 	}

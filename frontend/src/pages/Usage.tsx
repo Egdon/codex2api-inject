@@ -1,3 +1,5 @@
+import UpstreamSourceBadge from '../components/UpstreamSourceBadge'
+import type { UpstreamSourceFilter } from '../lib/upstreamSource'
 import { ImageBillingCost } from '../components/image-studio/ImageBillingCost'
 import { mediaBillingUnit, type MediaBillingUnit } from '../lib/imageBilling'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -1472,12 +1474,13 @@ function EmptyPanel({ accent, icon, text }: { accent: PanelAccentKey; icon: Reac
   )
 }
 
-	type UsageTableColumn = 'status' | 'error' | 'turnState' | 'model' | 'account' | 'apiKey' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
+	type UsageTableColumn = 'upstreamSource' | 'status' | 'error' | 'turnState' | 'model' | 'account' | 'apiKey' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
 
 	const USAGE_COLUMN_DEFINITIONS: Array<{ key: UsageTableColumn; labelKey: string }> = [
 	  { key: 'status', labelKey: 'usage.tableStatus' },
 	  { key: 'model', labelKey: 'usage.tableModel' },
-	  { key: 'account', labelKey: 'usage.tableAccount' },
+		  { key: 'upstreamSource', labelKey: 'upstreamSource.title' },
+		  { key: 'account', labelKey: 'usage.tableAccount' },
 	  { key: 'apiKey', labelKey: 'usage.tableApiKey' },
 	  { key: 'clientIp', labelKey: 'usage.tableClientIP' },
 	  { key: 'userAgent', labelKey: 'usage.tableUserAgent' },
@@ -1500,6 +1503,7 @@ const USAGE_TABLE_COLUMN_ORDER: readonly UsageTableColumn[] = USAGE_COLUMN_DEFIN
 
 const USAGE_VISIBLE_COLUMNS_KEY = 'codex2api:usage:visible-columns'
 const DEFAULT_USAGE_VISIBLE_COLUMNS: Record<UsageTableColumn, boolean> = {
+  upstreamSource: false,
   status: true,
   error: true,
   model: true,
@@ -1763,6 +1767,7 @@ export default function Usage() {
   const [errorSummary, setErrorSummary] = useState<OpsErrorSummary | null>(null)
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [filterUpstreamSource, setFilterUpstreamSource] = useState<UpstreamSourceFilter>('')
   const [filterStatus, setFilterStatus] = useState<UsageStatusFilter>('')
   const [filterModel, setFilterModel] = useState('')
   const [filterEndpoint, setFilterEndpoint] = useState('')
@@ -1838,11 +1843,12 @@ export default function Usage() {
       stream: filterType === 'stream' ? 'true' : filterType === 'sync' ? 'false' : undefined,
       compact: filterType === 'compact' ? 'true' : undefined,
       hasCompactionHistory: filterType === 'history' ? 'true' : undefined,
+      upstream_source: filterUpstreamSource,
       channel: channel || undefined,
       retry: filterRetry || undefined,
       viaWebsocket: filterTransport === 'ws' ? 'true' : filterTransport === 'http' ? 'false' : undefined,
     }
-  }, [timeRange, customRange, searchQuery, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterUltra, filterModelMismatch, filterType, channel, filterRetry, filterTransport])
+  }, [timeRange, customRange, searchQuery, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterUltra, filterModelMismatch, filterType, channel, filterRetry, filterTransport, filterUpstreamSource])
 
   const buildLogFilterParams = useCallback(() => {
     return {
@@ -2050,6 +2056,7 @@ export default function Usage() {
     filterErrorKind,
     filterRetry,
     filterTransport,
+    filterUpstreamSource,
   ].filter(Boolean).length
   const hasActiveFilters = Boolean(
     searchInput
@@ -2064,7 +2071,8 @@ export default function Usage() {
     || filterModelMismatch
     || filterErrorKind
     || filterRetry
-    || filterTransport,
+    || filterTransport
+    || filterUpstreamSource,
   )
   const statusFilterOptions: Array<{ value: UsageStatusFilter; label: string; tone?: string }> = [
     { value: '', label: t('usage.statusAll') },
@@ -2106,6 +2114,7 @@ export default function Usage() {
     setFilterErrorKind('')
     setFilterRetry('')
     setFilterTransport('')
+    setFilterUpstreamSource('')
     setPage(1)
   }
 
@@ -2540,6 +2549,12 @@ export default function Usage() {
 
               {showAdvancedFilters ? (
                 <div className="mt-3 grid grid-cols-1 gap-2 border-t border-border/70 pt-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                  <Select compact value={filterUpstreamSource}
+                    aria-label={t('upstreamSource.title')}
+                    onValueChange={(value) => { setFilterUpstreamSource(value as UpstreamSourceFilter); setPage(1) }}
+                    options={(['', 'bps', 'codex', 'other', 'unknown'] as const).map((value) => ({
+                      value, label: t(`upstreamSource.${value || 'all'}`),
+                    }))} />
                   <Select
                     compact
                     value={filterEndpoint}
@@ -2729,6 +2744,7 @@ export default function Usage() {
                               {formatServiceTierLabel(t, log.billing_service_tier || log.service_tier)}
                             </Badge>
                           ) : null}
+                          {visibleColumns.upstreamSource && <UpstreamSourceBadge source={log.upstream_source} />}
                           {visibleColumns.type && <StreamBadge stream={log.stream} />}
                           {visibleColumns.type && <UsageDaybreakBadge program={log.daybreak_program} />}
                           <CompactionBadges
@@ -2874,6 +2890,7 @@ export default function Usage() {
                     <TableRow>
                       {visibleColumns.status && <TableHead className={usageTableHeadClass}>{t('usage.tableStatus')}</TableHead>}
                       {visibleColumns.model && <TableHead className={usageTableHeadClass}>{t('usage.tableModel')}</TableHead>}
+                      {visibleColumns.upstreamSource && <TableHead className={usageTableHeadClass}>{t('upstreamSource.title')}</TableHead>}
                       {visibleColumns.account && <TableHead className={usageTableHeadClass}>{t('usage.tableAccount')}</TableHead>}
                       {visibleColumns.apiKey && <TableHead className={usageTableHeadClass}>{t('usage.tableApiKey')}</TableHead>}
                       {visibleColumns.clientIp && <TableHead className={usageTableHeadClass}>{t('usage.tableClientIP')}</TableHead>}
@@ -2982,6 +2999,7 @@ export default function Usage() {
                             )}
                           </div>
                         </TableCell>}
+                        {visibleColumns.upstreamSource && <TableCell><UpstreamSourceBadge source={log.upstream_source} /></TableCell>}
                         {visibleColumns.account && <TableCell className={`${usageTableTextClass} text-muted-foreground`}>
                           {log.account_id > 0 ? (
                             <button

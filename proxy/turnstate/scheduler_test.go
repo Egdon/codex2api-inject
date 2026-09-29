@@ -404,7 +404,14 @@ func TestSchedulerGenerationProtectsPasteAndClearInMemoryAndDB(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			h := NewHarvester(db, stubStore{}, NewCache())
+			accountID, err := db.InsertAccountWithCredentials(context.Background(), "generation-fixture", map[string]any{
+				"access_token": "access-token", "refresh_token": "refresh-token", "account_id": "generation-fixture",
+			}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			acc := testAccount(accountID)
+			h := NewHarvester(db, stubStore{accounts: []*auth.Account{acc}}, NewCache())
 			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 			token := fakeFernet(time.Now().Unix(), 160)
 			h.probeFn = func(ctx context.Context, cfg Config, acc *auth.Account, model, inject string) (string, http.Header, error) {
@@ -416,20 +423,20 @@ func TestSchedulerGenerationProtectsPasteAndClearInMemoryAndDB(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			go func() { defer close(done); h.harvestCell(ctx, DefaultConfig(), testAccount(1), "m1") }()
+			go func() { defer close(done); h.harvestCell(ctx, DefaultConfig(), acc, "m1") }()
 			awaitSchedulerSignal(t, entered)
 			if clear {
-				if err := h.Clear(context.Background(), 1, "m1"); err != nil {
+				if err := h.Clear(context.Background(), accountID, "m1"); err != nil {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err := h.ManualPaste(context.Background(), 1, "m1", "manual-value"); err != nil {
+				if _, err := h.ManualPaste(context.Background(), accountID, "m1", "manual-value"); err != nil {
 					t.Fatal(err)
 				}
 			}
 			close(release)
 			awaitSchedulerSignal(t, done)
-			ticket, exists := h.cache.Get(1, "m1")
+			ticket, exists := h.cache.Get(accountID, "m1")
 			rows, err := db.ListTurnStateTickets(context.Background())
 			if err != nil {
 				t.Fatal(err)

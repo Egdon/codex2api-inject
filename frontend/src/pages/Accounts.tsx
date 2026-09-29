@@ -236,6 +236,8 @@ import Sub2APIImportModal from "../components/Sub2APIImportModal";
 import AccountQuotaDistributionChart from "../components/AccountQuotaDistributionChart";
 import AccountRateLimitRecoveryChart from "../components/AccountRateLimitRecoveryChart";
 import AccountGroupMultiSelect from "../components/AccountGroupMultiSelect";
+import { BPSAccountControl, BPSMasterContext, BPSPreferenceBadge } from '../components/BPSAccountControl';
+import { buildBPSAccountPatch, isBPSMasterEnabled, selectBPSBatchAccounts, type BPSBatchMode } from '../lib/bps';
 import AccountQuickConfigSheet from "../components/AccountQuickConfigSheet";
 import ChannelMonitorConfigDialog from "../components/ChannelMonitorConfigDialog";
 import { useImportGroupIds } from "../hooks/useImportGroupIds";
@@ -951,6 +953,7 @@ function useMediaQuery(query: string) {
 type BatchOperationAction = "batch_test" | "batch_delete" | "batch_refresh" | "batch_usage_refresh" | "clean";
 
 interface BatchOperationEvent {
+  upstream_source?: import('../lib/upstreamSource').UpstreamSource;
   type: "start" | "progress" | "complete";
   action: BatchOperationAction;
   status?: string;
@@ -1289,6 +1292,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                       <Link2 className="size-3" />
                                     </button>
                                   </div>
+                                  <BPSPreferenceBadge account={account} />
                                   {account.effective_workspace_id && (
                                     <span
                                       className={cn(
@@ -1923,6 +1927,9 @@ export default function Accounts() {
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
   const [detailAccountData, setDetailAccountData] = useState<AccountRow | null>(null);
   const detailNavigationTargetRef = useRef<"first" | "last" | null>(null);
+  const [bpsMasterEnabled, setBPSMasterEnabled] = useState<boolean | null>(null);
+  const [editBPSEnabled, setEditBPSEnabled] = useState(false);
+  const [batchBPSMode, setBatchBPSMode] = useState<BPSBatchMode>('unchanged');
   const [editingAccount, setEditingAccount] = useState<AccountRow | null>(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editTab, setEditTab] = useState<"scheduler" | "account">("scheduler");
@@ -2754,6 +2761,7 @@ export default function Accounts() {
     void api.getSettings()
       .then((settings) => {
         if (cancelled) return;
+        setBPSMasterEnabled(isBPSMasterEnabled(settings.openai_excel_bps_enabled));
         setLazyMode(settings.lazy_mode);
         setAccountPortalEnabled(Boolean(settings.public_account_portal_page_enabled));
         setProxyPoolEnabled(Boolean(settings.proxy_pool_enabled));
@@ -5120,6 +5128,7 @@ export default function Accounts() {
     setBatchBaseConcurrencyInput("");
     setBatchUpdateSchedulerPriority(false);
     setBatchSchedulerPriorityInput("");
+    setBatchBPSMode('unchanged');
     setBatchUpdateCodexFingerprintMode(false);
     setBatchCodexFingerprintMode("off");
     setBatchUpdateTimezone(false);
@@ -5140,6 +5149,7 @@ export default function Accounts() {
     setBatchBaseConcurrencyInput("");
     setBatchUpdateSchedulerPriority(false);
     setBatchSchedulerPriorityInput("");
+    setBatchBPSMode('unchanged');
     setBatchUpdateCodexFingerprintMode(false);
     setBatchCodexFingerprintMode("off");
     setBatchUpdateTimezone(false);
@@ -5381,6 +5391,7 @@ export default function Accounts() {
     batchUpdateBaseConcurrency ||
     batchUpdateSchedulerPriority ||
     batchUpdateCodexFingerprintMode ||
+    batchBPSMode !== 'unchanged' ||
     batchUpdateTimezone;
   const batchMetaInvalid =
     batchScoreBiasInvalid ||
@@ -5396,8 +5407,7 @@ export default function Accounts() {
     }
     setBatchMetaSubmitting(true);
     try {
-      const result = await api.batchUpdateAccounts(
-        buildBatchMetadataUpdate({
+      const metadata = buildBatchMetadataUpdate({
           ids,
           updateTags: batchUpdateTags,
           tags: batchTags,
@@ -5414,14 +5424,37 @@ export default function Accounts() {
           updateCodexFingerprintMode: batchUpdateCodexFingerprintMode,
           codexFingerprintMode: batchCodexFingerprintMode,
           updateTimezone: batchUpdateTimezone,
+          bpsMode: batchBPSMode,
           timezone: batchTimezone,
-        }),
-      );
+        });
+      const result = { success: 0, failed: 0 };
+      let unsupported = 0;
+      let unknown = 0;
+      const apply = async (payload: typeof metadata) => {
+        if (!payload.ids?.length || Object.keys(payload).length === 1) return;
+        const response = await api.batchUpdateAccounts(payload);
+        result.success += response.success;
+        result.failed += response.failed;
+      };
+      if (batchBPSMode === 'unchanged') {
+        await apply(metadata);
+      } else {
+        // Fetch identity-only summaries once, including selected IDs on other pages.
+        // Do not infer eligibility from absent rows or retain credentials in selection state.
+        const response = await api.getAccounts({ channel: 'codex', view: 'lite' });
+        const classified = selectBPSBatchAccounts(ids, response.accounts ?? [], batchBPSMode);
+        unsupported = classified.unsupportedIDs.length;
+        unknown = classified.unknownIDs.length;
+        await apply({ ...metadata, ids: classified.eligibleIDs });
+        // Unrelated explicitly enabled metadata still applies to skipped BPS accounts.
+        const sharedMetadata = { ...metadata };
+        delete sharedMetadata.openai_excel_bps;
+        await apply({ ...sharedMetadata, ids: [...classified.unsupportedIDs, ...classified.unknownIDs] });
+      }
       showToast(
-        t("accounts.batchMetaDone", {
-          success: result.success,
-          fail: result.failed,
-        }),
+        batchBPSMode === 'unchanged'
+          ? t("accounts.batchMetaDone", { success: result.success, fail: result.failed })
+          : t('bps.batchDone', { success: result.success, fail: result.failed, unsupported, unknown }),
       );
       setShowBatchMetaEditor(false);
       await Promise.all([reload(), reloadGroups()]);
@@ -5660,6 +5693,7 @@ export default function Accounts() {
     );
     setEditProxyUrl(account.proxy_url ?? "");
     setEditCustomHeadersText(formatCustomHeadersText(account.custom_headers));
+    setEditBPSEnabled(account.openai_excel_bps ?? false);
     setEditCodexFingerprintMode(account.codex_fingerprint_mode ?? "off");
     setEditTimezone(account.timezone ?? "");
     setEditTimezoneCustom(
@@ -5883,6 +5917,7 @@ export default function Accounts() {
           editSchedulerPriorityInput,
         ),
         custom_headers: parsedCustomHeaders.value,
+        ...buildBPSAccountPatch(editingAccount, editBPSEnabled),
         // 指纹收敛只作用于 Codex 官方出站路径，中转/Grok 账号不下发该字段。
         ...(isCodexOfficialAccount(editingAccount)
           ? {
@@ -6223,6 +6258,7 @@ export default function Accounts() {
   }
 
   return (
+    <BPSMasterContext.Provider value={bpsMasterEnabled}>
     <div
       key="provider-codex"
       className="relative @container/accounts animate-channel-switch-in"
@@ -9998,6 +10034,11 @@ export default function Accounts() {
                           })}
                         </div>
 
+                        <div className="md:col-span-2">
+                          <BPSAccountControl account={editingAccount} checked={editBPSEnabled}
+                            onCheckedChange={setEditBPSEnabled} disabled={editSubmitting} />
+                        </div>
+
                         {/* 设备指纹收敛 */}
                         {isCodexOfficialAccount(editingAccount) ? (
                           <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs hover:border-border/90 transition-colors md:col-span-2">
@@ -10607,6 +10648,14 @@ export default function Accounts() {
                     </div>
                   </div>
 
+                  <div className="rounded-xl border border-border p-4 md:col-span-2 space-y-2">
+                    <div className="text-sm font-semibold text-foreground">{t('bps.accountTitle')}</div>
+                    <p className="text-xs text-muted-foreground">{t('bps.batchHint')}</p>
+                    <Select value={batchBPSMode} aria-label={t('bps.accountTitle')} disabled={batchMetaSubmitting}
+                      onValueChange={(value) => setBatchBPSMode(value as BPSBatchMode)}
+                      options={(['unchanged', 'on', 'off'] as const).map((value) => ({ value, label: t(`bps.${value}`) }))} />
+                    {bpsMasterEnabled === false && <p className="text-xs text-muted-foreground">{t('bps.masterOffHint')}</p>}
+                  </div>
                   <div className="rounded-xl border border-border p-4 md:col-span-2">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -11297,6 +11346,7 @@ export default function Accounts() {
         </>
       </StateShell>
     </div>
+    </BPSMasterContext.Provider>
   );
 }
 
@@ -13785,6 +13835,7 @@ function AccountMobileCard({
                 <Link2 className="size-3" />
               </button>
             </div>
+            <BPSPreferenceBadge account={account} />
             {chatgptAccountId && (
               <div
                 className="codex-account-card__chatgpt-id"

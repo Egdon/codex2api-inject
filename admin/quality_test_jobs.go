@@ -113,7 +113,11 @@ func (h *Handler) ListQualityTests(c *gin.Context) {
 	if size < 1 || size > 50 {
 		size = 20
 	}
-	filter := database.QualityTestFilter{PlanType: strings.TrimSpace(c.Query("plan")), Model: strings.TrimSpace(c.Query("model"))}
+	source, ok := parseUpstreamSourceFilter(c)
+	if !ok {
+		return
+	}
+	filter := database.QualityTestFilter{UpstreamSource: source, PlanType: strings.TrimSpace(c.Query("plan")), Model: strings.TrimSpace(c.Query("model"))}
 	if effort, ok := c.GetQuery("effort"); ok {
 		// "default" selects runs that used the model default (stored as "").
 		filter.HasEffort = true
@@ -212,6 +216,9 @@ func (h *Handler) runQualityTestJob(parent context.Context, job database.Quality
 	emit := func(event testEvent) {
 		mu.Lock()
 		defer mu.Unlock()
+		if event.UpstreamSource != "" {
+			job.UpstreamSource = event.UpstreamSource
+		}
 		switch event.Type {
 		case "content":
 			if len(job.Output)+len(event.Text) > 1<<20 {

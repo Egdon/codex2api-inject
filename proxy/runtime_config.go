@@ -66,6 +66,8 @@ const (
 )
 
 type RuntimeSettings struct {
+	// OpenAIExcelBPSEnabled is a view of the separately persisted master gate.
+	OpenAIExcelBPSEnabled bool
 	ClientCompatMode      string
 	CodexMinCLIVersion    string
 	CodexUserAgentConfig  string
@@ -178,6 +180,7 @@ func init() {
 
 func DefaultRuntimeSettings() RuntimeSettings {
 	return RuntimeSettings{
+		OpenAIExcelBPSEnabled:            true,
 		ClientCompatMode:                 defaultClientCompatMode,
 		CodexMinCLIVersion:               defaultCodexMinCLIVersion,
 		CodexUserAgentConfig:             DefaultCodexUserAgentConfigJSON(),
@@ -428,6 +431,8 @@ func CurrentRuntimeSettings() RuntimeSettings {
 
 func currentRuntimeSettings() RuntimeSettings {
 	if v, ok := runtimeSettings.Load().(RuntimeSettings); ok {
+		// Ordinary settings snapshots must not overwrite this independent gate.
+		v.OpenAIExcelBPSEnabled = auth.OpenAIExcelBPSEnabled()
 		return NormalizeRuntimeSettings(v)
 	}
 	return DefaultRuntimeSettings()

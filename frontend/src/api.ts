@@ -493,6 +493,7 @@ function buildOpsErrorSearchParams(params: {
 }
 
 export type UsageLogQueryParams = {
+  upstream_source?: import('./lib/upstreamSource').UpstreamSourceFilter
   start: string
   end: string
   email?: string
@@ -518,6 +519,7 @@ export type UsageLogQueryParams = {
 
 export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   const search = new URLSearchParams()
+  if (params.upstream_source) search.set('upstream_source', params.upstream_source)
   search.set('start', params.start)
   search.set('end', params.end)
   if (params.email) search.set('email', params.email)
@@ -1189,13 +1191,12 @@ export const api = {
       { signal: params.signal },
     )
   },
-  getUsageLogs: (params: { start?: string; end?: string; limit?: number } = {}) => {
-    const searchParams = new URLSearchParams()
-    if (params.start && params.end) {
-      searchParams.set('start', params.start)
-      searchParams.set('end', params.end)
-    } else if (params.limit) {
-      searchParams.set('limit', String(params.limit))
+  getUsageLogs: (params: Partial<UsageLogQueryParams> & { limit?: number } = {}) => {
+    const searchParams = buildUsageLogSearchParams({ ...params, start: params.start ?? '', end: params.end ?? '' })
+    if (!params.start || !params.end) {
+      searchParams.delete('start')
+      searchParams.delete('end')
+      if (params.limit) searchParams.set('limit', String(params.limit))
     }
     return request<UsageLogsResponse>(`/usage/logs?${searchParams.toString()}`)
   },
