@@ -622,6 +622,9 @@ export interface AccountLiveStateResponse {
   accounts: Record<string, {
     active_requests: number
     occupied_requests: number
+    // 调度器当前实际执行的并发上限与配置值；旧后端不返回时保留列表里的值。
+    dynamic_concurrency_limit?: number
+    base_concurrency_effective?: number
   }>
   session_slot_buffer_enabled: boolean
 }

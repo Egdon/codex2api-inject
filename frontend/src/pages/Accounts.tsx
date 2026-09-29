@@ -107,6 +107,21 @@ import {
   resolveDisabledAccountSorts,
 } from "../lib/accountListSort";
 import {
+  formatAccountConcurrencyText,
+  resolveAccountConcurrencyDisplay,
+} from "../lib/accountConcurrency";
+import {
+  ACCOUNT_AUTO_REFRESH_INTERVALS,
+  normalizeAccountAutoRefreshSeconds,
+  readAccountAutoRefreshSeconds,
+  readAccountListSort,
+  shouldRefreshPageStats,
+  writeAccountAutoRefreshSeconds,
+  writeAccountListSort,
+  type AccountListSortDir,
+  type AccountListSortKey,
+} from "../lib/accountListPreferences";
+import {
   formatLongUsageWindowLabel,
   getAccountStatusBadgeStatus,
   isOfficialCostHiddenAccount,
@@ -321,26 +336,41 @@ const formatMB = (bytes: number): string =>
 
 function AccountConcurrencyBadge({ account }: { account: AccountRow }) {
   const { t } = useTranslation();
-  const active = Math.max(0, account.active_requests ?? 0);
-  const occupied = Math.max(active, account.occupied_requests ?? active);
-  if (occupied === 0) return null;
+  const display = resolveAccountConcurrencyDisplay(account);
+  if (!display) return null;
 
-  const buffered = occupied - active;
-  const showOccupied = account.session_slot_buffer_enabled === true;
-  const title = showOccupied
-    ? t("accounts.occupiedRequestsTooltip", { active, occupied, buffered })
-    : t("accounts.activeRequestsTooltip", { count: active });
+  const { active, occupied, buffered, showOccupied, limit, base, degraded } =
+    display;
+  const titleLines = [
+    showOccupied
+      ? t("accounts.occupiedRequestsTooltip", { active, occupied, buffered })
+      : t("accounts.activeRequestsTooltip", { count: active }),
+  ];
+  if (limit !== null) {
+    titleLines.push(
+      degraded
+        ? t("accounts.concurrencyLimitDegradedTooltip", { limit, base })
+        : t("accounts.concurrencyLimitTooltip", { limit }),
+    );
+  }
 
   return (
     <span
       className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-blue-600 ring-1 ring-inset ring-blue-500/20 dark:bg-blue-950 dark:text-blue-400 dark:ring-blue-400/20"
-      title={title}
+      title={titleLines.join("\n")}
     >
       <span
         className="size-1.5 animate-pulse rounded-full bg-blue-500 dark:bg-blue-400"
         aria-hidden
       />
-      {showOccupied ? `${active}/${occupied}` : active}
+      {limit !== null && degraded ? (
+        <span>
+          {display.used} /{" "}
+          <span className="text-amber-600 dark:text-amber-400">{limit}</span>
+        </span>
+      ) : (
+        formatAccountConcurrencyText(display)
+      )}
     </span>
   );
 }
@@ -370,6 +400,7 @@ const ACCOUNT_EMAIL_DOMAIN_VISIBILITY_KEY =
 const ACCOUNT_VISIBLE_COLUMNS_KEY = "codex2api:accounts:visible-columns";
 const ACCOUNT_TABLE_COLUMNS = [
   "sequence",
+  "id",
   "email",
   "tags",
   "groups",
@@ -1246,6 +1277,11 @@ const AccountTableRow = memo(function AccountTableRow({
                                 {sequence}
                               </TableCell>
                             )}
+                            {visibleColumns.id && (
+                              <TableCell className="text-[13px] font-mono tabular-nums text-muted-foreground">
+                                {account.id}
+                              </TableCell>
+                            )}
                             {visibleColumns.email && (
                               <TableCell className="min-w-[220px] whitespace-normal text-[14px] text-muted-foreground">
                                 <div className="flex min-w-0 items-center gap-2.5">
@@ -1849,16 +1885,31 @@ export default function Accounts() {
   const [authFilter, setAuthFilter] = useState<"all" | "oauth" | "api_key">(
     "all",
   );
-  const [sortKey, setSortKey] = useState<
-    | "requests"
-    | "today"
-    | "usage"
-    | "importTime"
-    | "schedulerPriority"
-    | "group"
-    | null
-  >(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // 排序按标签页记住（sessionStorage）：切换菜单再回来不丢，新标签页恢复默认。
+  const [initialSort] = useState(readAccountListSort);
+  const [sortKey, setSortKey] = useState<AccountListSortKey | null>(
+    initialSort.key,
+  );
+  const [sortDir, setSortDir] = useState<AccountListSortDir>(initialSort.dir);
+  useEffect(() => {
+    writeAccountListSort({ key: sortKey, dir: sortDir });
+  }, [sortKey, sortDir]);
+  const sortKeyLabel = (key: AccountListSortKey): string => {
+    switch (key) {
+      case "requests":
+        return t("accounts.requests");
+      case "today":
+        return t("accounts.todayStats");
+      case "usage":
+        return t("accounts.usage");
+      case "importTime":
+        return t("accounts.importTime");
+      case "schedulerPriority":
+        return t("accounts.schedulerPriorityColumn");
+      case "group":
+        return t("accounts.groupsLabel");
+    }
+  };
 
   const commitSearchQuery = useCallback((next: string) => {
     setDebouncedSearchQuery(next);
@@ -2998,6 +3049,8 @@ export default function Accounts() {
     [accounts],
   );
   const healthBars = pagedHealthBars;
+  // 自动刷新按节流 bump,账号 ID 不变时也能刷新健康条。
+  const [healthBarsReloadToken, setHealthBarsReloadToken] = useState(0);
 
   useEffect(() => {
     if (!accountPageIDsKey) {
@@ -3015,8 +3068,10 @@ export default function Accounts() {
         console.warn("account health bars load failed:", err);
       });
     return () => { cancelled = true; };
-  }, [accountPageIDsKey]);
+  }, [accountPageIDsKey, healthBarsReloadToken]);
 
+  // 最近一次拉取 page-stats 的时间,供自动刷新节流(任何来源触发都会更新)。
+  const pageStatsLoadedAtRef = useRef(0);
   useEffect(() => {
     if (!accountPageIDsKey) {
       setAccountPageStats({});
@@ -3024,6 +3079,7 @@ export default function Accounts() {
     }
     const controller = new AbortController();
     const ids = accountPageIDsKey.split(",").map(Number);
+    pageStatsLoadedAtRef.current = Date.now();
     void api.getAccountPageStats(ids, controller.signal)
       .then((response) => {
         if (controller.signal.aborted) return;
@@ -3036,6 +3092,29 @@ export default function Accounts() {
       });
     return () => controller.abort();
   }, [accountPageIDsKey, pageStatsReloadToken]);
+  // 自动刷新:列表静默重拉(不闪加载态、失败不弹错);page-stats 与健康条
+  // 是 usage_logs 聚合查询,按 ACCOUNT_PAGE_STATS_MIN_REFRESH_MS 节流。
+  const autoRefreshAccountPage = useCallback(async () => {
+    await reloadSilently();
+    const now = Date.now();
+    if (shouldRefreshPageStats(pageStatsLoadedAtRef.current, now)) {
+      pageStatsLoadedAtRef.current = now;
+      setPageStatsReloadToken((token) => token + 1);
+      setHealthBarsReloadToken((token) => token + 1);
+    }
+  }, [reloadSilently]);
+  const accountAutoRefresh = useMemo(
+    () => ({
+      onAutoRefresh: autoRefreshAccountPage,
+      intervals: ACCOUNT_AUTO_REFRESH_INTERVALS,
+      loadSeconds: readAccountAutoRefreshSeconds,
+      saveSeconds: (seconds: number) =>
+        writeAccountAutoRefreshSeconds(
+          normalizeAccountAutoRefreshSeconds(seconds),
+        ),
+    }),
+    [autoRefreshAccountPage],
+  );
   const officialCostReloadAttemptsRef = useRef(0);
   const missingOfficialCostKey = useMemo(
     () =>
@@ -6286,6 +6365,7 @@ export default function Accounts() {
             onRefresh={() => void reload()}
             hideTitle
             actionsBelow
+            autoRefresh={accountAutoRefresh}
             titleAdornment={
               <div className="flex items-center gap-2">
                 {providerSwitcher}
@@ -6964,6 +7044,41 @@ export default function Accounts() {
                     </span>
                   ) : null}
                 </Button>
+                {/* 排序会按标签页记住;表头与分组/优先级按钮只能切换方向,
+                    这里给出当前排序与一键恢复默认。卡片布局的排序下拉已含
+                    「默认排序」,只在它覆盖不到的分组/优先级排序时显示。 */}
+                {sortKey !== null &&
+                  (shouldRenderDesktopTable ||
+                    sortKey === "group" ||
+                    sortKey === "schedulerPriority") && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full min-w-0 border-primary/30 bg-primary/5 px-2 text-primary sm:w-auto"
+                    title={t("accounts.sortResetHint", {
+                      label: sortKeyLabel(sortKey),
+                    })}
+                    aria-label={t("accounts.sortResetHint", {
+                      label: sortKeyLabel(sortKey),
+                    })}
+                    onClick={() => {
+                      setSortKey(null);
+                      setSortDir("desc");
+                      setPage(1);
+                    }}
+                  >
+                    <span className="truncate">
+                      {t("accounts.sortCurrent", {
+                        label: sortKeyLabel(sortKey),
+                      })}
+                    </span>
+                    <span aria-hidden="true" className="shrink-0">
+                      {sortDir === "desc" ? "↓" : "↑"}
+                    </span>
+                    <X className="size-3.5 shrink-0" aria-hidden />
+                  </Button>
+                )}
                 {/* 卡片布局(自用模式/网格/移动端)没有可排序表头,这里补一个
                     紧凑排序入口,避免升级后"排序功能消失"(issue #493)。 */}
                 {!shouldRenderDesktopTable && (
@@ -7100,6 +7215,7 @@ export default function Accounts() {
                       resetTitle={t("accounts.columnReset")}
                       labels={{
                         sequence: t("accounts.sequence"),
+                        id: t("accounts.idColumn"),
                         email: t("accounts.email"),
                         plan: t("accounts.plan"),
                         subscription: t("accounts.subscriptionColumn"),
@@ -7463,6 +7579,11 @@ export default function Accounts() {
                         {visibleColumns.sequence && (
                           <TableHead className="text-[13px] font-semibold">
                             {t("accounts.sequence")}
+                          </TableHead>
+                        )}
+                        {visibleColumns.id && (
+                          <TableHead className="text-[13px] font-semibold">
+                            {t("accounts.idColumn")}
                           </TableHead>
                         )}
                         {visibleColumns.email && (
@@ -13798,6 +13919,9 @@ function AccountMobileCard({
           <label className="codex-account-card__selection">
             {showColumn("sequence") && (
               <span className="codex-account-card__sequence">#{sequence}</span>
+            )}
+            {showColumn("id") && (
+              <span className="codex-account-card__sequence">ID {account.id}</span>
             )}
             <input
               type="checkbox"

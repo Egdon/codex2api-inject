@@ -254,6 +254,9 @@
   },
   "common": {
     "success": "成功",
+    "autoRefresh": "自動重新整理",
+    "autoRefreshOff": "關閉自動重新整理",
+    "autoRefreshEvery": "每 {{seconds}} 秒",
     "failed": "失敗",
     "enabled": "開啟",
     "disabled": "關閉"
@@ -363,6 +366,11 @@
     "apiBalanceQueryUrl": "餘額查詢介面（可選）",
     "apiBalanceQueryUrlHint": "留空會自動嘗試 sub2api /v1/usage 與 New API 計費介面；也可填寫以 / 開頭的路徑或與 Base URL 同主機的完整 http/https URL。查詢時會攜帶 API Key，因此不允許跨主機位址。",
     "occupiedRequestsTooltip": "目前真實在途 {{active}}，佔用槽位 {{occupied}}（含 {{buffered}} 個會話緩衝槽）",
+    "idColumn": "ID",
+    "concurrencyLimitTooltip": "實際並發上限 {{limit}}",
+    "concurrencyLimitDegradedTooltip": "實際並發上限 {{limit}}（設定 {{base}}，已依健康度或額度保護暫時調降）",
+    "sortCurrent": "排序：{{label}}",
+    "sortResetHint": "目前依「{{label}}」排序（本分頁內記住），點擊恢復預設排序",
     "activeRequestsTooltip": "目前正在處理 {{count}} 個請求",
     "testConnection": "測試連線",
     "testConnectionTitle": "測試連線 - {{account}}",
