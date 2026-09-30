@@ -8,8 +8,26 @@ import {
   codexTestWindowKind,
   formatCodexTestMS,
   formatCodexTestReset,
+  isCodexVersionGatedError,
   isFinalCodexTestDiagnostics,
 } from "./codexConnectionTest.ts";
+
+test("version-gated upstream errors are recognised in any provided text", () => {
+  const failedEvent = JSON.stringify({
+    response: {
+      error: {
+        message: "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+        type: "invalid_request_error",
+      },
+      status: "failed",
+      status_code: 400,
+    },
+    type: "response.failed",
+  });
+  assert.equal(isCodexVersionGatedError(failedEvent), true);
+  assert.equal(isCodexVersionGatedError(undefined, `{"detail":"The 'gpt-5.5' model requires a newer version of Codex"}`), true);
+  assert.equal(isCodexVersionGatedError("usage_limit_reached", null, ""), false);
+});
 
 test("window kind follows the backend minute thresholds", () => {
   assert.equal(codexTestWindowKind({ window_minutes: 300 }), "5h");

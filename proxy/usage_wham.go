@@ -770,6 +770,11 @@ const (
 	whamWindow7dSeconds int64 = 604_800
 )
 
+// IsWhamLongWindowSeconds 判断窗口是否归入 7d 槽：plus/pro 的周窗，或 team 等 plan 的月窗。
+func IsWhamLongWindowSeconds(sec int64) bool {
+	return sec == whamWindow7dSeconds || auth.IsMonthlyWindowSeconds(sec)
+}
+
 // pickClassifiedWhamWindows 把 primary/secondary 两个窗口归类到 5h/7d 槽位。
 //
 // 分类策略：

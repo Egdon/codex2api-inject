@@ -151,3 +151,47 @@ for (const mode of ['single_machine_multi_window']) {
     assert.equal(formStateFromAccount({ ...detailedRow, codex_fingerprint_mode: mode }).fingerprintMode, mode);
   });
 }
+
+test("excel bps mode maps both persisted flags and only saves changes", () => {
+  const inherit = formStateFromAccount({ ...detailedRow });
+  assert.equal(inherit.excelBpsMode, "inherit");
+  let result = buildQuickConfigSavePayload(inherit, true);
+  assert.equal(result.ok, true);
+  assert.equal("openai_excel_bps" in result.payload, false);
+  assert.equal("openai_excel_bps_opt_out" in result.payload, false);
+
+  result = buildQuickConfigSavePayload({ ...inherit, excelBpsMode: "off" }, true);
+  assert.equal(result.payload.openai_excel_bps, false);
+  assert.equal(result.payload.openai_excel_bps_opt_out, true);
+
+  const forced = formStateFromAccount({ ...detailedRow, openai_excel_bps: true, openai_excel_bps_opt_out: true });
+  assert.equal(forced.excelBpsMode, "on");
+  result = buildQuickConfigSavePayload({ ...forced, excelBpsMode: "inherit" }, true);
+  assert.equal(result.payload.openai_excel_bps, false);
+  assert.equal(result.payload.openai_excel_bps_opt_out, false);
+
+  const excluded = formStateFromAccount({ ...detailedRow, openai_excel_bps_opt_out: true });
+  assert.equal(excluded.excelBpsMode, "off");
+  result = buildQuickConfigSavePayload({ ...excluded, excelBpsMode: "on" }, true);
+  assert.equal(result.payload.openai_excel_bps, true);
+  assert.equal(result.payload.openai_excel_bps_opt_out, false);
+});
+
+test("excel bps mode preserves old detailed rows but rejects explicitly non-OAuth accounts", () => {
+  assert.equal(formStateFromAccount(detailedRow).excelBpsMode, "inherit");
+  assert.equal(formStateFromAccount({ ...detailedRow, account_type: "oauth" }).excelBpsMode, "inherit");
+  const form = formStateFromAccount({ ...detailedRow, account_type: "api_key", openai_excel_bps: true });
+  assert.equal(form.excelBpsMode, null);
+  const result = buildQuickConfigSavePayload(form, true);
+  assert.equal("openai_excel_bps" in result.payload, false);
+  assert.equal("openai_excel_bps_opt_out" in result.payload, false);
+});
+
+test("excel bps mode is unavailable for non-Codex OAuth account types", () => {
+  for (const flag of ["openai_responses_api", "grok_api", "claude_api", "antigravity_api", "agent_identity"]) {
+    const form = formStateFromAccount({ ...detailedRow, [flag]: true });
+    assert.equal(form.excelBpsMode, null, flag);
+    const result = buildQuickConfigSavePayload(form, true);
+    assert.equal("openai_excel_bps" in result.payload, false, flag);
+  }
+});

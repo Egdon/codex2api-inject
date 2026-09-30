@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -27,6 +28,8 @@ type promptFilterBindingDDLDriver struct{}
 type promptFilterBindingDDLConn struct{}
 type legacySecretMigrationCaptureDriver struct{}
 type legacySecretMigrationCaptureConn struct{}
+type legacySecretMigrationCaptureTx struct{}
+type legacySecretMigrationCaptureColumns struct{}
 
 func (promptFilterBindingDDLDriver) Open(string) (driver.Conn, error) {
 	return promptFilterBindingDDLConn{}, nil
@@ -51,15 +54,30 @@ func (legacySecretMigrationCaptureConn) Prepare(string) (driver.Stmt, error) {
 }
 func (legacySecretMigrationCaptureConn) Close() error { return nil }
 func (legacySecretMigrationCaptureConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("not supported")
+	return legacySecretMigrationCaptureTx{}, nil
+}
+func (legacySecretMigrationCaptureTx) Commit() error                  { return nil }
+func (legacySecretMigrationCaptureTx) Rollback() error                { return nil }
+func (legacySecretMigrationCaptureColumns) Columns() []string         { return []string{"column_name"} }
+func (legacySecretMigrationCaptureColumns) Close() error              { return nil }
+func (legacySecretMigrationCaptureColumns) Next([]driver.Value) error { return io.EOF }
+func (legacySecretMigrationCaptureConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "information_schema.columns") && strings.Contains(query, "table_name='system_settings'") {
+		// A fresh PostgreSQL schema has no legacy BPS columns. Let the real
+		// pre-DDL transaction inspect provenance and commit its no-op marker.
+		return legacySecretMigrationCaptureColumns{}, nil
+	}
+	return nil, errors.New("unexpected migration capture query: " + query)
 }
 func (legacySecretMigrationCaptureConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
 	legacySecretMigrationQueryMu.Lock()
 	legacySecretMigrationQueries = append(legacySecretMigrationQueries, query)
-	queryCount := len(legacySecretMigrationQueries)
 	legacySecretMigrationQueryMu.Unlock()
-	if queryCount == 2 {
+	if strings.Contains(query, "CREATE TABLE IF NOT EXISTS accounts") {
 		return nil, errStopLegacySecretMigrationCapture
+	}
+	if strings.Contains(query, "INSERT INTO data_migrations") {
+		return driver.RowsAffected(1), nil
 	}
 	return driver.RowsAffected(0), nil
 }
@@ -337,10 +355,16 @@ func TestPostgresMigrationDropsLegacyPromptFilterSecrets(t *testing.T) {
 	legacySecretMigrationQueryMu.Lock()
 	queries := append([]string(nil), legacySecretMigrationQueries...)
 	legacySecretMigrationQueryMu.Unlock()
-	if len(queries) < 1 {
+	var query string
+	for _, statement := range queries {
+		if strings.Contains(statement, "CREATE TABLE IF NOT EXISTS accounts") {
+			query = statement
+			break
+		}
+	}
+	if query == "" {
 		t.Fatal("postgres migration did not execute schema SQL")
 	}
-	query := queries[0]
 	if !strings.Contains(query, "DROP TABLE IF EXISTS prompt_filter_secrets") {
 		t.Fatalf("postgres migration does not drop legacy secret table: %s", query)
 	}

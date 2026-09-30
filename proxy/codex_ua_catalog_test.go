@@ -36,6 +36,19 @@ func TestCodexUACatalogIntegrity(t *testing.T) {
 				t.Fatalf("%s: bad terminal entry %+v", kind, term)
 			}
 		}
+		for _, term := range spec.ReferenceTerminals {
+			// Codex 会把 [A-Za-z0-9-_./] 以外的字符替换成 "_",预设不能出现真实客户端发不出的 token。
+			if !validCodexUserAgentToken(term) || strings.IndexFunc(term, func(r rune) bool {
+				return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-_./", r))
+			}) >= 0 {
+				t.Fatalf("%s: bad reference terminal %q", kind, term)
+			}
+		}
+		for _, p := range spec.ReferencePlatforms {
+			if !validCodexUserAgentPlatformPart(p.OSName) || !validCodexUserAgentPlatformPart(p.OSVersion) || !validCodexUserAgentToken(p.Arch) {
+				t.Fatalf("%s: bad reference platform %+v", kind, p)
+			}
+		}
 		for i, pair := range spec.VersionPairs {
 			if pair.Weight <= 0 || !validCodexClientVersionString(pair.CLIVersion) || !validCodexUserAgentToken(pair.AppVersion) {
 				t.Fatalf("%s: bad version pair %+v", kind, pair)
@@ -279,11 +292,46 @@ func TestPreviewCodexUserAgentConfig(t *testing.T) {
 		}
 	}
 
+	ref, err := PreviewCodexUserAgentConfig(`{"client_kind":"codex-tui","terminal":"iTerm.app/3.7.3"}`, "", nil)
+	if err != nil || len(ref.Warnings) != 0 || !strings.Contains(ref.Persona.UserAgent, " iTerm.app/3.7.3 ") {
+		t.Fatalf("reference terminal preview = %+v, err %v", ref, err)
+	}
+	mac27, err := PreviewCodexUserAgentConfig(`{"client_kind":"codex-desktop","os_name":"Mac OS","os_version":"27.0.0","arch":"arm64"}`, "", nil)
+	if err != nil || len(mac27.Warnings) != 0 || !strings.Contains(mac27.Persona.UserAgent, " (Mac OS 27.0.0; arm64) ") {
+		t.Fatalf("reference platform preview = %+v, err %v", mac27, err)
+	}
+
 	empty, err := PreviewCodexUserAgentConfig(`{}`, "", nil)
 	if err != nil || empty.Persona == nil || !strings.HasPrefix(empty.Persona.UserAgent, "codex-tui/") {
 		t.Fatalf("empty config preview = %+v, err %v", empty, err)
 	}
 	if _, err := PreviewCodexUserAgentConfig(`{"client_kind":"nope"}`, "", nil); err == nil {
 		t.Fatal("invalid config must surface as error")
+	}
+}
+
+func TestCodexUserAgentCatalogReferenceTerminals(t *testing.T) {
+	view := CodexUserAgentCatalog()
+	for _, kind := range view.Kinds {
+		spec := codexUACatalog[CodexClientKind(kind.Kind)]
+		if kind.ReferenceTerminals == nil {
+			t.Fatalf("%s: reference_terminals must serialize as an array", kind.Kind)
+		}
+		for _, term := range kind.ReferenceTerminals {
+			if codexUAHasOption(spec.Terminals, term) {
+				t.Fatalf("%s: reference terminal %q duplicates an observed terminal", kind.Kind, term)
+			}
+		}
+		if len(kind.ReferencePlatforms) == 0 {
+			t.Fatalf("%s: Mac OS 27.0.0 reference platform missing", kind.Kind)
+		}
+		for _, p := range kind.ReferencePlatforms {
+			if codexUAHasPlatform(spec.Platforms, codexUAPlatform{OSName: p.OSName, OSVersion: p.OSVersion, Arch: p.Arch}) {
+				t.Fatalf("%s: reference platform %+v duplicates an observed platform", kind.Kind, p)
+			}
+		}
+	}
+	if len(codexUACatalog[CodexClientKindDesktop].ReferenceTerminals) != 0 {
+		t.Fatal("desktop app never runs inside a terminal; it must not offer terminal presets")
 	}
 }

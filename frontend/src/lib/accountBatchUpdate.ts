@@ -1,4 +1,5 @@
 import type { BatchUpdateAccountsRequest, CodexFingerprintMode } from "../types";
+import { excelBpsFlagsForMode } from './accountQuickConfig.ts';
 
 export interface BuildBatchMetadataUpdateOptions {
   ids: number[];
@@ -46,7 +47,7 @@ export function buildBatchMetadataUpdate({
   if (updateSchedulerPriority) payload.scheduler_priority = schedulerPriority;
   if (updateCodexFingerprintMode)
     payload.codex_fingerprint_mode = codexFingerprintMode ?? "off";
-  if (bpsMode === 'on' || bpsMode === 'off') payload.openai_excel_bps = bpsMode === 'on';
+  if (bpsMode && bpsMode !== 'unchanged') Object.assign(payload, excelBpsFlagsForMode(bpsMode));
   if (updateTimezone) payload.timezone = (timezone ?? "").trim();
   return payload;
 }

@@ -46,6 +46,7 @@ import Pagination from "../components/Pagination";
 import StateShell from "../components/StateShell";
 import StatusBadge from "../components/StatusBadge";
 import DaybreakBadge from "../components/DaybreakBadge";
+import { ExcelBpsStatus } from "../components/ExcelBpsBadge";
 import { useDataLoader, type LoadOptions } from "../hooks/useDataLoader";
 import {
   useConfirmDialog,
@@ -106,6 +107,21 @@ import {
   isLargePoolSortDisabled,
   resolveDisabledAccountSorts,
 } from "../lib/accountListSort";
+import {
+  formatAccountConcurrencyText,
+  resolveAccountConcurrencyDisplay,
+} from "../lib/accountConcurrency";
+import {
+  ACCOUNT_AUTO_REFRESH_INTERVALS,
+  normalizeAccountAutoRefreshSeconds,
+  readAccountAutoRefreshSeconds,
+  readAccountListSort,
+  shouldRefreshPageStats,
+  writeAccountAutoRefreshSeconds,
+  writeAccountListSort,
+  type AccountListSortDir,
+  type AccountListSortKey,
+} from "../lib/accountListPreferences";
 import {
   formatLongUsageWindowLabel,
   getAccountStatusBadgeStatus,
@@ -236,8 +252,8 @@ import Sub2APIImportModal from "../components/Sub2APIImportModal";
 import AccountQuotaDistributionChart from "../components/AccountQuotaDistributionChart";
 import AccountRateLimitRecoveryChart from "../components/AccountRateLimitRecoveryChart";
 import AccountGroupMultiSelect from "../components/AccountGroupMultiSelect";
-import { BPSAccountControl, BPSMasterContext, BPSPreferenceBadge } from '../components/BPSAccountControl';
-import { buildBPSAccountPatch, isBPSMasterEnabled, selectBPSBatchAccounts, type BPSBatchMode } from '../lib/bps';
+import { buildBPSAccountPatch, isBPSAccountEligible, selectBPSBatchAccounts, type BPSBatchMode } from '../lib/bps';
+import { excelBpsModeFromAccount, type ExcelBpsMode } from '../lib/accountQuickConfig';
 import AccountQuickConfigSheet from "../components/AccountQuickConfigSheet";
 import ChannelMonitorConfigDialog from "../components/ChannelMonitorConfigDialog";
 import { useImportGroupIds } from "../hooks/useImportGroupIds";
@@ -323,26 +339,41 @@ const formatMB = (bytes: number): string =>
 
 function AccountConcurrencyBadge({ account }: { account: AccountRow }) {
   const { t } = useTranslation();
-  const active = Math.max(0, account.active_requests ?? 0);
-  const occupied = Math.max(active, account.occupied_requests ?? active);
-  if (occupied === 0) return null;
+  const display = resolveAccountConcurrencyDisplay(account);
+  if (!display) return null;
 
-  const buffered = occupied - active;
-  const showOccupied = account.session_slot_buffer_enabled === true;
-  const title = showOccupied
-    ? t("accounts.occupiedRequestsTooltip", { active, occupied, buffered })
-    : t("accounts.activeRequestsTooltip", { count: active });
+  const { active, occupied, buffered, showOccupied, limit, base, degraded } =
+    display;
+  const titleLines = [
+    showOccupied
+      ? t("accounts.occupiedRequestsTooltip", { active, occupied, buffered })
+      : t("accounts.activeRequestsTooltip", { count: active }),
+  ];
+  if (limit !== null) {
+    titleLines.push(
+      degraded
+        ? t("accounts.concurrencyLimitDegradedTooltip", { limit, base })
+        : t("accounts.concurrencyLimitTooltip", { limit }),
+    );
+  }
 
   return (
     <span
       className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-blue-600 ring-1 ring-inset ring-blue-500/20 dark:bg-blue-950 dark:text-blue-400 dark:ring-blue-400/20"
-      title={title}
+      title={titleLines.join("\n")}
     >
       <span
         className="size-1.5 animate-pulse rounded-full bg-blue-500 dark:bg-blue-400"
         aria-hidden
       />
-      {showOccupied ? `${active}/${occupied}` : active}
+      {limit !== null && degraded ? (
+        <span>
+          {display.used} /{" "}
+          <span className="text-amber-600 dark:text-amber-400">{limit}</span>
+        </span>
+      ) : (
+        formatAccountConcurrencyText(display)
+      )}
     </span>
   );
 }
@@ -372,6 +403,7 @@ const ACCOUNT_EMAIL_DOMAIN_VISIBILITY_KEY =
 const ACCOUNT_VISIBLE_COLUMNS_KEY = "codex2api:accounts:visible-columns";
 const ACCOUNT_TABLE_COLUMNS = [
   "sequence",
+  "id",
   "email",
   "tags",
   "groups",
@@ -1249,6 +1281,11 @@ const AccountTableRow = memo(function AccountTableRow({
                                 {sequence}
                               </TableCell>
                             )}
+                            {visibleColumns.id && (
+                              <TableCell className="text-[13px] font-mono tabular-nums text-muted-foreground">
+                                {account.id}
+                              </TableCell>
+                            )}
                             {visibleColumns.email && (
                               <TableCell className="min-w-[220px] whitespace-normal text-[14px] text-muted-foreground">
                                 <div className="flex min-w-0 items-center gap-2.5">
@@ -1292,7 +1329,6 @@ const AccountTableRow = memo(function AccountTableRow({
                                       <Link2 className="size-3" />
                                     </button>
                                   </div>
-                                  <BPSPreferenceBadge account={account} />
                                   {account.effective_workspace_id && (
                                     <span
                                       className={cn(
@@ -1523,6 +1559,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                         <AccountStatusCountdown account={account} />
                                       )}
                                       <AccountConcurrencyBadge account={account} />
+                                      <ExcelBpsStatus account={account} />
                                     </div>
                                     <AccountHealthBar
                                       buckets={healthBuckets}
@@ -1853,16 +1890,33 @@ export default function Accounts() {
   const [authFilter, setAuthFilter] = useState<"all" | "oauth" | "api_key">(
     "all",
   );
-  const [sortKey, setSortKey] = useState<
-    | "requests"
-    | "today"
-    | "usage"
-    | "importTime"
-    | "schedulerPriority"
-    | "group"
-    | null
-  >(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // 排序按标签页记住（sessionStorage）：切换菜单再回来不丢，新标签页恢复默认。
+  const [initialSort] = useState(readAccountListSort);
+  const [sortKey, setSortKey] = useState<AccountListSortKey | null>(
+    initialSort.key,
+  );
+  const [sortDir, setSortDir] = useState<AccountListSortDir>(initialSort.dir);
+  useEffect(() => {
+    writeAccountListSort({ key: sortKey, dir: sortDir });
+  }, [sortKey, sortDir]);
+  const sortKeyLabel = (key: AccountListSortKey): string => {
+    switch (key) {
+      case "requests":
+        return t("accounts.requests");
+      case "today":
+        return t("accounts.todayStats");
+      case "usage":
+        return t("accounts.usage");
+      case "importTime":
+        return t("accounts.importTime");
+      case "id":
+        return t("accounts.idColumn");
+      case "schedulerPriority":
+        return t("accounts.schedulerPriorityColumn");
+      case "group":
+        return t("accounts.groupsLabel");
+    }
+  };
 
   const commitSearchQuery = useCallback((next: string) => {
     setDebouncedSearchQuery(next);
@@ -1927,8 +1981,7 @@ export default function Accounts() {
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
   const [detailAccountData, setDetailAccountData] = useState<AccountRow | null>(null);
   const detailNavigationTargetRef = useRef<"first" | "last" | null>(null);
-  const [bpsMasterEnabled, setBPSMasterEnabled] = useState<boolean | null>(null);
-  const [editBPSEnabled, setEditBPSEnabled] = useState(false);
+  const [editBPSMode, setEditBPSMode] = useState<ExcelBpsMode>('inherit');
   const [batchBPSMode, setBatchBPSMode] = useState<BPSBatchMode>('unchanged');
   const [editingAccount, setEditingAccount] = useState<AccountRow | null>(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
@@ -2761,7 +2814,6 @@ export default function Accounts() {
     void api.getSettings()
       .then((settings) => {
         if (cancelled) return;
-        setBPSMasterEnabled(isBPSMasterEnabled(settings.openai_excel_bps_enabled));
         setLazyMode(settings.lazy_mode);
         setAccountPortalEnabled(Boolean(settings.public_account_portal_page_enabled));
         setProxyPoolEnabled(Boolean(settings.proxy_pool_enabled));
@@ -2948,6 +3000,12 @@ export default function Accounts() {
   // 用量弹窗里手动刷新官方统计后 bump 一次,强制重拉本页 stats——
   // 否则官方成本胶囊要等翻页/改筛选才出现,看起来像刷新没生效。
   const [pageStatsReloadToken, setPageStatsReloadToken] = useState(0);
+  // 顶部刷新同时要重拉 page-stats。列表和 page-stats 是两条独立请求链,
+  // 账号 ID 不变时仅 reload 列表不会触发 page-stats effect,今日统计就会留在旧快照。
+  const refreshAccountPage = useCallback(async () => {
+    await reload();
+    setPageStatsReloadToken((token) => token + 1);
+  }, [reload]);
   const handleOfficialUsageRefreshed = useCallback(
     (patch?: { accountId: number; officialUsd: number | null }) => {
       if (patch) {
@@ -3006,6 +3064,8 @@ export default function Accounts() {
     [accounts],
   );
   const healthBars = pagedHealthBars;
+  // 自动刷新按节流 bump,账号 ID 不变时也能刷新健康条。
+  const [healthBarsReloadToken, setHealthBarsReloadToken] = useState(0);
 
   useEffect(() => {
     if (!accountPageIDsKey) {
@@ -3023,8 +3083,10 @@ export default function Accounts() {
         console.warn("account health bars load failed:", err);
       });
     return () => { cancelled = true; };
-  }, [accountPageIDsKey]);
+  }, [accountPageIDsKey, healthBarsReloadToken]);
 
+  // 最近一次拉取 page-stats 的时间,供自动刷新节流(任何来源触发都会更新)。
+  const pageStatsLoadedAtRef = useRef(0);
   useEffect(() => {
     if (!accountPageIDsKey) {
       setAccountPageStats({});
@@ -3032,6 +3094,7 @@ export default function Accounts() {
     }
     const controller = new AbortController();
     const ids = accountPageIDsKey.split(",").map(Number);
+    pageStatsLoadedAtRef.current = Date.now();
     void api.getAccountPageStats(ids, controller.signal)
       .then((response) => {
         if (controller.signal.aborted) return;
@@ -3044,6 +3107,29 @@ export default function Accounts() {
       });
     return () => controller.abort();
   }, [accountPageIDsKey, pageStatsReloadToken]);
+  // 自动刷新:列表静默重拉(不闪加载态、失败不弹错);page-stats 与健康条
+  // 是 usage_logs 聚合查询,按 ACCOUNT_PAGE_STATS_MIN_REFRESH_MS 节流。
+  const autoRefreshAccountPage = useCallback(async () => {
+    await reloadSilently();
+    const now = Date.now();
+    if (shouldRefreshPageStats(pageStatsLoadedAtRef.current, now)) {
+      pageStatsLoadedAtRef.current = now;
+      setPageStatsReloadToken((token) => token + 1);
+      setHealthBarsReloadToken((token) => token + 1);
+    }
+  }, [reloadSilently]);
+  const accountAutoRefresh = useMemo(
+    () => ({
+      onAutoRefresh: autoRefreshAccountPage,
+      intervals: ACCOUNT_AUTO_REFRESH_INTERVALS,
+      loadSeconds: readAccountAutoRefreshSeconds,
+      saveSeconds: (seconds: number) =>
+        writeAccountAutoRefreshSeconds(
+          normalizeAccountAutoRefreshSeconds(seconds),
+        ),
+    }),
+    [autoRefreshAccountPage],
+  );
   const officialCostReloadAttemptsRef = useRef(0);
   const missingOfficialCostKey = useMemo(
     () =>
@@ -5427,14 +5513,22 @@ export default function Accounts() {
           bpsMode: batchBPSMode,
           timezone: batchTimezone,
         });
-      const result = { success: 0, failed: 0 };
+      const result = { success: 0, failed: 0, unconfirmed: 0 };
+      const requestErrors: string[] = [];
       let unsupported = 0;
       let unknown = 0;
       const apply = async (payload: typeof metadata) => {
         if (!payload.ids?.length || Object.keys(payload).length === 1) return;
-        const response = await api.batchUpdateAccounts(payload);
-        result.success += response.success;
-        result.failed += response.failed;
+        try {
+          const response = await api.batchUpdateAccounts(payload);
+          result.success += response.success;
+          result.failed += response.failed;
+        } catch (error) {
+          if (batchBPSMode === 'unchanged') throw error;
+          // A lost response cannot establish whether the backend committed the writes.
+          result.unconfirmed += payload.ids.length;
+          requestErrors.push(getErrorMessage(error));
+        }
       };
       if (batchBPSMode === 'unchanged') {
         await apply(metadata);
@@ -5449,12 +5543,15 @@ export default function Accounts() {
         // Unrelated explicitly enabled metadata still applies to skipped BPS accounts.
         const sharedMetadata = { ...metadata };
         delete sharedMetadata.openai_excel_bps;
+        delete sharedMetadata.openai_excel_bps_opt_out;
         await apply({ ...sharedMetadata, ids: [...classified.unsupportedIDs, ...classified.unknownIDs] });
       }
+      const summary = batchBPSMode === 'unchanged'
+        ? t("accounts.batchMetaDone", { success: result.success, fail: result.failed })
+        : t('accounts.excelBpsBatchDone', { success: result.success, fail: result.failed, unconfirmed: result.unconfirmed, unsupported, unknown });
       showToast(
-        batchBPSMode === 'unchanged'
-          ? t("accounts.batchMetaDone", { success: result.success, fail: result.failed })
-          : t('bps.batchDone', { success: result.success, fail: result.failed, unsupported, unknown }),
+        requestErrors.length ? `${summary} ${requestErrors.join('; ')}` : summary,
+        result.failed || result.unconfirmed ? 'error' : 'success',
       );
       setShowBatchMetaEditor(false);
       await Promise.all([reload(), reloadGroups()]);
@@ -5693,7 +5790,7 @@ export default function Accounts() {
     );
     setEditProxyUrl(account.proxy_url ?? "");
     setEditCustomHeadersText(formatCustomHeadersText(account.custom_headers));
-    setEditBPSEnabled(account.openai_excel_bps ?? false);
+    setEditBPSMode(excelBpsModeFromAccount(account));
     setEditCodexFingerprintMode(account.codex_fingerprint_mode ?? "off");
     setEditTimezone(account.timezone ?? "");
     setEditTimezoneCustom(
@@ -5917,7 +6014,7 @@ export default function Accounts() {
           editSchedulerPriorityInput,
         ),
         custom_headers: parsedCustomHeaders.value,
-        ...buildBPSAccountPatch(editingAccount, editBPSEnabled),
+        ...buildBPSAccountPatch(editingAccount, editBPSMode),
         // 指纹收敛只作用于 Codex 官方出站路径，中转/Grok 账号不下发该字段。
         ...(isCodexOfficialAccount(editingAccount)
           ? {
@@ -6258,7 +6355,6 @@ export default function Accounts() {
   }
 
   return (
-    <BPSMasterContext.Provider value={bpsMasterEnabled}>
     <div
       key="provider-codex"
       className="relative @container/accounts animate-channel-switch-in"
@@ -6319,9 +6415,10 @@ export default function Accounts() {
           <PageHeader
             title={t("accounts.title")}
             description={t("accounts.description")}
-            onRefresh={() => void reload()}
+            onRefresh={() => void refreshAccountPage()}
             hideTitle
             actionsBelow
+            autoRefresh={accountAutoRefresh}
             titleAdornment={
               <div className="flex items-center gap-2">
                 {providerSwitcher}
@@ -7000,6 +7097,41 @@ export default function Accounts() {
                     </span>
                   ) : null}
                 </Button>
+                {/* 排序会按标签页记住;表头与分组/优先级按钮只能切换方向,
+                    这里给出当前排序与一键恢复默认。卡片布局的排序下拉已含
+                    「默认排序」,只在它覆盖不到的分组/优先级排序时显示。 */}
+                {sortKey !== null &&
+                  (shouldRenderDesktopTable ||
+                    sortKey === "group" ||
+                    sortKey === "schedulerPriority") && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full min-w-0 border-primary/30 bg-primary/5 px-2 text-primary sm:w-auto"
+                    title={t("accounts.sortResetHint", {
+                      label: sortKeyLabel(sortKey),
+                    })}
+                    aria-label={t("accounts.sortResetHint", {
+                      label: sortKeyLabel(sortKey),
+                    })}
+                    onClick={() => {
+                      setSortKey(null);
+                      setSortDir("desc");
+                      setPage(1);
+                    }}
+                  >
+                    <span className="truncate">
+                      {t("accounts.sortCurrent", {
+                        label: sortKeyLabel(sortKey),
+                      })}
+                    </span>
+                    <span aria-hidden="true" className="shrink-0">
+                      {sortDir === "desc" ? "↓" : "↑"}
+                    </span>
+                    <X className="size-3.5 shrink-0" aria-hidden />
+                  </Button>
+                )}
                 {/* 卡片布局(自用模式/网格/移动端)没有可排序表头,这里补一个
                     紧凑排序入口,避免升级后"排序功能消失"(issue #493)。 */}
                 {!shouldRenderDesktopTable && (
@@ -7011,7 +7143,8 @@ export default function Accounts() {
                         sortKey === "requests" ||
                         sortKey === "today" ||
                         sortKey === "usage" ||
-                        sortKey === "importTime"
+                        sortKey === "importTime" ||
+                        sortKey === "id"
                           ? sortKey
                           : "default"
                       }
@@ -7022,7 +7155,7 @@ export default function Accounts() {
                         if (value === "default") {
                           setSortKey(null);
                         } else {
-                          setSortKey(value as "requests" | "today" | "usage" | "importTime");
+                          setSortKey(value as "requests" | "today" | "usage" | "importTime" | "id");
                           setSortDir("desc");
                         }
                         setPage(1);
@@ -7033,12 +7166,14 @@ export default function Accounts() {
                         { value: "today", label: t("accounts.todayStats") },
                         { value: "usage", label: t("accounts.usage") },
                         { value: "importTime", label: t("accounts.importTime") },
+                        { value: "id", label: t("accounts.idColumn") },
                       ]}
                     />
                     {(sortKey === "requests" ||
                       sortKey === "today" ||
                       sortKey === "usage" ||
-                      sortKey === "importTime") && (
+                      sortKey === "importTime" ||
+                      sortKey === "id") && (
                       <Button
                         type="button"
                         variant="outline"
@@ -7136,6 +7271,7 @@ export default function Accounts() {
                       resetTitle={t("accounts.columnReset")}
                       labels={{
                         sequence: t("accounts.sequence"),
+                        id: t("accounts.idColumn"),
                         email: t("accounts.email"),
                         plan: t("accounts.plan"),
                         subscription: t("accounts.subscriptionColumn"),
@@ -7499,6 +7635,29 @@ export default function Accounts() {
                         {visibleColumns.sequence && (
                           <TableHead className="text-[13px] font-semibold">
                             {t("accounts.sequence")}
+                          </TableHead>
+                        )}
+                        {visibleColumns.id && (
+                          <TableHead
+                            className="text-[13px] font-semibold cursor-pointer select-none hover:text-primary transition-colors"
+                            onClick={() => {
+                              if (sortKey === "id") {
+                                setSortDir((d) =>
+                                  d === "asc" ? "desc" : "asc",
+                                );
+                              } else {
+                                setSortKey("id");
+                                setSortDir("desc");
+                              }
+                              setPage(1);
+                            }}
+                          >
+                            {t("accounts.idColumn")}{" "}
+                            {sortKey === "id"
+                              ? sortDir === "desc"
+                                ? "↓"
+                                : "↑"
+                              : ""}
                           </TableHead>
                         )}
                         {visibleColumns.email && (
@@ -10034,10 +10193,26 @@ export default function Accounts() {
                           })}
                         </div>
 
-                        <div className="md:col-span-2">
-                          <BPSAccountControl account={editingAccount} checked={editBPSEnabled}
-                            onCheckedChange={setEditBPSEnabled} disabled={editSubmitting} />
-                        </div>
+                        {isBPSAccountEligible(editingAccount) || editingAccount.openai_excel_bps || editingAccount.openai_excel_bps_opt_out ? (
+                          <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs md:col-span-2 space-y-2">
+                            <div className="text-sm font-semibold text-foreground">{t('accounts.excelBpsModeTitle')}</div>
+                            <p className="text-xs text-muted-foreground">{t('accounts.excelBpsModeHint')}</p>
+                            <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-border/70 bg-muted/30 p-1" role="radiogroup" aria-label={t('accounts.excelBpsModeTitle')}>
+                              {([
+                                { value: 'inherit', label: t('accounts.excelBpsModeInherit') },
+                                { value: 'on', label: t('accounts.excelBpsModeOn') },
+                                { value: 'off', label: t('accounts.excelBpsModeOff') },
+                              ] as const).map((option) => (
+                                <button key={option.value} type="button" role="radio" aria-checked={editBPSMode === option.value}
+                                  disabled={editSubmitting || (option.value !== 'off' && !isBPSAccountEligible(editingAccount))}
+                                  onClick={() => setEditBPSMode(option.value)}
+                                  className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${editBPSMode === option.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-background/60'}`}>
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
 
                         {/* 设备指纹收敛 */}
                         {isCodexOfficialAccount(editingAccount) ? (
@@ -10649,12 +10824,16 @@ export default function Accounts() {
                   </div>
 
                   <div className="rounded-xl border border-border p-4 md:col-span-2 space-y-2">
-                    <div className="text-sm font-semibold text-foreground">{t('bps.accountTitle')}</div>
-                    <p className="text-xs text-muted-foreground">{t('bps.batchHint')}</p>
-                    <Select value={batchBPSMode} aria-label={t('bps.accountTitle')} disabled={batchMetaSubmitting}
+                    <div className="text-sm font-semibold text-foreground">{t('accounts.excelBpsModeTitle')}</div>
+                    <p className="text-xs text-muted-foreground">{t('accounts.excelBpsBatchHint')}</p>
+                    <Select value={batchBPSMode} aria-label={t('accounts.excelBpsModeTitle')} disabled={batchMetaSubmitting}
                       onValueChange={(value) => setBatchBPSMode(value as BPSBatchMode)}
-                      options={(['unchanged', 'on', 'off'] as const).map((value) => ({ value, label: t(`bps.${value}`) }))} />
-                    {bpsMasterEnabled === false && <p className="text-xs text-muted-foreground">{t('bps.masterOffHint')}</p>}
+                      options={[
+                        { value: 'unchanged', label: t('accounts.excelBpsBatchUnchanged') },
+                        { value: 'inherit', label: t('accounts.excelBpsModeInherit') },
+                        { value: 'on', label: t('accounts.excelBpsModeOn') },
+                        { value: 'off', label: t('accounts.excelBpsModeOff') },
+                      ]} />
                   </div>
                   <div className="rounded-xl border border-border p-4 md:col-span-2">
                     <div className="flex items-start justify-between gap-3">
@@ -11346,7 +11525,6 @@ export default function Accounts() {
         </>
       </StateShell>
     </div>
-    </BPSMasterContext.Provider>
   );
 }
 
@@ -13835,7 +14013,6 @@ function AccountMobileCard({
                 <Link2 className="size-3" />
               </button>
             </div>
-            <BPSPreferenceBadge account={account} />
             {chatgptAccountId && (
               <div
                 className="codex-account-card__chatgpt-id"
@@ -13849,6 +14026,9 @@ function AccountMobileCard({
           <label className="codex-account-card__selection">
             {showColumn("sequence") && (
               <span className="codex-account-card__sequence">#{sequence}</span>
+            )}
+            {showColumn("id") && (
+              <span className="codex-account-card__sequence">ID {account.id}</span>
             )}
             <input
               type="checkbox"
@@ -13906,6 +14086,7 @@ function AccountMobileCard({
                     <AccountStatusCountdown account={account} />
                   )}
                   <AccountConcurrencyBadge account={account} />
+                  <ExcelBpsStatus account={account} variant="card" />
                 </>
               )}
               {isFullCard && resetCredits > 0 && (

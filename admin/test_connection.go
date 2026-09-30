@@ -184,8 +184,6 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 
 	// Attach once for all providers, including BPS and failed transports.
 	proxy.AttachUpstreamTraceForAdmin(c, h.store)
-	routeCtx, useBPS := proxy.WithExcelBPSRouteSnapshot(c.Request.Context(), account, testModel)
-	c.Request = c.Request.WithContext(routeCtx)
 	// 发送 test_start
 	sendTestEvent(c, testEvent{Type: "test_start", Model: testModel})
 
@@ -206,7 +204,7 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 
 	// 发送请求
 	start := time.Now()
-	if useBPS {
+	if account.IsExcelBPSAvailableForModel(testModel) {
 		// Keep account probes on the same Responses-shaped adapter as normal
 		// traffic. This also covers quality tests, whose HTML prompt is already
 		// represented as a standard Responses input item.
@@ -1641,6 +1639,14 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 	if status, msg, done := h.batchTestSkipDeactivatedWorkspace(acc); done {
 		return status, msg
 	}
+	if acc.IsExcelBPSEnabled() {
+		return h.runExcelBPSBatchTest(testCtx, acc)
+	}
+
+	if status, msg, done := h.batchTestWhamPreflight(testCtx, acc); done {
+		return status, msg
+	}
+
 	testModel, modelErr := h.connectionTestModelForAccount(testCtx, acc, "")
 	if modelErr != nil {
 		if msg, ok := batchTestContextFailure(testCtx, modelErr); ok {
@@ -1649,14 +1655,6 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 		h.store.MarkError(acc, "批量测试失败: "+modelErr.Error())
 		return "failed", modelErr.Error()
 	}
-	testCtx, useBPS := proxy.WithExcelBPSRouteSnapshot(testCtx, acc, testModel)
-	if useBPS {
-		return h.runExcelBPSBatchTest(testCtx, acc)
-	}
-	if status, msg, done := h.batchTestWhamPreflight(testCtx, acc); done {
-		return status, msg
-	}
-
 	securityCfg := h.store.ClaudeSecurityConfig()
 	payload := h.buildAccountConnectionTestPayload(testCtx, acc, testModel, securityCfg)
 	start := time.Now()

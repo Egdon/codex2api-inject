@@ -66,7 +66,7 @@ func (h *Harvester) publishAttempt(ctx context.Context, task scheduledCell, tick
 		if !task.bpsCaptured {
 			return false
 		}
-		applied, err := h.db.UpsertHarvestedTurnStateTicket(ctx, ticketRow(ticket), task.expectedGroups.BPSRevision)
+		applied, err := h.db.UpsertHarvestedTurnStateTicket(ctx, ticketRow(ticket), task.expectedGroups.BPSRevision, task.expectedGroups.GlobalBPSRevision)
 		if err != nil || !applied {
 			return false
 		}
@@ -248,14 +248,9 @@ func (h *Harvester) harvestCell(ctx context.Context, cfg Config, acc *auth.Accou
 	}
 }
 
-// Read the persisted opt-in snapshot, not the route eligibility/master switch.
+// Configured intent stays excluded despite temporary health/model pauses.
 func savedBPSFlag(acc *auth.Account) bool {
-	if acc == nil {
-		return false
-	}
-	acc.Mu().RLock()
-	defer acc.Mu().RUnlock()
-	return acc.ExcelBPSEnabled
+	return acc != nil && acc.IsExcelBPSConfigured()
 }
 
 func (h *Harvester) harvestBPSCurrent(ctx context.Context, acc *auth.Account, task scheduledCell) bool {
@@ -268,6 +263,6 @@ func (h *Harvester) harvestBPSCurrent(ctx context.Context, acc *auth.Account, ta
 	if !task.bpsCaptured || task.expectedGroups.BPSEnabled {
 		return false
 	}
-	current, err := h.db.HarvestBPSCurrent(ctx, task.accountID, task.expectedGroups.BPSRevision)
+	current, err := h.db.HarvestBPSCurrent(ctx, task.accountID, task.expectedGroups.BPSRevision, task.expectedGroups.GlobalBPSRevision)
 	return err == nil && current
 }

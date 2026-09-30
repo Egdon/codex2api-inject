@@ -1503,7 +1503,8 @@ const USAGE_TABLE_COLUMN_ORDER: readonly UsageTableColumn[] = USAGE_COLUMN_DEFIN
 
 const USAGE_VISIBLE_COLUMNS_KEY = 'codex2api:usage:visible-columns'
 const DEFAULT_USAGE_VISIBLE_COLUMNS: Record<UsageTableColumn, boolean> = {
-  upstreamSource: false,
+  // Missing preferences show the recorded source; an explicitly saved false stays hidden.
+  upstreamSource: true,
   status: true,
   error: true,
   model: true,

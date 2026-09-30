@@ -47,7 +47,7 @@ func snapshotUpstreamTrace(ctx context.Context) upstreamTraceSnapshot {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	result := upstreamTraceSnapshot{RequestID: a.requestID}
+	result := upstreamTraceSnapshot{RequestID: a.requestID, accountID: a.lastAccountID, UpstreamSource: a.lastSource}
 	if a.current != nil {
 		result.accountID = a.current.accountID
 		result.UpstreamSource = a.current.source
@@ -76,6 +76,10 @@ type upstreamTraceAudit struct {
 	requestID string
 	store     *auth.Store
 	current   *upstreamTraceAttempt
+	// Keep the last actual dispatch across preparation failures on fallback.
+	// Attempt details still reset so a local error cannot inherit stale IDs.
+	lastAccountID int64
+	lastSource    string
 }
 
 func upstreamTraceFromContext(ctx context.Context) *upstreamTraceAudit {
@@ -123,6 +127,8 @@ func resetUpstreamRequestTrace(c *gin.Context) {
 		a.mu.Lock()
 		a.requestID = NewUpstreamSessionUUID()
 		a.current = nil
+		a.lastAccountID = 0
+		a.lastSource = ""
 		a.mu.Unlock()
 	}
 }
@@ -159,8 +165,9 @@ func beginUpstreamTraceWithSource(ctx context.Context, account *auth.Account, pr
 	attempt := &upstreamTraceAttempt{accountID: account.ID(), source: source, proxy: label, injectedTurnState: CodexTurnStateInjectionFromContext(ctx)}
 	a.mu.Lock()
 	a.current = attempt
+	a.lastAccountID = attempt.accountID
+	a.lastSource = source
 	a.mu.Unlock()
-	rememberDispatchedResponseRoute(ctx)
 	header := account.GetUpstreamRequestIDHeader()
 	return func(resp *http.Response) {
 		if resp == nil || ws {

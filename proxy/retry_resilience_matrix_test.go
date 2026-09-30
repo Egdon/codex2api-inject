@@ -902,8 +902,15 @@ func TestResponsesCompactContinuousRetrySelectsResponseFailedEvent(t *testing.T)
 
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Background telemetry shares the Resin endpoint but is not an inference attempt.
+		if r.URL.Path == "/test/https/ab.chatgpt.com/otlp/v1/metrics" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/backend-api/codex/responses") {
-			t.Fatalf("upstream path = %q, want Resin path ending /backend-api/codex/responses", r.URL.Path)
+			t.Errorf("upstream path = %q, want Resin path ending /backend-api/codex/responses", r.URL.Path)
+			http.Error(w, "unexpected test upstream path", http.StatusNotFound)
+			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		if calls.Add(1) == 1 {

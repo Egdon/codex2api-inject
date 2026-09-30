@@ -9,6 +9,7 @@ import {
   Activity,
   CheckCircle,
   ChevronDown,
+  CircleAlert,
   Copy,
   Gauge,
   Loader2,
@@ -26,6 +27,7 @@ import {
   codexTestWindowKind,
   formatCodexTestMS,
   formatCodexTestReset,
+  isCodexVersionGatedError,
   isFinalCodexTestDiagnostics,
 } from "../lib/codexConnectionTest";
 import {
@@ -114,6 +116,12 @@ export default function TestConnectionModal({
   const [rawOpen, setRawOpen] = useState(false);
   const [detectorOpen, setDetectorOpen] = useState(false);
   const [testContent, setTestContent] = useState("hi");
+  // 跨重测保留:同步后自动重测仍被拒时,据此提示"已同步仍失败"而不是再次引导同步。
+  const [versionSync, setVersionSync] = useState<{
+    status: "idle" | "syncing" | "updated" | "latest" | "error";
+    cliVersion?: string;
+    error?: string;
+  }>({ status: "idle" });
   const abortRef = useRef<AbortController | null>(null);
   const outputEndRef = useRef<HTMLDivElement>(null);
   const settledRef = useRef(false);
@@ -281,6 +289,10 @@ export default function TestConnectionModal({
   }, [account.claude_api, account.model_mapping, account.models, isAntigravityAccount, isClaudeAccount, isOpenAIResponsesAccount]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    setVersionSync({ status: "idle" });
+  }, [selectedModel]);
 
   const startTest = () => {
     if (!modelOptionsReady || !selectedModel || !testContent.trim() || running) return;
@@ -458,6 +470,35 @@ export default function TestConnectionModal({
     }
   };
   const running = status === "connecting" || status === "streaming";
+  const versionGated =
+    isCodexOAuthAccount &&
+    status === "error" &&
+    isCodexVersionGatedError(errorMsg, diagnostics?.response_body);
+  const handleSyncClientVersions = async () => {
+    setVersionSync({ status: "syncing" });
+    try {
+      const result = await api.syncCodexClientVersions();
+      const cliVersion = result.cli.effective_version;
+      const sources = [result.cli, result.desktop_mac, result.desktop_windows, result.vscode];
+      if (sources.some((source) => source.updated)) {
+        setVersionSync({ status: "updated", cliVersion });
+        showToast(t("accounts.testVersionGateUpdated", { version: cliVersion }));
+        startTest();
+        return;
+      }
+      const errors = sources.map((source) => source.error).filter(Boolean);
+      setVersionSync(
+        errors.length > 0
+          ? { status: "error", cliVersion, error: errors.join("; ") }
+          : { status: "latest", cliVersion },
+      );
+    } catch (err: unknown) {
+      setVersionSync({
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
   const diagnosticsFinal = isFinalCodexTestDiagnostics(diagnostics);
   const handleCopyDiagnostics = async () => {
     try {
@@ -753,6 +794,42 @@ export default function TestConnectionModal({
             >
               {formattedErrorMsg}
             </pre>
+          </div>
+        )}
+
+        {versionGated && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+            <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="text-sm font-semibold">{t("accounts.testVersionGateTitle")}</div>
+              <p className="text-xs leading-relaxed">
+                {versionSync.status === "updated"
+                  ? t("accounts.testVersionGateStillRejected", { version: versionSync.cliVersion })
+                  : versionSync.status === "latest"
+                    ? t("accounts.testVersionGateLatest", { version: versionSync.cliVersion })
+                    : t("accounts.testVersionGateDesc")}
+              </p>
+              {versionSync.status === "error" && versionSync.error ? (
+                <p className="break-all text-xs leading-relaxed text-red-600 dark:text-red-400">
+                  {t("accounts.testVersionGateFailed", { error: versionSync.error })}
+                </p>
+              ) : null}
+              {versionSync.status === "idle" || versionSync.status === "syncing" || versionSync.status === "error" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="border-amber-300 bg-transparent text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                  disabled={versionSync.status === "syncing"}
+                  onClick={() => void handleSyncClientVersions()}
+                >
+                  <RefreshCw className={cn("size-3.5", versionSync.status === "syncing" && "animate-spin")} />
+                  {versionSync.status === "syncing"
+                    ? t("accounts.testVersionGateSyncing")
+                    : t("accounts.testVersionGateSync")}
+                </Button>
+              ) : null}
+            </div>
           </div>
         )}
 

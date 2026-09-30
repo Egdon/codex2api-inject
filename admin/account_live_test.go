@@ -19,6 +19,10 @@ func TestGetAccountLiveStateReturnsVisibleInflightCounts(t *testing.T) {
 	atomic.StoreInt64(&account.OccupiedRequests, 5)
 	store.AddAccount(account)
 	store.SetSessionSlotBufferEnabled(true)
+	// AddAccount recomputes scheduler state; pin the maintained caps afterwards
+	// so the endpoint is checked against a degraded (warm-style) limit.
+	account.BaseConcurrencyEffective = 50
+	account.DynamicConcurrencyLimit = 25
 	handler := &Handler{store: store}
 
 	recorder := httptest.NewRecorder()
@@ -41,6 +45,12 @@ func TestGetAccountLiveStateReturnsVisibleInflightCounts(t *testing.T) {
 	}
 	if got := response.Accounts["42"].OccupiedRequests; got != 5 {
 		t.Fatalf("occupied_requests = %d, want 5", got)
+	}
+	if got := response.Accounts["42"].DynamicConcurrencyLimit; got != 25 {
+		t.Fatalf("dynamic_concurrency_limit = %d, want 25", got)
+	}
+	if got := response.Accounts["42"].BaseConcurrencyEffective; got != 50 {
+		t.Fatalf("base_concurrency_effective = %d, want 50", got)
 	}
 	if !response.SessionSlotBufferEnabled {
 		t.Fatal("session slot buffer enabled state was not returned")
