@@ -56,6 +56,12 @@ func TestAsyncShadowAuxiliaryRealHandlerUpstreamMatrix(t *testing.T) {
 
 	var upstreamCalls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The shared Resin transport also carries background telemetry, which
+		// must not count as a model request in the guard assertion matrix.
+		if r.URL.Path == "/prompt-guard-handler-matrix/https/ab.chatgpt.com/otlp/v1/metrics" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		upstreamCalls.Add(1)
 		body := readUpstreamRequestBody(r)
 		if strings.Contains(r.URL.Path, "/responses/compact") {
