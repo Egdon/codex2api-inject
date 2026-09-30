@@ -7911,7 +7911,10 @@ func (db *DB) updateCredentialsSQLite(ctx context.Context, id int64, credentials
 		_, hasEmail := credentials["email"]
 		_, hasHeaders := credentials["custom_headers"]
 		_, hasBPS := credentials["openai_excel_bps"]
-		if grokIdentityUpdateKeysPresent(credentials) || hasEmail || hasHeaders || hasBPS {
+		_, hasBPSOptOut := credentials["openai_excel_bps_opt_out"]
+		// Both tri-state keys require the read/merge path so actual intent
+		// transitions atomically advance the legacy-harvester revision fence.
+		if grokIdentityUpdateKeysPresent(credentials) || hasEmail || hasHeaders || hasBPS || hasBPSOptOut {
 			return db.updateCredentialsReadMergeSQLiteTx(ctx, tx, id, credentials)
 		}
 

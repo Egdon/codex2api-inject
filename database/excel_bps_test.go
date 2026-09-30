@@ -440,24 +440,37 @@ func runExcelBPSDatabaseCases(t *testing.T, db *DB) {
 }
 
 func TestExcelBPSRevisionRollback(t *testing.T) {
-	db := newGrokStateTestDB(t)
-	ctx := context.Background()
-	id, err := db.InsertAccountWithCredentials(ctx, "bps-rollback", nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.UpdateCredentials(ctx, id, map[string]any{"openai_excel_bps": true}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.conn.ExecContext(ctx, `CREATE TRIGGER reject_bps_write BEFORE UPDATE OF bps_revision ON codex_astra_policy BEGIN SELECT RAISE(ABORT,'rejected'); END`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.UpdateCredentials(ctx, id, map[string]any{"openai_excel_bps": false, "expires_at": "changed"}); err == nil {
-		t.Fatal("expected rollback")
-	}
-	state, err := db.AstraPolicyExpectation(ctx, id)
-	if err != nil || !state.BPSEnabled || state.BPSRevision != 1 {
-		t.Fatalf("partial transition: %+v %v", state, err)
+	for _, key := range []string{"openai_excel_bps", "openai_excel_bps_opt_out"} {
+		t.Run(key, func(t *testing.T) {
+			db := newGrokStateTestDB(t)
+			ctx := context.Background()
+			id, err := db.InsertAccountWithCredentials(ctx, "bps-rollback", nil, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpdateCredentials(ctx, id, map[string]any{key: true}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.conn.ExecContext(ctx, `CREATE TRIGGER reject_bps_write BEFORE UPDATE OF bps_revision ON codex_astra_policy BEGIN SELECT RAISE(ABORT,'rejected'); END`); err != nil {
+				t.Fatal(err)
+			}
+			// Neither key may take the JSON-only fast path: a failed revision
+			// write must roll back its flag and every other credential update.
+			if err := db.UpdateCredentials(ctx, id, map[string]any{key: false, "expires_at": "changed"}); err == nil {
+				t.Fatal("expected rollback")
+			}
+			state, err := db.AstraPolicyExpectation(ctx, id)
+			if err != nil || state.BPSEnabled != (key == "openai_excel_bps") || state.BPSRevision != 1 {
+				t.Fatalf("partial transition: %+v %v", state, err)
+			}
+			row, err := db.GetAccountByID(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !row.GetCredentialBool(key) || row.Credentials["expires_at"] != nil {
+				t.Fatal("failed revision write changed credentials")
+			}
+		})
 	}
 }
 
