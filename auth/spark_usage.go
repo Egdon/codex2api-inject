@@ -8,7 +8,7 @@ import (
 )
 
 // IsSparkUsagePlan reports whether the account should show a spark usage bar.
-// prolite is folded into pro by NormalizePlanType.
+// prolite/promax are folded into pro by NormalizePlanType.
 func IsSparkUsagePlan(plan string) bool {
 	return NormalizePlanType(plan) == "pro"
 }

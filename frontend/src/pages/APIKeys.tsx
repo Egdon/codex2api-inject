@@ -3907,12 +3907,13 @@ function APIKeysSkeleton() {
   );
 }
 
-// 套餐选项与后端 cleanPlanAllow 白名单保持一致(pro 与 prolite 相互独立)。
+// 套餐选项与后端 cleanPlanAllow 白名单保持一致(pro 与 prolite/promax 相互独立)。
 // Codex / Grok 分列，自动渠道再合并；切渠道时只保留当前渠道能调度的套餐。
 const CODEX_PLAN_FILTER_OPTIONS = [
   "free",
   "plus",
   "pro",
+  "promax",
   "prolite",
   "team",
   "k12",

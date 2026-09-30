@@ -9672,7 +9672,7 @@ func stringSliceEqual(a, b []string) bool {
 	return true
 }
 
-// lowerTrimPlan 归一单个套餐名用于匹配:小写去空白。刻意不折叠 prolite→pro,
+// lowerTrimPlan 归一单个套餐名用于匹配:小写去空白。刻意不折叠 prolite/promax→pro,
 // 使 API Key 的套餐过滤与账号列表(Accounts 页)按原始 plan_type 精确匹配的语义一致。
 func lowerTrimPlan(plan string) string {
 	return strings.ToLower(strings.TrimSpace(plan))

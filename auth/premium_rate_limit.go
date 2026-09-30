@@ -17,15 +17,16 @@ const premium5hCooldownReason = "rate_limited_5h"
 const ResponsesRateLimitedCooldownReason = "responses_rate_limited"
 
 // NormalizePlanType canonicalizes a plan string for behavior-level comparisons.
-// OpenAI reports the $100 Pro tier as "prolite"; functionally it is a Pro plan
-// with a smaller usage cap, so we fold it into "pro" so that downstream plan
-// gating (premium 5h rate-limit, Spark routing, scheduler bias, 429 cooldown
-// window) treats it identically. The raw value is kept in Account.PlanType so
-// the UI can still render "prolite" for operator visibility.
+// OpenAI reports the $100 Pro tier as "prolite" and the top Pro tier as
+// "promax"; functionally both are Pro plans with a different usage cap, so we
+// fold them into "pro" so that downstream plan gating (premium 5h rate-limit,
+// Spark routing, scheduler bias, 429 cooldown window) treats them identically.
+// The raw value is kept in Account.PlanType so the UI can still render
+// "prolite"/"promax" for operator visibility.
 func NormalizePlanType(plan string) string {
 	normalized := strings.ToLower(strings.TrimSpace(plan))
 	switch normalized {
-	case "prolite", "pro_lite", "pro-lite":
+	case "prolite", "pro_lite", "pro-lite", "promax", "pro_max", "pro-max":
 		return "pro"
 	default:
 		return normalized

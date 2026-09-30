@@ -611,6 +611,7 @@ function normalizeNumber(value?: number | null): number {
 function normalizePlanType(planType?: string): string {
   const raw = (planType || '').toLowerCase().trim()
   if (raw === 'prolite' || raw === 'pro_lite' || raw === 'pro-lite') return 'pro'
+  if (raw === 'promax' || raw === 'pro_max' || raw === 'pro-max') return 'pro'
   return raw
 }
 

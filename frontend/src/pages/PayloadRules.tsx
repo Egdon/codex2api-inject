@@ -232,7 +232,7 @@ const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ult
 const SERVICE_TIER_OPTIONS = ['priority', 'fast', 'auto', 'default', 'flex', 'scale'].map((v) => ({ label: v, value: v }))
 
 // 账号套餐门候选值,与后端 knownAPIKeyPlanFilters / Key 限额的套餐白名单选项一致
-const ACCOUNT_PLAN_OPTIONS = ['free', 'plus', 'pro', 'prolite', 'team', 'k12', 'go']
+const ACCOUNT_PLAN_OPTIONS = ['free', 'plus', 'pro', 'promax', 'prolite', 'team', 'k12', 'go']
 
 interface KVRow {
   path: string

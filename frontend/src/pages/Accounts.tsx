@@ -1879,7 +1879,7 @@ export default function Accounts() {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const accountPageAbortRef = useRef<AbortController | null>(null);
   const [planFilter, setPlanFilter] = useState<
-    "all" | "pro" | "prolite" | "plus" | "team" | "k12" | "free"
+    "all" | "pro" | "promax" | "prolite" | "plus" | "team" | "k12" | "free"
   >("all");
   // 订阅状态筛选：按服务端算好的业务/同步状态过滤（到期临近、已过期、待确认等）。
   const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>("all");
@@ -6885,7 +6885,7 @@ export default function Accounts() {
               </div>
               <div className="flex max-w-full shrink-0 items-center gap-0.5 overflow-x-auto rounded-lg border border-border bg-muted/30 p-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {(
-                  ["all", "pro", "prolite", "plus", "team", "k12", "free"] as const
+                  ["all", "pro", "promax", "prolite", "plus", "team", "k12", "free"] as const
                 ).map((key) => (
                   <button
                     key={key}
@@ -6903,7 +6903,9 @@ export default function Accounts() {
                       ? t("accounts.filterAll")
                       : key === "prolite"
                         ? "ProLite"
-                        : key === "k12"
+                        : key === "promax"
+                          ? "ProMax"
+                          : key === "k12"
                           ? "K12"
                           : key.charAt(0).toUpperCase() + key.slice(1)}
                   </button>
@@ -7300,7 +7302,9 @@ export default function Accounts() {
                   >
                     {planFilter === "prolite"
                       ? "ProLite"
-                      : planFilter === "k12"
+                      : planFilter === "promax"
+                        ? "ProMax"
+                        : planFilter === "k12"
                         ? "K12"
                         : planFilter.charAt(0).toUpperCase() + planFilter.slice(1)}
                     <X className="size-3" />
@@ -11495,6 +11499,7 @@ function RecycleBinView({
   const [planFilter, setPlanFilter] = useState<
     | "all"
     | "pro"
+    | "promax"
     | "prolite"
     | "plus"
     | "team"
@@ -11991,6 +11996,7 @@ function RecycleBinView({
                   [
                     "all",
                     "pro",
+                    "promax",
                     "prolite",
                     "plus",
                     "team",
@@ -12015,7 +12021,9 @@ function RecycleBinView({
                         ? t("accounts.recycleBinPlanUnknown")
                         : key === "prolite"
                           ? "ProLite"
-                          : key === "k12"
+                          : key === "promax"
+                            ? "ProMax"
+                            : key === "k12"
                             ? "K12"
                             : key === "api"
                               ? "API"
@@ -12903,12 +12911,14 @@ function SchedulerPriorityBadge({ account }: { account: AccountRow }) {
   );
 }
 
-// OpenAI reports the $100 Pro tier as "prolite" — functionally a Pro plan with
-// a smaller usage cap. Keep behavioral comparisons (usage windows, plan filter,
+// OpenAI reports the $100 Pro tier as "prolite" and the top Pro tier as
+// "promax" — functionally Pro plans with a different usage cap. Keep behavioral comparisons (usage windows, plan filter,
 // scheduler bias) aligned with the Go side by folding it into "pro".
 function normalizePlanType(planType?: string): string {
   const raw = (planType || "").toLowerCase().trim();
   if (raw === "prolite" || raw === "pro_lite" || raw === "pro-lite")
+    return "pro";
+  if (raw === "promax" || raw === "pro_max" || raw === "pro-max")
     return "pro";
   return raw;
 }
@@ -13246,6 +13256,8 @@ function formatPlanLabel(planType?: string): string {
   const lower = raw.toLowerCase();
   if (lower === "prolite" || lower === "pro_lite" || lower === "pro-lite")
     return "ProLite";
+  if (lower === "promax" || lower === "pro_max" || lower === "pro-max")
+    return "ProMax";
   if (lower === "self_serve_business_prolite") return "team5x";
   return raw;
 }
@@ -13281,6 +13293,8 @@ function PlanBadge({
     pro: "bg-violet-100 text-violet-700 ring-violet-500/30 dark:bg-violet-500/20 dark:text-violet-300 dark:ring-violet-400/30",
     prolite:
       "bg-purple-50 text-purple-600 ring-purple-400/25 dark:bg-purple-500/15 dark:text-purple-300 dark:ring-purple-400/25",
+    promax:
+      "bg-fuchsia-100 text-fuchsia-700 ring-fuchsia-500/35 dark:bg-fuchsia-500/20 dark:text-fuchsia-300 dark:ring-fuchsia-400/35",
     plus: "bg-blue-100 text-blue-700 ring-blue-500/30 dark:bg-blue-500/20 dark:text-blue-300 dark:ring-blue-400/30",
     team: "bg-amber-100 text-amber-700 ring-amber-500/30 dark:bg-amber-500/20 dark:text-amber-300 dark:ring-amber-400/30",
     k12: "bg-emerald-100 text-emerald-700 ring-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300 dark:ring-emerald-400/30",
@@ -13291,7 +13305,9 @@ function PlanBadge({
   const key =
     normalized === "pro" && label === "ProLite"
       ? "prolite"
-      : label === "team5x"
+      : normalized === "pro" && label === "ProMax"
+        ? "promax"
+        : label === "team5x"
         ? "team"
         : normalized;
   const cls =

@@ -252,6 +252,10 @@ func TestNormalizePlanTypeFoldsProliteIntoPro(t *testing.T) {
 		" prolite ": "pro",
 		"pro_lite":  "pro",
 		"pro-lite":  "pro",
+		"promax":    "pro",
+		"ProMax":    "pro",
+		"pro_max":   "pro",
+		"pro-max":   "pro",
 		"pro":       "pro",
 		"plus":      "plus",
 		"free":      "free",
@@ -274,6 +278,16 @@ func TestProliteIsTreatedAsPremium5hPlan(t *testing.T) {
 	}
 	if got := defaultScoreBiasForPlan("prolite"); got != 50 {
 		t.Fatalf("defaultScoreBiasForPlan(prolite) = %d, want 50", got)
+	}
+}
+
+func TestPromaxIsTreatedAsPremium5hPlan(t *testing.T) {
+	acc := newPremium5hTestAccount("promax", time.Now().Add(30*time.Minute))
+	if !acc.IsPremium5hPlan() {
+		t.Fatal("promax should be recognized as a premium 5h plan")
+	}
+	if got := defaultScoreBiasForPlan("promax"); got != 50 {
+		t.Fatalf("defaultScoreBiasForPlan(promax) = %d, want 50", got)
 	}
 }
 

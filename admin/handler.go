@@ -9046,11 +9046,11 @@ func sanitizeImageGenerationPolicy(in database.APIKeyLimits) string {
 }
 
 // knownAPIKeyPlanFilters 是账号套餐白名单允许的取值集合。与前端 PlanMultiSelect 的
-// 选项、以及 Accounts 页的套餐筛选保持一致(按原始 plan_type 精确匹配,pro 与 prolite
+// 选项、以及 Accounts 页的套餐筛选保持一致(按原始 plan_type 精确匹配,pro 与 prolite/promax
 // 相互独立)。未知值在 cleanPlanAllow 中被丢弃,避免把打字错误写进过滤条件后导致该
 // Key 永远选不到账号。
 var knownAPIKeyPlanFilters = map[string]struct{}{
-	"free": {}, "plus": {}, "pro": {}, "prolite": {}, "team": {}, "k12": {}, "go": {},
+	"free": {}, "plus": {}, "pro": {}, "prolite": {}, "promax": {}, "team": {}, "k12": {}, "go": {},
 	// Grok live /user.subscriptionTier values. These labels are authorization
 	// inputs only when auth.Store has a fresh live fact; JWT/archive labels never
 	// satisfy plan_allow. "api" is the explicit xAI API-key channel plan.
