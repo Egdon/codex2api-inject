@@ -1549,7 +1549,7 @@ func intersectsInt64(a, b []int64) bool {
 
 func accountListSubscriptionPlan(plan string) bool {
 	switch strings.ToLower(strings.TrimSpace(plan)) {
-	case "pro", "prolite", "pro_lite", "pro-lite", "promax", "pro_max", "pro-max", "plus", "team", "teamplus", "k12", "edu", "education", "go":
+	case "pro", "prolite", "pro_lite", "pro-lite", "promax", "pro_max", "pro-max", "plus", "team", "teamplus", "k12", "edu", "edu_plus", "edu_pro", "education", "go":
 		return true
 	default:
 		return false

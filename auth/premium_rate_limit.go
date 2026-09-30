@@ -22,12 +22,18 @@ const ResponsesRateLimitedCooldownReason = "responses_rate_limited"
 // fold them into "pro" so that downstream plan gating (premium 5h rate-limit,
 // Spark routing, scheduler bias, 429 cooldown window) treats them identically.
 // The raw value is kept in Account.PlanType so the UI can still render
-// "prolite"/"promax" for operator visibility.
+// "prolite"/"promax" for operator visibility. Enterprise and Edu SKUs
+// (ent26, enterprise_cbp_*, edu_plus, edu_pro) fold into their family the
+// same way.
 func NormalizePlanType(plan string) string {
 	normalized := strings.ToLower(strings.TrimSpace(plan))
 	switch normalized {
 	case "prolite", "pro_lite", "pro-lite", "promax", "pro_max", "pro-max":
 		return "pro"
+	case "ent26", "enterprise_cbp_usage_based", "enterprise_cbp_automation":
+		return "enterprise"
+	case "edu_plus", "edu_pro":
+		return "edu"
 	default:
 		return normalized
 	}

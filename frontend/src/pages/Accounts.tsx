@@ -12920,6 +12920,13 @@ function normalizePlanType(planType?: string): string {
     return "pro";
   if (raw === "promax" || raw === "pro_max" || raw === "pro-max")
     return "pro";
+  if (
+    raw === "ent26" ||
+    raw === "enterprise_cbp_usage_based" ||
+    raw === "enterprise_cbp_automation"
+  )
+    return "enterprise";
+  if (raw === "edu_plus" || raw === "edu_pro") return "edu";
   return raw;
 }
 
@@ -13259,6 +13266,12 @@ function formatPlanLabel(planType?: string): string {
   if (lower === "promax" || lower === "pro_max" || lower === "pro-max")
     return "ProMax";
   if (lower === "self_serve_business_prolite") return "team5x";
+  if (lower === "self_serve_business_usage_based") return "Business";
+  if (lower === "ent26" || lower === "enterprise_cbp_usage_based")
+    return "Enterprise";
+  if (lower === "enterprise_cbp_automation") return "Enterprise (Automation)";
+  if (lower === "edu_plus") return "Edu Plus";
+  if (lower === "edu_pro") return "Edu Pro";
   return raw;
 }
 

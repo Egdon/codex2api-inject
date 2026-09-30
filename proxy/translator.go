@@ -3155,8 +3155,10 @@ func billingServiceTierCostRank(tier string) (int, bool) {
 		return 0, true
 	case "", "default", "standard", "auto", "scale":
 		return 1, true
-	case "priority", "ultrafast":
+	case "priority":
 		return 2, true
+	case "ultrafast":
+		return 3, true
 	default:
 		return 1, false
 	}

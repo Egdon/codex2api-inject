@@ -209,7 +209,7 @@ func TestGPT56VariantPricing(t *testing.T) {
 }
 
 // gpt-6-astra 在 Codex 中不收长上下文溢价：跨过 272K 后仍使用同一组单价。
-// standard $10/$50、缓存 $1；保留现有 fast 2× 倍率。
+// standard $10/$50、缓存 $1；保留现有 fast 2× 倍率，Ultrafast 按 standard 6×。
 // 变体后缀 / 思考强度别名同价；未知 gpt-6 变体按 astra 兜底，绝不能掉进默认价。
 func TestGPT6AstraPricing(t *testing.T) {
 	for _, model := range []string{"gpt-6-astra", "gpt-6-astra-high", "gpt-6-astra(xhigh)", "GPT-6-Astra", "gpt-6", "gpt-6-nova"} {
@@ -229,7 +229,7 @@ func TestGPT6AstraPricing(t *testing.T) {
 		for _, tier := range []struct {
 			name       string
 			multiplier float64
-		}{{"", 1}, {"fast", 2}, {"priority", 2}, {"flex", 0.5}} {
+		}{{"", 1}, {"fast", 2}, {"priority", 2}, {"flex", 0.5}, {"ultrafast", 6}} {
 			const cached, output = 100_000, 1_000
 			got := CalculateCostBreakdown(input, output, cached, "gpt-6-astra", tier.name)
 			if got.LongContext {
@@ -607,4 +607,17 @@ func TestCanonicalBillingModelKeyDaybreakAliases(t *testing.T) {
 	if got := CanonicalBillingModelKey("daybreak-blue"); got == "gpt-5.6-sol" {
 		t.Fatal("bare daybreak-blue must not resolve to gpt-5.6-sol")
 	}
+}
+
+// Astra 的 Ultrafast 倍率是模型自有的：管理员配的 priority 价只影响 Fast，
+// 自定义 standard 价仍作为 Ultrafast 6× 的基数。
+func TestGPT6AstraUltrafastIgnoresPriorityOverride(t *testing.T) {
+	withPricingOverrides(t, map[string]ModelPricingOverride{
+		"gpt-6-astra": {Input: 20, Output: 100, CachedInput: 2, InputPriority: 30, OutputPriority: 150},
+	})
+	got := CalculateCostBreakdown(1_000_000, 1_000_000, 0, "gpt-6-astra", "ultrafast")
+	assertFloatEqual(t, got.ServiceTierCostMultiplier, 6)
+	assertFloatEqual(t, got.TotalCost, (20+100)*6)
+	fast := CalculateCostBreakdown(1_000_000, 1_000_000, 0, "gpt-6-astra", "priority")
+	assertFloatEqual(t, fast.TotalCost, 30+150)
 }

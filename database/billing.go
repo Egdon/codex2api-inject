@@ -34,6 +34,11 @@ type ModelPricing struct {
 	// 留空用全局 longContextThreshold（OpenAI 的 272K）；xAI Grok 的分档线是 200K，
 	// 需在规则里单独声明，否则 200K~272K 区间会按短档少算。
 	LongContextThresholdTokens int
+
+	// UltrafastMultiplier 是模型自有的 Ultrafast 档倍率(相对 standard 价)。
+	// 大于 0 时 ultrafast 请求按 standard 价乘此倍率计费,不走 Fast 的 2× 与
+	// priority 价;为 0 的模型 ultrafast 继续跟随 Fast 策略。不参与价格覆盖。
+	UltrafastMultiplier float64
 }
 
 type modelPricingRule struct {
@@ -84,11 +89,13 @@ var (
 			LongCacheReadPricePerMToken: 0.02,
 		}},
 		// gpt-6-astra：Codex 长上下文例外，超过 272K 仍按 $10/$50、缓存 $1。
-		// 保留现有 fast（priority）2× 倍率，由 serviceTierCostMultiplier 兜底。
+		// 保留现有 fast（priority）2× 倍率，由 serviceTierCostMultiplier 兜底；
+		// Ultrafast 档按 standard 的 6× 计费。
 		{model: "gpt-6-astra", pricing: ModelPricing{
 			InputPricePerMToken:     10.0,
 			OutputPricePerMToken:    50.0,
 			CacheReadPricePerMToken: 1.0,
+			UltrafastMultiplier:     6.0,
 		}},
 		{model: "gpt-5.5", pricing: ModelPricing{
 			InputPricePerMToken:                 5.0,
@@ -418,7 +425,9 @@ func CalculateCostBreakdownWithCacheWrites(inputTokens, outputTokens, cachedToke
 	}
 
 	tierMultiplier := serviceTierCostMultiplier(serviceTier)
-	if usePriorityPricing(serviceTier, pricing) {
+	if normalizeServiceTier(serviceTier) == "ultrafast" && pricing.UltrafastMultiplier > 0 {
+		tierMultiplier = pricing.UltrafastMultiplier
+	} else if usePriorityPricing(serviceTier, pricing) {
 		tierMultiplier = 1
 		if isLong && pricing.LongInputPricePerMTokenPriority > 0 {
 			inputPrice = pricing.LongInputPricePerMTokenPriority
@@ -673,7 +682,8 @@ func usePriorityPricing(serviceTier string, pricing *ModelPricing) bool {
 func serviceTierCostMultiplier(serviceTier string) float64 {
 	switch normalizeServiceTier(serviceTier) {
 	// Ultrafast follows this gateway's Fast pricing policy, including custom
-	// priority prices. This is a billing default, not an official tariff claim.
+	// priority prices, unless the model declares its own UltrafastMultiplier.
+	// This is a billing default, not an official tariff claim.
 	case "priority", "fast", "ultrafast":
 		return 2.0
 	case "flex":
