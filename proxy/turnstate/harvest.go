@@ -219,9 +219,8 @@ func filterHarvestAccounts(accounts []*auth.Account, cfg Config) []*auth.Account
 		upstream := strings.TrimSpace(acc.UpstreamType)
 		accountID := strings.TrimSpace(acc.AccountID)
 		refresh := strings.TrimSpace(acc.RefreshToken)
-		bps := acc.ExcelBPSEnabled // saved flag, independent of master/eligibility
 		acc.Mu().RUnlock()
-		if bps {
+		if acc.IsExcelBPSConfigured() {
 			continue
 		}
 		if strings.EqualFold(upstream, auth.UpstreamGrok) ||

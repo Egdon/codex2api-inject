@@ -3931,6 +3931,12 @@ func TestGeneric402DoesNotLinkWorkspaceSiblings(t *testing.T) {
 	if sibling.RuntimeStatus() == "error" {
 		t.Fatal("generic 402 must not fan out to workspace siblings")
 	}
+	if got := account.RuntimeStatus(); got != "active" {
+		t.Fatalf("generic 402 runtime status = %q, want active", got)
+	}
+	if account.HasActiveCooldown() {
+		t.Fatal("generic 402 must not create an account cooldown")
+	}
 }
 
 // TestAgentRuntimeDeleted403MarksAccountBanned 验证代理请求会将 runtime 已删除的账号标记为封禁。

@@ -331,7 +331,7 @@ func parseAccountPageQuery(c *gin.Context) (accountPageQuery, error) {
 	validSorts := map[string]bool{
 		"": true, "requests": true, "today": true, "usage": true, "created_at": true, "updated_at": true,
 		"scheduler_priority": true, "group": true, "risk": true, "dispatch_score": true,
-		"latency_penalty": true, "unauthorized": true,
+		"latency_penalty": true, "unauthorized": true, "id": true,
 	}
 	if !validSorts[query.Sort] {
 		return query, fmt.Errorf("unsupported sort")
@@ -1305,6 +1305,8 @@ func sortAccountListItems(items []*accountListSnapshotItem, key, order string) {
 			cmp = compareFloat64(accountListUsageValue(a), accountListUsageValue(b))
 		case "created_at":
 			cmp = compareTime(a.Row.CreatedAt, b.Row.CreatedAt)
+		case "id":
+			cmp = compareInt64(a.ID, b.ID)
 		case "updated_at":
 			cmp = compareTime(a.Row.UpdatedAt, b.Row.UpdatedAt)
 		case "scheduler_priority":

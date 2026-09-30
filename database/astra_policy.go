@@ -161,13 +161,14 @@ func (db *DB) markManualPolicyGroups(ctx context.Context, tx *sql.Tx, ids []int6
 }
 
 type AstraPolicyExpectation struct {
-	BPSRevision     int64
-	BPSEnabled      bool
-	GroupIDs        []int64
-	Version         int64
-	Sequence        int64
-	Priority        int
-	PriorityVersion int64
+	GlobalBPSRevision int64
+	BPSRevision       int64
+	BPSEnabled        bool
+	GroupIDs          []int64
+	Version           int64
+	Sequence          int64
+	Priority          int
+	PriorityVersion   int64
 }
 
 func policyMembership(ctx context.Context, tx *sql.Tx, id int64) (AstraPolicyExpectation, error) {
@@ -200,6 +201,9 @@ func policyMembership(ctx context.Context, tx *sql.Tx, id int64) (AstraPolicyExp
 func (db *DB) AstraPolicyExpectation(ctx context.Context, id int64) (AstraPolicyExpectation, error) {
 	var out AstraPolicyExpectation
 	err := db.withWriteTx(ctx, func(tx *sql.Tx) error {
+		if err := db.lockHarvestSettings(ctx, tx); err != nil {
+			return err
+		}
 		if err := db.lockPolicyAccount(ctx, tx, id); err != nil {
 			return err
 		}
@@ -208,7 +212,7 @@ func (db *DB) AstraPolicyExpectation(ctx context.Context, id int64) (AstraPolicy
 		if err != nil {
 			return err
 		}
-		out.BPSRevision, out.BPSEnabled, err = harvestBPSState(ctx, tx, id)
+		out.BPSRevision, out.GlobalBPSRevision, out.BPSEnabled, err = harvestBPSState(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -299,11 +303,11 @@ func (db *DB) ApplyAstraPolicyOutcome(ctx context.Context, o AstraPolicyOutcome)
 		if err := db.lockPolicyAccount(ctx, tx, o.AccountID); err != nil {
 			return err
 		}
-		revision, enabled, err := harvestBPSState(ctx, tx, o.AccountID)
+		revision, globalRevision, enabled, err := harvestBPSState(ctx, tx, o.AccountID)
 		if err != nil {
 			return err
 		}
-		if enabled || o.Expected.BPSEnabled || revision != o.Expected.BPSRevision {
+		if enabled || o.Expected.BPSEnabled || revision != o.Expected.BPSRevision || globalRevision != o.Expected.GlobalBPSRevision {
 			return nil
 		}
 		current, err := policyMembership(ctx, tx, o.AccountID)

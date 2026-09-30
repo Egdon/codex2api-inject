@@ -109,6 +109,9 @@ func (db *DB) configureSQLite(ctx context.Context) error {
 }
 
 func (db *DB) migrateSQLite(ctx context.Context) error {
+	if err := db.migrateLegacyExcelBPS(ctx); err != nil {
+		return err
+	}
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS accounts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -342,6 +345,12 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 					codex_turn_state_account_mode TEXT DEFAULT 'auto',
 					codex_telemetry_timing_debug INTEGER DEFAULT 0,
 					codex_request_compression INTEGER DEFAULT 1,
+					codex_basispoints_enabled INTEGER DEFAULT 0,
+					codex_basispoints_models TEXT DEFAULT '',
+					codex_basispoints_403_pause_disabled INTEGER DEFAULT 0,
+					codex_basispoints_403_probe_interval_minutes INTEGER DEFAULT 1,
+					codex_basispoints_429_cooldown_seconds INTEGER DEFAULT 5,
+					codex_basispoints_cache_creation_as_input INTEGER DEFAULT 0,
 					codex_ws_weak_network_mode INTEGER DEFAULT 0,
 					codex_ws_keepalive_enabled INTEGER DEFAULT 0,
 					codex_ws_keepalive_interval_sec INTEGER DEFAULT 60,
@@ -670,6 +679,13 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "codex_turn_state_account_mode", "TEXT DEFAULT 'auto'"},
 		{"system_settings", "codex_telemetry_timing_debug", "INTEGER DEFAULT 0"},
 		{"system_settings", "codex_request_compression", "INTEGER DEFAULT 1"},
+		{"system_settings", "codex_basispoints_enabled", "INTEGER DEFAULT 0"},
+		{"system_settings", "codex_basispoints_revision", "BIGINT NOT NULL DEFAULT 0"},
+		{"system_settings", "codex_basispoints_models", "TEXT DEFAULT ''"},
+		{"system_settings", "codex_basispoints_403_pause_disabled", "INTEGER DEFAULT 0"},
+		{"system_settings", "codex_basispoints_403_probe_interval_minutes", "INTEGER DEFAULT 1"},
+		{"system_settings", "codex_basispoints_429_cooldown_seconds", "INTEGER DEFAULT 5"},
+		{"system_settings", "codex_basispoints_cache_creation_as_input", "INTEGER DEFAULT 0"},
 		{"system_settings", "codex_ws_weak_network_mode", "INTEGER DEFAULT 0"},
 		{"system_settings", "codex_ws_keepalive_enabled", "INTEGER DEFAULT 0"},
 		{"system_settings", "codex_ws_keepalive_interval_sec", "INTEGER DEFAULT 60"},

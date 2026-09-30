@@ -28,9 +28,10 @@ const (
 	dataMigrationGroupChannelV1 = "20260807_account_group_channel_v1"
 	// Claude 原生渠道上线后的存量回填：只修复能从当前账号、端点或模型可靠
 	// 识别的记录；不把混合分组或历史不明请求强行改写成 Claude。
-	dataMigrationClaudeProviderV1 = "20260829_claude_provider_backfill_v1"
-	dataMigrationDaybreakUsageV1  = "20260926_daybreak_usage_program_v1"
-	dataMigrationTimeout          = 5 * time.Minute
+	dataMigrationClaudeProviderV1   = "20260829_claude_provider_backfill_v1"
+	dataMigrationDaybreakUsageV1    = "20260926_daybreak_usage_program_v1"
+	dataMigrationExcelBPSTriStateV1 = "20260929_fork_excel_bps_tristate_v1"
+	dataMigrationTimeout            = 5 * time.Minute
 )
 
 type oauthIdentityDedupeAccount struct {

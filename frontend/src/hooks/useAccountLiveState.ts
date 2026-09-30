@@ -10,19 +10,31 @@ export function mergeAccountLiveState<T extends {
   active_requests?: number
   occupied_requests?: number
   session_slot_buffer_enabled?: boolean
+  dynamic_concurrency_limit?: number
+  base_concurrency_effective?: number
 }>(
   current: T[],
   response: AccountLiveStateResponse,
 ): T[] {
   let changed = false
   const next = current.map((account) => {
-    const activeRequests = response.accounts[String(account.id)]?.active_requests ?? 0
-    const occupiedRequests = response.accounts[String(account.id)]?.occupied_requests ?? activeRequests
+    const live = response.accounts[String(account.id)]
+    const activeRequests = live?.active_requests ?? 0
+    const occupiedRequests = live?.occupied_requests ?? activeRequests
     const slotBufferEnabled = response.session_slot_buffer_enabled === true
+    // Concurrency caps are optional so an older backend keeps the list values.
+    const dynamicLimit = typeof live?.dynamic_concurrency_limit === 'number'
+      ? live.dynamic_concurrency_limit
+      : account.dynamic_concurrency_limit
+    const baseConcurrency = typeof live?.base_concurrency_effective === 'number'
+      ? live.base_concurrency_effective
+      : account.base_concurrency_effective
     if (
       (account.active_requests ?? 0) === activeRequests &&
       (account.occupied_requests ?? account.active_requests ?? 0) === occupiedRequests &&
-      (account.session_slot_buffer_enabled ?? false) === slotBufferEnabled
+      (account.session_slot_buffer_enabled ?? false) === slotBufferEnabled &&
+      account.dynamic_concurrency_limit === dynamicLimit &&
+      account.base_concurrency_effective === baseConcurrency
     ) return account
     changed = true
     return {
@@ -30,6 +42,8 @@ export function mergeAccountLiveState<T extends {
       active_requests: activeRequests,
       occupied_requests: occupiedRequests,
       session_slot_buffer_enabled: slotBufferEnabled,
+      dynamic_concurrency_limit: dynamicLimit,
+      base_concurrency_effective: baseConcurrency,
     }
   })
   return changed ? next : current

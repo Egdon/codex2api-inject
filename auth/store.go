@@ -209,6 +209,8 @@ type Account struct {
 	CodexFingerprintMode string
 	// ExcelBPSEnabled is the durable opt-in for the Basispoints Responses adapter.
 	ExcelBPSEnabled bool
+	// ExcelBPSOptOut excludes the account from the global Basispoints default.
+	ExcelBPSOptOut bool
 	// Timezone 是账号绑定的 IANA 时区（credentials.timezone）。Codex 官方出站路径据此
 	// 改写请求体 environment_context 里的时区与日期（见 proxy/codex_environment_context.go）；
 	// 空 = 不绑定、透传下游值。Claude 账号沿用同一凭据键做身份标签。
@@ -5593,6 +5595,7 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		ResponsesUpstreamTransport:   responsesUpstreamTransport,
 		CodexFingerprintMode:         codexFingerprintMode,
 		ExcelBPSEnabled:              row.GetCredentialBool(ExcelBPSCredentialKey),
+		ExcelBPSOptOut:               row.GetCredentialBool(ExcelBPSOptOutCredentialKey),
 		Timezone:                     accountTimezone,
 		ClaudeFingerprintMode:        claudeFingerprintMode,
 		ClaudeAuthKind:               claudeAuthKind,

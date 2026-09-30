@@ -158,17 +158,20 @@ func (db *DB) UpsertTurnStateTicket(ctx context.Context, t TurnStateTicket) erro
 // transitions. The account lock is shared with credential writers; policy rows
 // are always accessed after that lock. Only a committed true result may enter
 // the in-memory cache. Manual ticket operations retain their existing API.
-func (db *DB) UpsertHarvestedTurnStateTicket(ctx context.Context, t TurnStateTicket, expectedRevision int64) (applied bool, err error) {
+func (db *DB) UpsertHarvestedTurnStateTicket(ctx context.Context, t TurnStateTicket, expectedRevision, expectedGlobalRevision int64) (applied bool, err error) {
 	err = db.withWriteTx(ctx, func(tx *sql.Tx) error {
 		applied = false
+		if err := db.lockHarvestSettings(ctx, tx); err != nil {
+			return err
+		}
 		if err := db.lockPolicyAccount(ctx, tx, t.AccountID); err != nil {
 			return err
 		}
-		revision, enabled, err := harvestBPSState(ctx, tx, t.AccountID)
+		revision, globalRevision, enabled, err := harvestBPSState(ctx, tx, t.AccountID)
 		if err != nil {
 			return err
 		}
-		if enabled || revision != expectedRevision {
+		if enabled || revision != expectedRevision || globalRevision != expectedGlobalRevision {
 			return nil
 		}
 		if err := db.upsertTurnStateTicket(ctx, tx, t); err != nil {

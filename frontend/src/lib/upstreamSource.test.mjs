@@ -35,9 +35,28 @@ test('usage list, count, error summary and range stats share the source query bu
   assert.match(usage, /upstream_source: filterUpstreamSource/)
   assert.match(usage, /setFilterUpstreamSource\(''\)/)
   assert.match(usage, /setFilterUpstreamSource\(value as UpstreamSourceFilter\); setPage\(1\)/)
-  assert.match(usage, /upstreamSource: false/)
+  assert.match(usage, /upstreamSource: true/)
+  assert.match(usage, /if \(key in parsed\) defaults\[key\] = Boolean\(parsed\[key\]\)/)
   assert.equal((usage.match(/source=\{log\.upstream_source\}/g) ?? []).length, 2)
   assert.match(usage, /const cumulativeRequests = stats\?\.total_requests \?\? 0/)
+})
+
+test('usage source defaults visible only when the stored preference is missing', () => {
+  const usage = source('../pages/Usage.tsx')
+  const defaultsBody = usage.match(/const DEFAULT_USAGE_VISIBLE_COLUMNS:[^=]+=(\s*\{[\s\S]*?\n\s*\})/)[1]
+  const initializer = usage.slice(usage.indexOf('function getInitialUsageVisibleColumns()'), usage.indexOf('\nfunction persistUsageVisibleColumns'))
+    .replace('function getInitialUsageVisibleColumns(): Record<UsageTableColumn, boolean>', 'function getInitialUsageVisibleColumns()')
+    .replace('const defaults: Record<UsageTableColumn, boolean>', 'const defaults')
+    .replace(' as UsageTableColumn[]', '')
+  const readPreference = (stored) => Function('localStorage', 'USAGE_VISIBLE_COLUMNS_KEY', `const DEFAULT_USAGE_VISIBLE_COLUMNS = ${defaultsBody}; ${initializer}; return getInitialUsageVisibleColumns();`)({ getItem: () => stored }, 'codex2api:usage:visible-columns')
+  assert.equal(readPreference(null).upstreamSource, true)
+  assert.equal(readPreference('{}').upstreamSource, true)
+  assert.equal(readPreference('{"model":false}').upstreamSource, true)
+  assert.equal(readPreference('{"upstreamSource":false}').upstreamSource, false)
+  assert.equal(readPreference('{"upstreamSource":true}').upstreamSource, true)
+  assert.equal(readPreference('invalid json').upstreamSource, true)
+  assert.equal(readPreference('{"upstreamSource":false,"model":false}').model, false)
+  assert.doesNotMatch(usage, /localStorage\.(removeItem|clear)\(/)
 })
 
 test('single, batch and HTML quality test badges use response fields, not preferences', () => {
@@ -54,16 +73,30 @@ test('BPS batch hydration uses one lite list, not current-page inference or cred
   const accounts = source('../pages/Accounts.tsx')
   assert.match(accounts, /api\.getAccounts\(\{ channel: 'codex', view: 'lite' \}\)/)
   assert.match(accounts, /selectBPSBatchAccounts\(ids, response\.accounts \?\? \[\], batchBPSMode\)/)
-  assert.match(accounts, /delete sharedMetadata\.openai_excel_bps/)
+  assert.match(accounts, /delete sharedMetadata\.openai_excel_bps;/)
+  assert.match(accounts, /delete sharedMetadata\.openai_excel_bps_opt_out;/)
+  assert.match(accounts, /ids: \[\.\.\.classified\.unsupportedIDs, \.\.\.classified\.unknownIDs\]/)
+  assert.match(accounts, /result\.unconfirmed \+= payload\.ids\.length/)
+  assert.match(accounts, /unconfirmed: result\.unconfirmed, unsupported, unknown/)
+  assert.doesNotMatch(accounts, /BPSMasterContext|openai_excel_bps_enabled/)
 })
 
 test('all core BPS and upstream source strings exist across supported locales', () => {
   const locales = ['en', 'zh', 'zh-TW'].map((locale) => JSON.parse(source(`../locales/${locale}.json`)))
-  for (const namespace of ['bps', 'upstreamSource']) {
+  for (const locale of locales) assert.equal('bps' in locale, false)
+  for (const namespace of ['upstreamSource']) {
     const keys = Object.keys(locales[0][namespace]).sort()
     for (const locale of locales) {
       assert.deepEqual(Object.keys(locale[namespace]).sort(), keys)
       for (const value of Object.values(locale[namespace])) assert.equal(typeof value, 'string')
+    }
+  }
+  const bpsKeys = Object.keys(locales[0].accounts).filter((key) => key.startsWith('excelBps')).sort()
+  for (const locale of locales) {
+    assert.deepEqual(Object.keys(locale.accounts).filter((key) => key.startsWith('excelBps')).sort(), bpsKeys)
+    for (const key of bpsKeys) assert.equal(typeof locale.accounts[key], 'string')
+    for (const count of ['success', 'fail', 'unconfirmed', 'unsupported', 'unknown']) {
+      assert.ok(locale.accounts.excelBpsBatchDone.includes(`{{${count}}}`), count)
     }
   }
 })

@@ -192,14 +192,6 @@ func main() {
 		log.Printf("已加载持久化业务设置: ProxyURL=%s, MaxConcurrency=%d, GlobalRPM=%d, PgMaxConns=%d, RedisPoolSize=%d",
 			settings.ProxyURL, settings.MaxConcurrency, settings.GlobalRPM, settings.PgMaxConns, settings.RedisPoolSize)
 	}
-	bpsCtx, bpsCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	bpsEnabled, bpsErr := db.GetOpenAIExcelBPSEnabled(bpsCtx)
-	bpsCancel()
-	if bpsErr != nil {
-		// Never silently re-enable an explicitly disabled route on a read failure.
-		log.Fatalf("加载 Basispoints 总开关失败: %v", bpsErr)
-	}
-	auth.SetOpenAIExcelBPSEnabled(bpsEnabled)
 	modelCooldownCtx, modelCooldownCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	modelCooldownSettings, modelCooldownErr := db.GetModelCooldownSettings(modelCooldownCtx)
 	modelCooldownCancel()
