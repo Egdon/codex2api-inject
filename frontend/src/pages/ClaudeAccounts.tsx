@@ -155,17 +155,15 @@ function formatCompactNum(v: unknown): string {
   return String(Math.round(n));
 }
 
-// pad2 两位补零。
-const pad2 = (n: number) => String(n).padStart(2, "0");
-
 // formatShortDateTime "MM-DD HH:mm" 短格式(与 Codex 卡片的 ⏱ 重置时间一致口径)。
 function formatShortDateTime(iso?: string): { label: string; title: string } | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return null;
+  const full = formatBeijingTime(iso);
   return {
-    label: `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
-    title: d.toLocaleString(),
+    label: full.slice(5, 16),
+    title: full,
   };
 }
 

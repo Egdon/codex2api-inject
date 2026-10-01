@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { getTimezone } from '../utils/time'
 import { useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -408,12 +409,12 @@ function formatDateTime(value?: string) {
   if (!value) return '—'
   const date = new Date(value)
   if (!Number.isFinite(date.getTime())) return '—'
-  return date.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: getTimezone() })
 }
 
 function formatTime(value?: string) {
   if (!value) return '—'
   const date = new Date(value)
   if (!Number.isFinite(date.getTime())) return '—'
-  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: getTimezone() })
 }

@@ -4372,7 +4372,7 @@
     "siteLogoCompressionFailed": "自动压缩失败，请换一张 600KB 以内的 PNG、JPG 或 SVG 图片",
     "siteLogoReadFailed": "读取图片失败",
     "timezone": "系统时区",
-    "timezoneDesc": "控制前端日期/时间显示。修改后页面自动刷新生效。",
+    "timezoneDesc": "控制当前浏览器中的日期/时间显示,默认跟随浏览器时区;与服务器 TZ(每日限额重置等后端时间)无关。修改后页面自动刷新生效。",
     "timezoneAuto": "自动（浏览器时区）",
     "showFullUsageNumbers": "显示完整用量数字",
     "showFullUsageNumbersDesc": "开启后 Usage 页与 API Keys「Token 用量」中的请求数、Tokens 等显示完整数字；关闭时使用 1.2K、3.4M 等紧凑单位。",

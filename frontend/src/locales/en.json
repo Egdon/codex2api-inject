@@ -4375,7 +4375,7 @@
     "siteLogoCompressionFailed": "Automatic compression failed. Please choose a PNG, JPG, or SVG under 600KB.",
     "siteLogoReadFailed": "Failed to read image",
     "timezone": "System Timezone",
-    "timezoneDesc": "Controls date/time display in the frontend. The page will reload automatically after changing.",
+    "timezoneDesc": "Controls how dates and times are displayed in this browser. Defaults to the browser timezone and is independent of the server TZ, which governs backend times such as daily-limit resets. The page reloads automatically after changing.",
     "timezoneAuto": "Auto (Browser Timezone)",
     "showFullUsageNumbers": "Show full usage numbers",
     "showFullUsageNumbersDesc": "When enabled, Usage and API Keys → Token Usage show full request/token counts. When disabled, they use compact units like 1.2K and 3.4M.",
