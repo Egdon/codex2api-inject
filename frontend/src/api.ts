@@ -1522,13 +1522,7 @@ export const api = {
       updated: boolean
     }>('/codex-cli-version/sync', { method: 'POST' }),
   syncCodexClientVersions: () =>
-    request<Record<'cli' | 'desktop_mac' | 'desktop_windows' | 'vscode', {
-      fetched_version?: string
-      synced_version?: string
-      effective_version: string
-      updated: boolean
-      error?: string
-    }>>('/codex-client-versions/sync', { method: 'POST' }),
+    request<Record<'cli' | 'desktop_mac' | 'desktop_windows' | 'vscode', import('./types').CodexClientVersionSyncResult>>('/codex-client-versions/sync', { method: 'POST' }),
   listModelPricing: () =>
     request<{
       models: Array<{
