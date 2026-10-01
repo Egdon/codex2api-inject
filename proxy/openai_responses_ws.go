@@ -70,11 +70,29 @@ func prepareOpenAIResponsesWebsocketBody(body []byte) []byte {
 }
 
 func openAIResponsesWebsocketHeaders(ctx context.Context, account *auth.Account, apiKey, endpoint string, downstream http.Header) http.Header {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		req, _ = http.NewRequestWithContext(ctx, http.MethodGet, "https://api.openai.com/v1/responses", nil)
+	headers, _ := openAIResponsesWebsocketHeadersChecked(openAIResponsesWSHeaderInput{ctx: ctx, account: account, apiKey: apiKey, endpoint: endpoint, downstream: downstream})
+	return headers
+}
+
+type openAIResponsesWSHeaderInput struct {
+	ctx        context.Context
+	account    *auth.Account
+	apiKey     string
+	endpoint   string
+	downstream http.Header
+}
+
+func openAIResponsesWebsocketHeadersChecked(input openAIResponsesWSHeaderInput) (http.Header, error) {
+	if input.ctx == nil {
+		input.ctx = context.Background()
 	}
-	applyOpenAIResponsesRequestHeaders(req, account, apiKey, downstream)
+	req, err := http.NewRequestWithContext(input.ctx, http.MethodGet, input.endpoint, nil)
+	if err != nil {
+		req, _ = http.NewRequestWithContext(input.ctx, http.MethodGet, "https://api.openai.com/v1/responses", nil)
+	}
+	if err := applyOpenAIResponsesRequestHeaders(req, input.account, input.apiKey, input.downstream); err != nil {
+		return nil, err
+	}
 	headers := req.Header.Clone()
 	for name := range headers {
 		if openAIResponsesWSHopHeader(name) {
@@ -82,9 +100,9 @@ func openAIResponsesWebsocketHeaders(ctx context.Context, account *auth.Account,
 		}
 	}
 	// 握手鉴权固定用账号 API Key。自定义头不能把它换成别的凭据，也不能拿掉 beta 头。
-	headers.Set("Authorization", "Bearer "+apiKey)
+	headers.Set("Authorization", "Bearer "+input.apiKey)
 	headers.Set("OpenAI-Beta", openAIResponsesWebsocketBetaHeader)
-	return headers
+	return headers, nil
 }
 
 func openAIResponsesWSHopHeader(name string) bool {
@@ -108,7 +126,10 @@ func executeOpenAIResponsesWebsocket(ctx context.Context, account *auth.Account,
 		return nil, ErrUpstream(0, "OpenAI Responses WebSocket 地址无效", err)
 	}
 	endpoint := auth.OpenAIResponsesEndpoint(baseURL, "/v1/responses")
-	headers := openAIResponsesWebsocketHeaders(ctx, account, apiKey, endpoint, downstream)
+	headers, err := openAIResponsesWebsocketHeadersChecked(openAIResponsesWSHeaderInput{ctx: ctx, account: account, apiKey: apiKey, endpoint: endpoint, downstream: downstream})
+	if err != nil {
+		return nil, err
+	}
 	body := prepareOpenAIResponsesWebsocketBody(requestBody)
 	record := beginUpstreamTrace(ctx, account, proxyURL, true)
 	resp, err := openAIResponsesWebsocketPool.roundTrip(ctx, openAIResponsesWSSpec{

@@ -150,12 +150,16 @@ func ForwardCodexAlphaSearch(ctx context.Context, account *auth.Account, proxyUR
 	if deviceCfg == nil {
 		deviceCfg = &DeviceProfileConfig{StabilizeDeviceProfile: false}
 	}
-	userAgent, version := ResolveCodexOutboundClientHeaders(account, apiKey, deviceCfg, downstreamHeaders)
+	identity, err := ResolveCodexOutboundClientIdentity(CodexClientIdentityInput{Account: account, APIKey: apiKey, DeviceConfig: deviceCfg, Headers: downstreamHeaders})
+	if err != nil {
+		return nil, err
+	}
+	userAgent, version := identity.UserAgent, identity.Version
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Originator", Originator)
+	req.Header.Set("Originator", CodexOriginatorForGeneratedUserAgent(userAgent))
 	if version != "" {
 		req.Header.Set("Version", version)
 	}

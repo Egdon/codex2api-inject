@@ -742,7 +742,9 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		}
 
 		// ==================== 请求头（伪装 Codex CLI） ====================
-		applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers)
+		if err := applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers); err != nil {
+			return nil, err
+		}
 		// Content-Encoding 在通用头装配之后设置：真实客户端也是在编码完成时才补这个头
 		// （codex-rs/http-client/src/request.rs prepare_encoded_json），且账号自定义头
 		// 不该有能力声明一个与实际字节不符的编码。
@@ -857,7 +859,9 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 		if err != nil {
 			return nil, ErrInternalError("创建请求失败", err)
 		}
-		applyOpenAIResponsesRequestHeaders(req, account, apiKey, headers)
+		if err := applyOpenAIResponsesRequestHeaders(req, account, apiKey, headers); err != nil {
+			return nil, err
+		}
 		if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(body, "model").String()); err != nil {
 			return nil, err
 		}
@@ -934,7 +938,9 @@ func ExecuteOpenAIResponsesBillingRequest(ctx context.Context, account *auth.Acc
 	if err != nil {
 		return nil, ErrInternalError("创建倍率探测请求失败", err)
 	}
-	applyOpenAIResponsesRequestHeaders(req, account, apiKey, nil)
+	if err := applyOpenAIResponsesRequestHeaders(req, account, apiKey, nil); err != nil {
+		return nil, err
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Del("Content-Type")
 
@@ -1042,7 +1048,9 @@ func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Acc
 	if err != nil {
 		return nil, ErrInternalError("创建请求失败", err)
 	}
-	applyOpenAIResponsesRequestHeaders(req, account, apiKey, headers)
+	if err := applyOpenAIResponsesRequestHeaders(req, account, apiKey, headers); err != nil {
+		return nil, err
+	}
 
 	if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(requestBody, "model").String()); err != nil {
 		return nil, err
@@ -1129,7 +1137,9 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 		return nil, ErrInternalError("创建请求失败", err)
 	}
 
-	applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers)
+	if err := applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers); err != nil {
+		return nil, err
+	}
 	// routing hint 由网关按最终出站 body 合成，须在账号自定义头之后设置。
 	ApplyCodexRoutingHint(req.Header, account, requestBody)
 
@@ -1151,10 +1161,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 }
 
 func codexVersionFromProfile(profile deviceProfile, fallback string) string {
-	if profile.HasVersion {
-		return fmt.Sprintf("%d.%d.%d", profile.Version.major, profile.Version.minor, profile.Version.patch)
-	}
-	return strings.TrimSpace(fallback)
+	return codexVersionFromUserAgent(profile.UserAgent, fallback)
 }
 
 func codexVersionFromUserAgent(userAgent, fallback string) string {
@@ -1164,41 +1171,9 @@ func codexVersionFromUserAgent(userAgent, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-func codexVersionFromString(raw string) (cliVersion, bool) {
-	raw = strings.TrimSpace(strings.TrimPrefix(raw, "v"))
-	if raw == "" {
-		return cliVersion{}, false
-	}
-	return parseCodexClientVersion("codex_cli_rs/" + raw)
-}
-
 func generatedCodexClientHeaders(account *auth.Account, settings RuntimeSettings) (string, string) {
-	versionFloor := ""
-	if settings.ClientCompatMode == ClientCompatModeAuto {
-		versionFloor = settings.CodexMinCLIVersion
-	}
-	accountID := int64(0)
-	if account != nil {
-		accountID = account.ID()
-	}
-	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, accountID, versionFloor); ok {
-		return userAgent, version
-	}
-	profile := ProfileForAccount(accountID)
-	userAgent := strings.TrimSpace(profile.UserAgent)
-	version := strings.TrimSpace(profile.Version)
-	if userAgent == "" {
-		userAgent = defaultCodexCLIUserAgent
-	}
-	if version == "" {
-		version = codexVersionFromUserAgent(userAgent, latestCodexCLIVersion)
-	}
-	// 画像池钉的是内置常量版本；抬升到当前生效的最新版（含远端同步值），
-	// 再叠加显式的最低版本门槛。
-	version = effectiveCodexClientVersion(version, effectiveLatestCodexCLIVersion())
-	version = effectiveCodexClientVersion(version, versionFloor)
-	userAgent = replaceCodexUserAgentVersion(userAgent, version)
-	return userAgent, version
+	ua, version, _ := generatedCodexClientHeadersChecked(account, settings)
+	return ua, version
 }
 
 func shouldGenerateCodexClientHeaders(settings RuntimeSettings, userAgent, originator string) bool {
@@ -1206,55 +1181,21 @@ func shouldGenerateCodexClientHeaders(settings RuntimeSettings, userAgent, origi
 	case ClientCompatModeForce:
 		return true
 	case ClientCompatModeAuto:
-		version, ok := parseCodexClientVersion(userAgent)
+		_, version, ok := parseCodexClientVersionDetails(userAgent)
 		if !ok {
 			return false
 		}
-		minVersion, ok := codexVersionFromString(settings.CodexMinCLIVersion)
-		if !ok {
-			minVersion, _ = codexVersionFromString(defaultCodexMinCLIVersion)
-		}
-		return IsCodexStrictOfficialClientByHeaders(userAgent, originator) && version.Compare(minVersion) < 0
+		floor := firstNonEmptyString(settings.CodexMinCLIVersion, defaultCodexMinCLIVersion)
+		cmp, valid := compareCodexClientVersions(version, floor)
+		return valid && cmp < 0 && IsCodexStrictOfficialClientByHeaders(userAgent, originator)
 	default:
 		return false
 	}
 }
 
-func resolveCodexOutboundClientHeaders(account *auth.Account, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) (userAgent, version string, usedGenerated bool) {
-	if IsDeviceProfileStabilizationEnabled(deviceCfg) {
-		profile := ResolveDeviceProfile(account, apiKey, downstreamHeaders, deviceCfg)
-		userAgent = strings.TrimSpace(profile.UserAgent)
-		version = codexVersionFromProfile(profile, strings.TrimSpace(deviceCfg.PackageVersion))
-		if userAgent == "" {
-			userAgent = defaultCodexCLIUserAgent
-		}
-		return userAgent, strings.TrimSpace(version), false
-	}
-
-	userAgent = strings.TrimSpace(downstreamHeaders.Get("User-Agent"))
-	originator := strings.TrimSpace(downstreamHeaders.Get("Originator"))
-	settings := CurrentRuntimeSettings()
-	if shouldGenerateCodexClientHeaders(settings, userAgent, originator) {
-		userAgent, version = generatedCodexClientHeaders(account, settings)
-		return userAgent, version, true
-	}
-	if IsCodexOfficialClientByHeaders(userAgent, originator) && userAgent != "" {
-		version = firstNonEmptyHeader(downstreamHeaders, "Version", codexVersionFromUserAgent(userAgent, latestCodexCLIVersion))
-		return userAgent, version, false
-	}
-	versionFloor := ""
-	if settings.ClientCompatMode == ClientCompatModeAuto {
-		versionFloor = settings.CodexMinCLIVersion
-	}
-	configAccountID := int64(0)
-	if account != nil {
-		configAccountID = account.ID()
-	}
-	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, configAccountID, versionFloor); ok {
-		return userAgent, version, true
-	}
-	effectiveVersion := effectiveLatestCodexCLIVersion()
-	return replaceCodexUserAgentVersion(defaultCodexCLIUserAgent, effectiveVersion), effectiveVersion, false
+func resolveCodexOutboundClientHeaders(account *auth.Account, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) (string, string, bool) {
+	identity, _ := ResolveCodexOutboundClientIdentity(CodexClientIdentityInput{Account: account, APIKey: apiKey, DeviceConfig: deviceCfg, Headers: downstreamHeaders})
+	return identity.UserAgent, identity.Version, identity.Generated
 }
 
 func ResolveCodexOutboundClientHeaders(account *auth.Account, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) (userAgent, version string) {
@@ -1290,9 +1231,9 @@ func applyAccountCustomHeaders(req *http.Request, account *auth.Account) {
 	}
 }
 
-func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessToken, cacheKey, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) {
+func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessToken, cacheKey, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) error {
 	if req == nil {
-		return
+		return nil
 	}
 
 	accountID := ""
@@ -1302,7 +1243,11 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 		account.Mu().RUnlock()
 	}
 
-	userAgent, version, usedGeneratedHeaders := resolveCodexOutboundClientHeaders(account, apiKey, deviceCfg, downstreamHeaders)
+	identity, err := ResolveCodexOutboundClientIdentity(CodexClientIdentityInput{Account: account, APIKey: apiKey, DeviceConfig: deviceCfg, Headers: downstreamHeaders})
+	if err != nil {
+		return err
+	}
+	userAgent, version, usedGeneratedHeaders := identity.UserAgent, identity.Version, identity.Generated
 	req.Header.Set("User-Agent", userAgent)
 
 	// Agent Identity 账号用动态签名的 AgentAssertion 头替代 Bearer（task 已由调用方确保就绪）。
@@ -1356,11 +1301,12 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 	applyAccountCustomHeaders(req, account)
 	ApplyWindowsDesktopAttestation(req.Header, account)
 	RecordUpstreamUserAgent(req.Context(), req.Header.Get("User-Agent"))
+	return nil
 }
 
-func applyOpenAIResponsesRequestHeaders(req *http.Request, account *auth.Account, apiKey string, headers http.Header) {
+func applyOpenAIResponsesRequestHeaders(req *http.Request, account *auth.Account, apiKey string, headers http.Header) error {
 	if req == nil {
-		return
+		return nil
 	}
 	passthrough := codexIdentityPassthroughActive(account, headers)
 	userAgent := ""
@@ -1377,7 +1323,11 @@ func applyOpenAIResponsesRequestHeaders(req *http.Request, account *auth.Account
 			version = codexVersionFromUserAgent(userAgent, effectiveLatestCodexCLIVersion())
 		}
 	} else {
-		userAgent, version, usedGenerated = resolveCodexOutboundClientHeaders(account, "", nil, headers)
+		identity, err := ResolveCodexOutboundClientIdentity(CodexClientIdentityInput{Account: account, Headers: headers})
+		if err != nil {
+			return err
+		}
+		userAgent, version, usedGenerated = identity.UserAgent, identity.Version, identity.Generated
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -1425,6 +1375,7 @@ func applyOpenAIResponsesRequestHeaders(req *http.Request, account *auth.Account
 	}
 	applyAccountCustomHeaders(req, account)
 	RecordUpstreamUserAgent(req.Context(), req.Header.Get("User-Agent"))
+	return nil
 }
 
 // codexIdentityPassthroughActive 判断 OpenAI Responses 中转账号是否开启
