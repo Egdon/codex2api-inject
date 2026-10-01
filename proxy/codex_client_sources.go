@@ -38,6 +38,7 @@ type codexClientCandidate struct {
 	NativeBuild    string
 	Err            error
 	FallbackReason string
+	LatestMSIX     bool
 }
 
 func codexArtifactIdentity(parts ...string) string {
@@ -75,25 +76,13 @@ func resolveCodexClientCandidate(ctx context.Context, client *http.Client, candi
 	if candidate.Err != nil {
 		return CodexClientVersionPair{}, candidate.Err
 	}
-	for _, pair := range codexClientVersionTarget(candidate.Kind, candidate.Target).Pairs {
-		if pair.ArtifactID == candidate.Pair.ArtifactID {
-			return pair, nil
-		}
+	if pair, ok := cachedCodexCandidatePair(candidate); ok {
+		return pair, nil
 	}
 	pair := candidate.Pair
 	if pair.CLIVersion == "" {
-		remote, err := openCodexRemoteArchive(ctx, client, pair.ArtifactURL)
-		if err != nil {
-			return pair, err
-		}
-		switch {
-		case candidate.Kind == string(CodexClientKindVSCode):
-			pair, err = resolveCodexVSIXPair(remote.archive, candidate)
-		case strings.HasPrefix(candidate.Target, "darwin-"):
-			pair, err = resolveCodexMacPair(remote.archive, candidate)
-		default:
-			pair, err = resolveCodexMSIXPair(remote, candidate)
-		}
+		var err error
+		pair, err = resolveCodexCandidateArchive(ctx, client, candidate)
 		if err != nil {
 			return pair, fmt.Errorf("%s%s", codexFallbackPrefix(candidate), err)
 		}
@@ -103,6 +92,29 @@ func resolveCodexClientCandidate(ctx context.Context, client *http.Client, candi
 	}
 	pair.VerifiedAt = time.Now().UnixMilli()
 	return pair, nil
+}
+
+func cachedCodexCandidatePair(candidate codexClientCandidate) (CodexClientVersionPair, bool) {
+	for _, pair := range codexClientVersionTarget(candidate.Kind, candidate.Target).Pairs {
+		if pair.ArtifactID == candidate.Pair.ArtifactID {
+			return pair, true
+		}
+	}
+	return CodexClientVersionPair{}, false
+}
+
+func resolveCodexCandidateArchive(ctx context.Context, client *http.Client, candidate codexClientCandidate) (CodexClientVersionPair, error) {
+	if candidate.Kind == string(CodexClientKindDesktop) && strings.HasPrefix(candidate.Target, "win32-") {
+		return resolveCodexWindowsArchive(ctx, client, candidate)
+	}
+	remote, err := openCodexRemoteArchive(ctx, client, candidate.Pair.ArtifactURL)
+	if err != nil {
+		return candidate.Pair, err
+	}
+	if candidate.Kind == string(CodexClientKindVSCode) {
+		return resolveCodexVSIXPair(remote.archive, candidate)
+	}
+	return resolveCodexMacPair(remote.archive, candidate)
 }
 
 func codexFallbackPrefix(candidate codexClientCandidate) string {

@@ -17,6 +17,8 @@ Desktop 和 VSCode 的应用版本与其内置 CLI 版本一起同步、一起�
 
 现有 MSIX 可能没有 `codex-package.json`，不能把“manifest 不存在”当作所有官方包都不受支持。fallback 流程如下：
 
+先读取官方版本化下载地址；仅在返回 404 时，回退到对应架构的官方最新包地址。最新包可能落后于 Store 清单，沿用上游对主次版本的校验，保存包内实际版本和完整配对。可变下载地址以 URL、ETag、Last-Modified 和大小标识安装包；ETag 未变化时只需再次探测一个字节，并重新校验实际包版本与当前 Store 清单，即可复用配对缓存。
+
 1. 获取 ZIP/ZIP64 目录，读取 `AppxManifest.xml`，核对 `OpenAI.Codex`、官方包版本与目标架构。
 2. 若包内有 CLI manifest，使用 manifest；无 manifest 时读取 `AppxBlockMap.xml`。损坏或架构不匹配的 manifest 不会被忽略。
 3. 利用 block map 中每个 64 KiB 原始块的压缩大小定位字节区间，独立解压所需块；核对原始长度与 SHA-256。非末块没有 DEFLATE 结束标志，仅在长度和哈希均正确时接受解压的 `UnexpectedEOF`。
@@ -35,6 +37,8 @@ Desktop 和 VSCode 的应用版本与其内置 CLI 版本一起同步、一起�
 | ARM64 | `26.928.31416` | `0.159.2` | 5,588,152（约 5.3 MiB） | 23 |
 
 这些数据包含应用版本与 CLI 版本的完整解析。小映射清单有效时无需读取 MSIX；已验证安装包未变化时直接复用缓存，不重新读取安装包。SHA-256 校验的是从官方 HTTPS block map 取得的块哈希，不等同于下载全包后验证 MSIX 签名。
+
+迁移至 upstream main 后，另外验证了 x64 的版本化地址 404 回退：官方最新包完整配对解析仍读取 5,297,477 字节，共 23 次请求；再次同步只需 2 次请求（版本化地址 404 探测、最新包的 1 字节 Range 探测），Range 正文总共 1 字节。
 
 ## 选择与手动配置
 

@@ -192,9 +192,6 @@ func StartCodexCLIVersionSync(ctx context.Context, db *database.DB, proxyResolve
 	if CodexCLIVersionSyncDisabled() {
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	resolveProxy := func() string {
 		if proxyResolver == nil {
 			return ""

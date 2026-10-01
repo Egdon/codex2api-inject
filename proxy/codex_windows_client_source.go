@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -114,10 +116,10 @@ func validateCodexWindowsMappingVersions(entry codexWindowsMappingArch) error {
 	return nil
 }
 
-func validateCodexMSIXIdentity(archive *zip.Reader, candidate codexClientCandidate) error {
+func validateCodexMSIXIdentity(archive *zip.Reader, candidate codexClientCandidate) (string, error) {
 	data, err := codexArchiveFile(archive, "AppxManifest.xml")
 	if err != nil {
-		return err
+		return "", err
 	}
 	var manifest struct {
 		Identity struct {
@@ -127,13 +129,65 @@ func validateCodexMSIXIdentity(archive *zip.Reader, candidate codexClientCandida
 		} `xml:"Identity"`
 	}
 	if err := xml.Unmarshal(data, &manifest); err != nil {
-		return err
+		return "", err
 	}
 	identity := manifest.Identity
-	if identity.Name != "OpenAI.Codex" || identity.Version != candidate.Pair.PackageVersion || identity.Arch != strings.TrimPrefix(candidate.Target, "win32-") {
-		return fmt.Errorf("MSIX package identity/version/architecture mismatch")
+	if identity.Name != "OpenAI.Codex" || identity.Arch != strings.TrimPrefix(candidate.Target, "win32-") {
+		return "", fmt.Errorf("MSIX package identity/architecture mismatch")
 	}
-	return nil
+	if !codexMSIXPackageMatchesCandidate(identity.Version, candidate) {
+		return "", fmt.Errorf("MSIX package version mismatch")
+	}
+	return identity.Version, nil
+}
+
+func codexMSIXPackageMatchesCandidate(version string, candidate codexClientCandidate) bool {
+	actual, validActual := codexBuildParts(version, 4)
+	store, validStore := codexBuildParts(candidate.Pair.PackageVersion, 4)
+	if !validActual || !validStore {
+		return false
+	}
+	if candidate.LatestMSIX {
+		return codexWindowsBuildMatchesStore(actual, store, true)
+	}
+	return version == candidate.Pair.PackageVersion
+}
+
+// 版本化包缺失时保留上游的最新官方包回退，并用 ETag 区分可变地址。
+func resolveCodexWindowsArchive(ctx context.Context, client *http.Client, candidate codexClientCandidate) (CodexClientVersionPair, error) {
+	ranges, err := codexWindowsCandidateRanges(ctx, client, &candidate)
+	if err != nil {
+		return candidate.Pair, err
+	}
+	if candidate.LatestMSIX && ranges.etag != "" {
+		if pair, ok := cachedCodexCandidatePair(candidate); ok {
+			if !codexMSIXPackageMatchesCandidate(pair.PackageVersion, candidate) {
+				return candidate.Pair, fmt.Errorf("cached MSIX package version mismatch")
+			}
+			return pair, nil
+		}
+	}
+	archive, err := zip.NewReader(ranges, ranges.size)
+	if err != nil {
+		return candidate.Pair, err
+	}
+	return resolveCodexMSIXPair(&codexRemoteArchive{archive: archive, ranges: ranges}, candidate)
+}
+
+func codexWindowsCandidateRanges(ctx context.Context, client *http.Client, candidate *codexClientCandidate) (*codexRangeReader, error) {
+	ranges, err := newCodexRangeReader(ctx, client, candidate.Pair.ArtifactURL)
+	if !errors.Is(err, errCodexMSIXNotFound) {
+		return ranges, err
+	}
+	candidate.LatestMSIX = true
+	candidate.Pair.ArtifactURL = codexMSIXBaseURL + "ChatGPT-" + strings.TrimPrefix(candidate.Target, "win32-") + ".msix"
+	ranges, err = newCodexRangeReader(ctx, client, candidate.Pair.ArtifactURL)
+	if err != nil {
+		return nil, err
+	}
+	candidate.Pair.ArtifactID = codexArtifactIdentity(candidate.Pair.ArtifactURL,
+		ranges.etag, ranges.modified, strconv.FormatInt(ranges.size, 10))
+	return ranges, nil
 }
 
 func codexMSIXAppVersion(archive *zip.Reader) (string, error) {
@@ -153,9 +207,11 @@ func codexMSIXAppVersion(archive *zip.Reader) (string, error) {
 
 func resolveCodexMSIXPair(remote *codexRemoteArchive, candidate codexClientCandidate) (CodexClientVersionPair, error) {
 	pair := candidate.Pair
-	if err := validateCodexMSIXIdentity(remote.archive, candidate); err != nil {
+	packageVersion, err := validateCodexMSIXIdentity(remote.archive, candidate)
+	if err != nil {
 		return pair, err
 	}
+	pair.PackageVersion = packageVersion
 	app, cli, err := codexMSIXVersions(remote, candidate.Target)
 	if err != nil {
 		return pair, err
