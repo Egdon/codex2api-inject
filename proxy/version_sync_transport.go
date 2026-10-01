@@ -33,6 +33,10 @@ func newVersionSyncClient(endpoint, proxyURL string, timeout time.Duration) (*ht
 func (t *versionSyncTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	switch req.URL.Scheme {
 	case "https":
+		// Gallery CDN 可能只协商 HTTP/1.1，使用支持 ALPN 的标准传输。
+		if req.URL.Hostname() == "openai.gallerycdn.vsassets.io" {
+			return t.plain.RoundTrip(req)
+		}
 		return t.chrome.RoundTrip(req)
 	case "http":
 		return t.plain.RoundTrip(req)

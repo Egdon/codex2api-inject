@@ -18,7 +18,8 @@ func codexTestVersionDB(t *testing.T) *database.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	old := codexClientVersions.Load()
-	t.Cleanup(func() { codexClientVersions.Store(old) })
+	oldRuntime := CurrentRuntimeSettings()
+	t.Cleanup(func() { codexClientVersions.Store(old); ApplyRuntimeSettings(oldRuntime) })
 	if err := LoadCodexClientVersionCache(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}

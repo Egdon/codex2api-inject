@@ -103,6 +103,7 @@ func LoadCodexClientVersionCache(ctx context.Context, db *database.DB) error {
 		snapshot.targets[codexClientVersionKey(row.ClientKind, row.TargetPlatform)] = target
 	}
 	codexClientVersions.Store(snapshot)
+	refreshCodexClientVersionProjections(snapshot)
 	return nil
 }
 
@@ -155,6 +156,7 @@ func saveCodexClientVersionTarget(ctx context.Context, db *database.DB, target C
 }
 
 func publishCodexClientVersionTarget(target CodexClientVersionTarget) {
+	target.Pairs = append([]CodexClientVersionPair(nil), target.Pairs...)
 	next := &codexClientVersionSnapshot{targets: make(map[string]CodexClientVersionTarget)}
 	if current := codexClientVersions.Load(); current != nil {
 		for key, value := range current.targets {
@@ -163,6 +165,23 @@ func publishCodexClientVersionTarget(target CodexClientVersionTarget) {
 	}
 	next.targets[codexClientVersionKey(target.ClientKind, target.TargetPlatform)] = target
 	codexClientVersions.Store(next)
+	refreshCodexClientVersionProjections(next)
+}
+
+func refreshCodexClientVersionProjections(snapshot *codexClientVersionSnapshot) {
+	build := func(kind, platform string) string {
+		target := snapshot.targets[codexClientVersionKey(kind, platform)]
+		if len(target.Pairs) == 0 {
+			return ""
+		}
+		return target.Pairs[0].AppVersion
+	}
+	UpdateRuntimeSettings(func(settings RuntimeSettings) RuntimeSettings {
+		settings.CodexSyncedDesktopMacBuild = build(string(CodexClientKindDesktop), "darwin-arm64")
+		settings.CodexSyncedDesktopWindowsBuild = build(string(CodexClientKindDesktop), "win32-x64")
+		settings.CodexSyncedVSCodeBuild = build(string(CodexClientKindVSCode), "linux-x64")
+		return settings
+	})
 }
 
 func newCodexClientVersionTarget(kind, platform string) CodexClientVersionTarget {

@@ -82,7 +82,7 @@ func (r *codexRangeReader) readRange(start, end int64) ([]byte, error) {
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, codexVersionSourceError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
