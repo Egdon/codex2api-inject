@@ -100,14 +100,17 @@ var (
 			LongOutputPricePerMToken:    0.75,
 			LongCacheReadPricePerMToken: 0.02,
 		}},
-		// gpt-6-astra：Codex 长上下文例外，超过 272K 仍按 $10/$50、缓存 $1。
-		// 保留现有 fast（priority）2× 倍率，由 serviceTierCostMultiplier 兜底；
-		// Ultrafast 档按 standard 的 6× 计费。
+		// gpt-6-astra：超过 272K 按长上下文价计费（输入/缓存 2×、输出 1.5×），
+		// 即 $20/$75、缓存 $2。fast（priority）2× 倍率由 serviceTierCostMultiplier 兜底；
+		// Ultrafast 档按所处档位 standard 价的 6× 计费。
 		{model: "gpt-6-astra", pricing: ModelPricing{
-			InputPricePerMToken:     10.0,
-			OutputPricePerMToken:    50.0,
-			CacheReadPricePerMToken: 1.0,
-			UltrafastMultiplier:     6.0,
+			InputPricePerMToken:         10.0,
+			OutputPricePerMToken:        50.0,
+			CacheReadPricePerMToken:     1.0,
+			LongInputPricePerMToken:     20.0,
+			LongOutputPricePerMToken:    75.0,
+			LongCacheReadPricePerMToken: 2.0,
+			UltrafastMultiplier:         6.0,
 		}},
 		{model: "gpt-5.5", pricing: ModelPricing{
 			InputPricePerMToken:                 5.0,

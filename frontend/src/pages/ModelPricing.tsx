@@ -610,7 +610,7 @@ function PricingModelRow({ row: r, draft, expanded, advancedOpen, busy, isNew, h
   const imageModel = supportsImageBilling(pricingModel)
   const perImage = imageModel && draft.user_billing_mode === 'per_image'
   const primaryFields = imageModel ? [...PRIMARY_FIELDS.filter(field => !field.key.startsWith('cache_write')), ...(isImage25Model(pricingModel) ? IMAGE_FIELDS : [])] : PRIMARY_FIELDS
-  const supportsLongContextPricing = pricingModel !== 'gpt-6-astra' && !imageModel
+  const supportsLongContextPricing = !imageModel
   const advancedFields = imageModel ? [] : supportsLongContextPricing ? ADVANCED_FIELDS : ADVANCED_FIELDS.filter(field => !field.key.includes('_long'))
   const hasLongContextPricing = supportsLongContextPricing && (normalizePrice(draft.long_context_threshold_tokens) > 0 || normalizePrice(draft.input_long) > 0 || normalizePrice(draft.cached_input_long) > 0 || normalizePrice(draft.output_long) > 0)
   const advancedGroups = [
