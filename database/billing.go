@@ -80,6 +80,18 @@ var (
 			LongOutputPricePerMToken:    15.0,
 			LongCacheReadPricePerMToken: 0.4,
 		}},
+		// gpt-6.1-sol 是独立型号：缓存读取 $0.10、缓存写入 $2.50，
+		// 超过 272K 按输入/缓存 2×、输出 1.5×。不能落入未知 gpt-6 变体的 Astra 兜底。
+		{model: "gpt-6.1-sol", pricing: ModelPricing{
+			InputPricePerMToken:         2.0,
+			OutputPricePerMToken:        10.0,
+			CacheReadPricePerMToken:     0.1,
+			CacheWrite5mPricePerMToken:  2.5,
+			CacheWrite1hPricePerMToken:  2.5,
+			LongInputPricePerMToken:     4.0,
+			LongOutputPricePerMToken:    15.0,
+			LongCacheReadPricePerMToken: 0.2,
+		}},
 		{model: "gpt-6-luna", pricing: ModelPricing{
 			InputPricePerMToken:         0.1,
 			OutputPricePerMToken:        0.5,
@@ -523,6 +535,8 @@ func normalizeCodexBillingModel(model string) (string, bool) {
 	switch {
 	case strings.HasPrefix(compact, "gpt-6-sol") || strings.HasPrefix(compact, "gpt6-sol"):
 		return "gpt-6-sol", true
+	case strings.HasPrefix(compact, "gpt-6.1-sol") || strings.HasPrefix(compact, "gpt6.1-sol"):
+		return "gpt-6.1-sol", true
 	case strings.HasPrefix(compact, "gpt-6-luna") || strings.HasPrefix(compact, "gpt6-luna"):
 		return "gpt-6-luna", true
 	// 未知 gpt-6 变体按 astra 兜底，避免掉进 $1/$2 的默认价严重低估。

@@ -103,6 +103,16 @@
     "cached_input_long": 0.02,
     "output_long": 0.75
   },
+  "gpt-6.1-sol": {
+    "input": 2,
+    "cached_input": 0.1,
+    "cache_write_5m": 2.5,
+    "cache_write_1h": 2.5,
+    "output": 10,
+    "input_long": 4,
+    "cached_input_long": 0.2,
+    "output_long": 15
+  },
   "gpt-6-sol": {
     "input": 2,
     "cached_input": 0.2,
