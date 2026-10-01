@@ -46,7 +46,6 @@ import Pagination from "../components/Pagination";
 import StateShell from "../components/StateShell";
 import StatusBadge from "../components/StatusBadge";
 import DaybreakBadge from "../components/DaybreakBadge";
-import { ExcelBpsStatus } from "../components/ExcelBpsBadge";
 import { useDataLoader, type LoadOptions } from "../hooks/useDataLoader";
 import {
   useConfirmDialog,
@@ -1556,7 +1555,6 @@ const AccountTableRow = memo(function AccountTableRow({
                                         <AccountStatusCountdown account={account} />
                                       )}
                                       <AccountConcurrencyBadge account={account} />
-                                      <ExcelBpsStatus account={account} />
                                     </div>
                                     <AccountHealthBar
                                       buckets={healthBuckets}
@@ -14039,7 +14037,6 @@ function AccountMobileCard({
                     <AccountStatusCountdown account={account} />
                   )}
                   <AccountConcurrencyBadge account={account} />
-                  <ExcelBpsStatus account={account} variant="card" />
                 </>
               )}
               {isFullCard && resetCredits > 0 && (

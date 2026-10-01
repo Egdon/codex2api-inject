@@ -9,8 +9,6 @@ import { useDataLoader } from '../hooks/useDataLoader'
 import { useToast } from '../hooks/useToast'
 import type { AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
 import { ANTIGRAVITY_DEFAULT_MODELS } from '../lib/antigravityModels'
-import { EXCEL_BPS_KNOWN_MODELS, excelBpsModelOptions, formatExcelBpsModels, parseExcelBpsModels } from '../lib/excelBpsModels'
-import ChipInput from '../components/ChipInput'
 import { countPayloadRules, PAYLOAD_RULE_GROUPS } from './PayloadRules'
 import { getErrorMessage } from '../utils/error'
 import { DEFAULT_CLAUDE_MODEL_MAP } from '../lib/modelMapping'
@@ -2542,12 +2540,6 @@ export default function Settings() {
     codex_telemetry_enabled: false,
     codex_telemetry_timing_debug: false,
     codex_request_compression: true,
-    codex_basispoints_enabled: false,
-    codex_basispoints_models: '',
-    codex_basispoints_403_auto_pause: true,
-    codex_basispoints_403_probe_interval_minutes: 1,
-    codex_basispoints_429_cooldown_seconds: 5,
-    codex_basispoints_cache_creation_as_input: false,
     codex_ws_weak_network_mode: false,
     codex_ws_keepalive_enabled: false,
     codex_ws_keepalive_interval_sec: 60,
@@ -2893,12 +2885,6 @@ export default function Settings() {
       [field]: value,
     } as Partial<SystemSettings>)
   }, [autoSaveSettingsPatch])
-
-  // BPS model chips save on every change, in the canonical stored form.
-  // autoSaveSettingsPatch applies the optimistic value and its rollback.
-  const saveExcelBpsModels = useCallback((models: string[]) => {
-    autoSaveStringField('codex_basispoints_models', formatExcelBpsModels(models))
-  }, [autoSaveStringField])
 
   // ===== Antigravity OAuth client 配置(草稿态 + 显式保存;secret 不回显,留空 = 沿用已保存值) =====
   const [agOAuthDraft, setAgOAuthDraft] = useState<{ rows: AntigravityOAuthClientSetting[]; activeKey: string } | null>(null)
@@ -4203,101 +4189,6 @@ export default function Settings() {
                             codex_ws_stateless_slots: value,
                           })
                         }}
-                      />
-                    </SettingField>
-                  </div>
-                </div>
-              </SettingsCard>
-
-              <SettingsCard title={t('settings.codexBasispoints')} description={t('settings.codexBasispointsDesc')} icon={<Layers className="size-4" />}>
-                <div className="space-y-4">
-                  <div className={SETTINGS_SWITCH_ROW}>
-                    <SettingField label={t('settings.codexBasispointsEnabled')} description={t('settings.codexBasispointsEnabledDesc')} layout="switch">
-                      <Switch
-                        checked={settingsForm.codex_basispoints_enabled}
-                        onCheckedChange={(checked) => autoSaveBooleanField('codex_basispoints_enabled', checked)}
-                      />
-                    </SettingField>
-                  </div>
-                  <div className={SETTINGS_FIELD_GRID}>
-                    <SettingField label={t('settings.codexBasispointsModels')} description={t('settings.codexBasispointsModelsDesc')}>
-                      <div className="space-y-2">
-                        <ChipInput
-                          value={parseExcelBpsModels(settingsForm.codex_basispoints_models)}
-                          options={excelBpsModelOptions(modelList)}
-                          placeholder={t('settings.codexBasispointsModelsPlaceholder')}
-                          onChange={(models) => saveExcelBpsModels(models)}
-                        />
-                        <div className="flex flex-wrap gap-2">
-                          <Button type="button" variant="outline" size="sm" onClick={() => saveExcelBpsModels([...EXCEL_BPS_KNOWN_MODELS])}>
-                            {t('settings.codexBasispointsModelsFillKnown')}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={!settingsForm.codex_basispoints_models}
-                            onClick={() => saveExcelBpsModels([])}
-                          >
-                            {t('settings.codexBasispointsModelsClear')}
-                          </Button>
-                        </div>
-                      </div>
-                    </SettingField>
-                  </div>
-                  <div className={SETTINGS_SWITCH_ROW}>
-                    <SettingField label={t('settings.codexBasispoints403AutoPause')} description={t('settings.codexBasispoints403AutoPauseDesc')} layout="switch">
-                      <Switch
-                        checked={settingsForm.codex_basispoints_403_auto_pause}
-                        onCheckedChange={(checked) => autoSaveBooleanField('codex_basispoints_403_auto_pause', checked)}
-                      />
-                    </SettingField>
-                  </div>
-                  <div className={SETTINGS_FIELD_GRID}>
-                    <SettingField
-                      label={t('settings.codexBasispoints403ProbeInterval')}
-                      description={t('settings.codexBasispoints403ProbeIntervalDesc')}
-                      className={cn(!settingsForm.codex_basispoints_403_auto_pause && 'opacity-60')}
-                    >
-                      <div className="relative">
-                        <DraftNumberInput
-                          min={1}
-                          max={10080}
-                          className="pr-14 tabular-nums"
-                          disabled={!settingsForm.codex_basispoints_403_auto_pause}
-                          value={settingsForm.codex_basispoints_403_probe_interval_minutes}
-                          onValueChange={(value) => setSettingsForm(f => ({ ...f, codex_basispoints_403_probe_interval_minutes: value }))}
-                          onValueCommit={(value) => {
-                            if (!settingsForm.codex_basispoints_403_auto_pause) return
-                            void autoSaveSettingsPatch({ codex_basispoints_403_probe_interval_minutes: value })
-                          }}
-                        />
-                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
-                          {t('settings.codexBasispoints403ProbeIntervalUnit')}
-                        </span>
-                      </div>
-                    </SettingField>
-                    <SettingField label={t('settings.codexBasispoints429Cooldown')} description={t('settings.codexBasispoints429CooldownDesc')}>
-                      <div className="relative">
-                        <DraftNumberInput
-                          min={1}
-                          max={600}
-                          className="pr-14 tabular-nums"
-                          value={settingsForm.codex_basispoints_429_cooldown_seconds}
-                          onValueChange={(value) => setSettingsForm(f => ({ ...f, codex_basispoints_429_cooldown_seconds: value }))}
-                          onValueCommit={(value) => void autoSaveSettingsPatch({ codex_basispoints_429_cooldown_seconds: value })}
-                        />
-                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
-                          {t('settings.codexBasispoints429CooldownUnit')}
-                        </span>
-                      </div>
-                    </SettingField>
-                  </div>
-                  <div className={SETTINGS_SWITCH_ROW}>
-                    <SettingField label={t('settings.codexBasispointsCacheCreationAsInput')} description={t('settings.codexBasispointsCacheCreationAsInputDesc')} layout="switch">
-                      <Switch
-                        checked={settingsForm.codex_basispoints_cache_creation_as_input}
-                        onCheckedChange={(checked) => autoSaveBooleanField('codex_basispoints_cache_creation_as_input', checked)}
                       />
                     </SettingField>
                   </div>
