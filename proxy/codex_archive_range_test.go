@@ -72,7 +72,7 @@ func TestCodexArchiveRangeReadsAndCachesDirectory(t *testing.T) {
 }
 
 func TestCodexArchiveRangeRejectsInvalidResponses(t *testing.T) {
-	for _, kind := range []string{"full", "interval", "size", "etag", "short", "encoding"} {
+	for _, kind := range []string{"full", "interval", "size", "etag", "short", "encoding", "validator"} {
 		t.Run(kind, func(t *testing.T) {
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +91,9 @@ func TestCodexArchiveRangeRejectsInvalidResponses(t *testing.T) {
 					start++
 				}
 				w.Header().Set("ETag", `"first"`)
+				if kind == "validator" {
+					w.Header().Del("ETag")
+				}
 				if calls > 1 && kind == "etag" {
 					w.Header().Set("ETag", `"second"`)
 				}

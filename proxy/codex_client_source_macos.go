@@ -40,18 +40,7 @@ func fetchCodexMacCandidate(ctx context.Context, client *http.Client, target str
 		candidate.Err = err
 		return candidate
 	}
-	var best codexAppcastItem
-	for _, item := range appcast.Items {
-		if item.Channel != "" && item.Channel != "stable" {
-			continue
-		}
-		if !codexTrustedArtifactURL(item.Enclosure.URL) || !strings.HasSuffix(item.Enclosure.URL, ".zip") {
-			continue
-		}
-		if codexBuildIsNewer(item.AppVersion, best.AppVersion) {
-			best = item
-		}
-	}
+	best := newestCodexAppcastItem(appcast.Items)
 	if best.AppVersion == "" || best.Build == "" {
 		candidate.Err = fmt.Errorf("no valid stable package in macOS appcast")
 		return candidate
@@ -130,4 +119,20 @@ func resolveCodexMacPair(archive *zip.Reader, candidate codexClientCandidate) (C
 	prefix := strings.TrimSuffix(name, "Info.plist") + "Resources/codex-cli/"
 	pair.CLIVersion, err = codexArchiveCLI(archive, candidate.Target, prefix)
 	return pair, err
+}
+
+func newestCodexAppcastItem(items []codexAppcastItem) codexAppcastItem {
+	var best codexAppcastItem
+	for _, item := range items {
+		if item.Channel != "" && item.Channel != "stable" {
+			continue
+		}
+		if !codexTrustedArtifactURL(item.Enclosure.URL) || !strings.HasSuffix(item.Enclosure.URL, ".zip") {
+			continue
+		}
+		if codexBuildIsNewer(item.AppVersion, best.AppVersion) {
+			best = item
+		}
+	}
+	return best
 }

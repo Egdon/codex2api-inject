@@ -73,6 +73,10 @@ func codexASARPackageVersion(source io.Reader) (string, error) {
 	if _, err := io.ReadFull(source, data); err != nil {
 		return "", err
 	}
+	return codexDesktopPackageVersion(data)
+}
+
+func codexDesktopPackageVersion(data []byte) (string, error) {
 	var pkg struct {
 		Version string `json:"version"`
 	}

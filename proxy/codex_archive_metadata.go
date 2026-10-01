@@ -36,14 +36,35 @@ func codexTargetTripleMatches(triple, target string) bool {
 }
 
 func openCodexVersionArchive(ctx context.Context, client *http.Client, url string) (*zip.Reader, error) {
+	remote, err := openCodexRemoteArchive(ctx, client, url)
+	if err != nil {
+		return nil, err
+	}
+	return remote.archive, nil
+}
+
+type codexRemoteArchive struct {
+	archive *zip.Reader
+	ranges  *codexRangeReader
+}
+
+func openCodexRemoteArchive(ctx context.Context, client *http.Client, url string) (*codexRemoteArchive, error) {
 	ranges, err := newCodexRangeReader(ctx, client, url)
 	if err != nil {
 		return nil, err
 	}
-	return zip.NewReader(ranges, ranges.size)
+	archive, err := zip.NewReader(ranges, ranges.size)
+	if err != nil {
+		return nil, err
+	}
+	return &codexRemoteArchive{archive: archive, ranges: ranges}, nil
 }
 
 func codexArchiveFile(archive *zip.Reader, name string) ([]byte, error) {
+	return codexArchiveFileLimited(archive, name, codexPackageJSONMax)
+}
+
+func codexArchiveFileLimited(archive *zip.Reader, name string, limit int64) ([]byte, error) {
 	var found *zip.File
 	for _, file := range archive.File {
 		if file.Name != name {
@@ -54,7 +75,7 @@ func codexArchiveFile(archive *zip.Reader, name string) ([]byte, error) {
 		}
 		found = file
 	}
-	if found == nil || found.UncompressedSize64 > codexPackageJSONMax {
+	if found == nil || found.UncompressedSize64 > uint64(limit) {
 		return nil, fmt.Errorf("missing or oversized archive metadata %s", name)
 	}
 	stream, err := found.Open()
@@ -62,11 +83,11 @@ func codexArchiveFile(archive *zip.Reader, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer stream.Close()
-	data, err := io.ReadAll(io.LimitReader(stream, codexPackageJSONMax+1))
+	data, err := io.ReadAll(io.LimitReader(stream, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > codexPackageJSONMax {
+	if int64(len(data)) > limit {
 		return nil, fmt.Errorf("archive metadata exceeds limit")
 	}
 	return data, nil
@@ -75,7 +96,7 @@ func codexArchiveFile(archive *zip.Reader, name string) ([]byte, error) {
 func codexArchiveCLI(archive *zip.Reader, target, prefix string) (string, error) {
 	version := ""
 	for _, file := range archive.File {
-		if !strings.HasPrefix(file.Name, prefix) || !strings.HasSuffix(file.Name, "/codex-package.json") {
+		if !codexCLIManifestFileName(file.Name, prefix) {
 			continue
 		}
 		data, err := codexArchiveFile(archive, file.Name)
@@ -101,6 +122,10 @@ func codexArchiveCLI(archive *zip.Reader, target, prefix string) (string, error)
 		return "", fmt.Errorf("unsupported package layout: no CLI manifest for %s", target)
 	}
 	return version, nil
+}
+
+func codexCLIManifestFileName(name, prefix string) bool {
+	return strings.HasPrefix(name, prefix) && strings.HasSuffix(name, "/codex-package.json")
 }
 
 func validateCodexCLIManifest(manifest codexCLIManifest) error {

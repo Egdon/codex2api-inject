@@ -106,20 +106,27 @@ func (r *codexRangeReader) validateRange(resp *http.Response, start, end int64) 
 	if err != nil {
 		return err
 	}
-	if gotStart != start || gotEnd != end || (r.size != 0 && total != r.size) {
+	if gotStart != start || gotEnd != end {
 		return fmt.Errorf("archive Range interval changed")
 	}
-	if resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity" {
-		return fmt.Errorf("encoded archive Range response")
+	if r.size != 0 && total != r.size {
+		return fmt.Errorf("archive size changed during Range read")
 	}
-	if resp.ContentLength >= 0 && resp.ContentLength != end-start+1 {
-		return fmt.Errorf("archive Range content length mismatch")
+	if err := codexRangeBodyMetadata(resp, end-start+1); err != nil {
+		return err
 	}
+	return r.validateArtifact(total, resp.Header)
+}
+
+func (r *codexRangeReader) validateArtifact(total int64, header http.Header) error {
 	if r.size == 0 {
-		r.size, r.etag, r.modified = total, resp.Header.Get("ETag"), resp.Header.Get("Last-Modified")
+		r.size, r.etag, r.modified = total, header.Get("ETag"), header.Get("Last-Modified")
+		if r.etag == "" && r.modified == "" {
+			return fmt.Errorf("archive Range validator missing")
+		}
 		return nil
 	}
-	if resp.Header.Get("ETag") != r.etag || resp.Header.Get("Last-Modified") != r.modified {
+	if header.Get("ETag") != r.etag || header.Get("Last-Modified") != r.modified {
 		return fmt.Errorf("archive changed during Range read")
 	}
 	return nil
@@ -157,4 +164,14 @@ func (r *codexRangeReader) ReadAt(p []byte, offset int64) (int, error) {
 		return n, io.EOF
 	}
 	return n, nil
+}
+
+func codexRangeBodyMetadata(resp *http.Response, count int64) error {
+	if resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity" {
+		return fmt.Errorf("encoded archive Range response")
+	}
+	if resp.ContentLength >= 0 && resp.ContentLength != count {
+		return fmt.Errorf("archive Range content length mismatch")
+	}
+	return nil
 }

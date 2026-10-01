@@ -105,6 +105,11 @@ func resolveCodexVSIXPair(archive *zip.Reader, candidate codexClientCandidate) (
 	if extension.Name != "chatgpt" || extension.Publisher != "openai" || extension.Version != pair.AppVersion {
 		return pair, fmt.Errorf("VSIX extension identity/version mismatch")
 	}
-	pair.CLIVersion, err = codexArchiveCLI(archive, candidate.Target, "extension/bin/")
+	nativeDirs := map[string]string{
+		"darwin-arm64": "macos-aarch64", "darwin-x64": "macos-x86_64",
+		"win32-arm64": "windows-aarch64", "win32-x64": "windows-x86_64",
+		"linux-arm64": "linux-aarch64", "linux-x64": "linux-x86_64",
+	}
+	pair.CLIVersion, err = codexArchiveCLI(archive, candidate.Target, "extension/bin/"+nativeDirs[candidate.Target]+"/")
 	return pair, err
 }

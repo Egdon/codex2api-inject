@@ -82,17 +82,17 @@ func resolveCodexClientCandidate(ctx context.Context, client *http.Client, candi
 	}
 	pair := candidate.Pair
 	if pair.CLIVersion == "" {
-		archive, err := openCodexVersionArchive(ctx, client, pair.ArtifactURL)
+		remote, err := openCodexRemoteArchive(ctx, client, pair.ArtifactURL)
 		if err != nil {
 			return pair, err
 		}
 		switch {
 		case candidate.Kind == string(CodexClientKindVSCode):
-			pair, err = resolveCodexVSIXPair(archive, candidate)
+			pair, err = resolveCodexVSIXPair(remote.archive, candidate)
 		case strings.HasPrefix(candidate.Target, "darwin-"):
-			pair, err = resolveCodexMacPair(archive, candidate)
+			pair, err = resolveCodexMacPair(remote.archive, candidate)
 		default:
-			pair, err = resolveCodexMSIXPair(archive, candidate)
+			pair, err = resolveCodexMSIXPair(remote, candidate)
 		}
 		if err != nil {
 			return pair, fmt.Errorf("%s%s", codexFallbackPrefix(candidate), err)

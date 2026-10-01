@@ -92,9 +92,20 @@ func validateCodexWindowsMapping(mapping codexWindowsMapping, entry codexWindows
 	if mapping.SchemaVersion <= 0 || update.PackageIdentity != "OpenAI.Codex" || update.BuildVersion != candidate.Pair.PackageVersion {
 		return fmt.Errorf("stale Windows mapping")
 	}
-	if entry.Architecture != strings.TrimPrefix(candidate.Target, "win32-") || entry.Version != update.BuildVersion || entry.Status != "downloadable" || !entry.CurrentForCodexVersion {
+	if err := validateCodexWindowsMappingArch(entry, candidate); err != nil {
+		return err
+	}
+	return validateCodexWindowsMappingVersions(entry)
+}
+
+func validateCodexWindowsMappingArch(entry codexWindowsMappingArch, candidate codexClientCandidate) error {
+	if entry.Architecture != strings.TrimPrefix(candidate.Target, "win32-") || entry.Version != candidate.Pair.PackageVersion || entry.Status != "downloadable" || !entry.CurrentForCodexVersion {
 		return fmt.Errorf("invalid Windows architecture mapping")
 	}
+	return nil
+}
+
+func validateCodexWindowsMappingVersions(entry codexWindowsMappingArch) error {
 	app, validApp := codexBuildParts(entry.AppVersion, 3)
 	pkg, validPackage := codexBuildParts(entry.Version, 4)
 	if !validApp || !validPackage || app[0] != pkg[0] || app[1] != pkg[1] || !validCodexClientVersionString(entry.BackendVersion) {
@@ -140,16 +151,12 @@ func codexMSIXAppVersion(archive *zip.Reader) (string, error) {
 	return "", fmt.Errorf("Desktop app.asar missing in MSIX")
 }
 
-func resolveCodexMSIXPair(archive *zip.Reader, candidate codexClientCandidate) (CodexClientVersionPair, error) {
+func resolveCodexMSIXPair(remote *codexRemoteArchive, candidate codexClientCandidate) (CodexClientVersionPair, error) {
 	pair := candidate.Pair
-	if err := validateCodexMSIXIdentity(archive, candidate); err != nil {
+	if err := validateCodexMSIXIdentity(remote.archive, candidate); err != nil {
 		return pair, err
 	}
-	cli, err := codexArchiveCLI(archive, candidate.Target, "app/")
-	if err != nil {
-		return pair, err
-	}
-	app, err := codexMSIXAppVersion(archive)
+	app, cli, err := codexMSIXVersions(remote, candidate.Target)
 	if err != nil {
 		return pair, err
 	}
@@ -159,5 +166,38 @@ func resolveCodexMSIXPair(archive *zip.Reader, candidate codexClientCandidate) (
 		return pair, fmt.Errorf("MSIX application version mismatch")
 	}
 	pair.AppVersion, pair.CLIVersion = app, cli
+	if !codexMSIXHasCLIManifest(remote.archive) {
+		pair.Source = "official_msix_blockmap"
+	}
 	return pair, nil
+}
+
+func codexMSIXHasCLIManifest(archive *zip.Reader) bool {
+	for _, file := range archive.File {
+		if codexCLIManifestFileName(file.Name, "app/") {
+			return true
+		}
+	}
+	return false
+}
+
+func codexMSIXVersions(remote *codexRemoteArchive, target string) (string, string, error) {
+	if codexMSIXHasCLIManifest(remote.archive) {
+		cli, err := codexArchiveCLI(remote.archive, target, "app/")
+		if err != nil {
+			return "", "", err
+		}
+		app, err := codexMSIXAppVersion(remote.archive)
+		return app, cli, err
+	}
+	blocks, err := newCodexMSIXBlockMap(remote)
+	if err != nil {
+		return "", "", err
+	}
+	app, err := codexMSIXBlockAppVersion(blocks)
+	if err != nil {
+		return "", "", err
+	}
+	cli, err := codexMSIXEmbeddedCLI(blocks, target)
+	return app, cli, err
 }

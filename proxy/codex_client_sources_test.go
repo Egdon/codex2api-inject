@@ -143,11 +143,11 @@ func TestCodexOfficialMSIXFallbackRequiresCompletePair(t *testing.T) {
 		"app/resources/app.asar": codexTestASAR("26.928.31416"),
 	}
 	candidate := codexWindowsCandidate(codexWindowsUpdate{BuildVersion: "26.928.3736.0"}, "x64")
-	if _, err := resolveCodexMSIXPair(codexTestArchive(t, files), candidate); err == nil {
+	if _, err := resolveCodexMSIXPair(&codexRemoteArchive{archive: codexTestArchive(t, files)}, candidate); err == nil {
 		t.Fatal("legacy MSIX without CLI manifest accepted")
 	}
 	files["app/resources/codex-cli/codex-package.json"] = codexTestCLIManifest("x86_64-pc-windows-msvc", "0.159.2")
-	pair, err := resolveCodexMSIXPair(codexTestArchive(t, files), candidate)
+	pair, err := resolveCodexMSIXPair(&codexRemoteArchive{archive: codexTestArchive(t, files)}, candidate)
 	if err != nil || pair.AppVersion != "26.928.31416" || pair.CLIVersion != "0.159.2" {
 		t.Fatalf("official pair: %+v, %v", pair, err)
 	}
@@ -185,5 +185,24 @@ func TestCodexClientVersionSyncCoalescesConcurrentCalls(t *testing.T) {
 	wg.Wait()
 	if cliCalls.Load() != 1 {
 		t.Fatalf("expected one coalesced sync, got %d", cliCalls.Load())
+	}
+}
+
+func TestCodexClientCandidateReusesVerifiedArtifactWithoutDownload(t *testing.T) {
+	db := codexTestVersionDB(t)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); w.WriteHeader(http.StatusOK) }))
+	defer server.Close()
+	previous := newCodexClientVersionTarget("codex-desktop", "win32-x64")
+	pair := codexTestPair("26.928.31416")
+	pair.Source, pair.ArtifactURL = "official_msix_blockmap", server.URL
+	previous.Pairs = []CodexClientVersionPair{pair}
+	if _, err := saveCodexClientVersionTarget(context.Background(), db, previous); err != nil {
+		t.Fatal(err)
+	}
+	candidate := codexClientCandidate{Kind: previous.ClientKind, Target: previous.TargetPlatform, Pair: CodexClientVersionPair{ArtifactID: pair.ArtifactID, ArtifactURL: server.URL}}
+	resolved, err := resolveCodexClientCandidate(context.Background(), server.Client(), candidate)
+	if err != nil || resolved != pair || requests.Load() != 0 {
+		t.Fatalf("cached artifact: %+v / %v / %d requests", resolved, err, requests.Load())
 	}
 }
