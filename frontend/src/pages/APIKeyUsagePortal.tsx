@@ -40,6 +40,7 @@ import Pagination from '../components/Pagination'
 import CompactionBadges from '../components/CompactionBadges'
 import ChannelLogo from '../components/ChannelLogo'
 import ModelLogo from '../components/ModelLogo'
+import DisplayTimezoneSelect from '../components/DisplayTimezoneSelect'
 import APIKeyModelRequestUsageCard from '../components/APIKeyModelRequestUsage'
 import { usePersistedPageSize } from '../hooks/usePersistedPageSize'
 import type {
@@ -251,6 +252,7 @@ export default function APIKeyUsagePortal() {
 
   const toolbar = (
     <div className="flex items-center gap-2">
+      <DisplayTimezoneSelect compact className="hidden w-[240px] sm:block" />
       <Button variant="outline" size="icon-sm" onClick={() => i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh')} title={t('common.themeStyle')}>
         <Languages className="size-4" />
       </Button>
