@@ -110,6 +110,7 @@ func (db *DB) configureSQLite(ctx context.Context) error {
 
 func (db *DB) migrateSQLite(ctx context.Context) error {
 	statements := []string{
+		codexClientVersionCacheSchema,
 		`CREATE TABLE IF NOT EXISTS accounts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT DEFAULT '',
