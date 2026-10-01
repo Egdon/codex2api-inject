@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- **Remove the discontinued Excel Basispoints integration (#749).** Codex OAuth accounts now use the native Codex routes for Responses, compact, Chat Completions, Messages and downstream Responses WebSocket. The adapter, replay/upload caches, route health probes, admin endpoints, account switches and global settings are removed. Existing database columns and credential flags are ignored after upgrading.
+
 ## v3.0.5 - 2026-09-30
 
 ### Features

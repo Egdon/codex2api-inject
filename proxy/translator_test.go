@@ -4189,3 +4189,46 @@ func TestModelSupportsMaxReasoningEffort(t *testing.T) {
 		t.Fatalf("daybreak max effort clamped to %q", got)
 	}
 }
+
+func TestReasoningReplayOmitsDisplayContent(t *testing.T) {
+	var input any
+	if err := json.Unmarshal([]byte(`[{"type":"reasoning","id":"rs_probe","encrypted_content":"gAAAAnative","summary":[{"type":"summary_text","text":"visible summary"}],"content":[{"type":"reasoning_text","text":"visible summary"}],"status":"completed"},{"role":"user","content":[{"type":"input_text","text":"keep user content"}]}]`), &input); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, changed, keep := dropBareReasoningInputValue(input)
+	if !changed || !keep {
+		t.Fatal("expected cleaned reasoning history")
+	}
+	items := cleaned.([]any)
+	reasoning := items[0].(map[string]any)
+	if _, exists := reasoning["content"]; exists {
+		t.Fatal("display-only reasoning.content is still replayed")
+	}
+	if _, exists := reasoning["status"]; exists {
+		t.Fatal("status is still replayed")
+	}
+	if reasoning["encrypted_content"] != "gAAAAnative" || len(reasoning["summary"].([]any)) != 1 {
+		t.Fatal("reasoning context lost")
+	}
+	if len(items[1].(map[string]any)["content"].([]any)) != 1 {
+		t.Fatal("user content lost")
+	}
+}
+
+func TestPrepareResponsesBodyPreservesNativeAgentContext(t *testing.T) {
+	raw := []byte(`{"model":"gpt-5.5","input":[{"type":"agent_message","id":"amsg_native","author":"parent","recipient":"child","content":[{"type":"input_text","text":"plain task"},{"type":"encrypted_content","encrypted_content":"gAAAAnative-agent-context"}]}]}`)
+	got, _ := PrepareResponsesBody(raw)
+	for path, want := range map[string]string{
+		"input.0.type":                        "agent_message",
+		"input.0.author":                      "parent",
+		"input.0.recipient":                   "child",
+		"input.0.content.0.type":              "input_text",
+		"input.0.content.0.text":              "plain task",
+		"input.0.content.1.type":              "encrypted_content",
+		"input.0.content.1.encrypted_content": "gAAAAnative-agent-context",
+	} {
+		if value := gjson.GetBytes(got, path).String(); value != want {
+			t.Errorf("%s = %q, want %q", path, value, want)
+		}
+	}
+}
