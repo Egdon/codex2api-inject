@@ -3086,6 +3086,20 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
       </Modal>
 
       {/* 代理徽章直达的快速绑定弹窗：与 Codex / Grok 账号页共用组件 */}
+      <BatchAccountGroupModal
+        show={batchGroupOpen}
+        ids={selectedIds}
+        channel="antigravity"
+        groups={antigravityGroups}
+        onClose={() => setBatchGroupOpen(false)}
+        onSaved={async () => {
+          setBatchGroupOpen(false);
+          clearSelection();
+          await Promise.all([reload(), reloadGroups()]);
+        }}
+        onGroupsChanged={reloadGroups}
+      />
+
       <AccountProxyQuickEditor
         account={quickProxyAccount}
         accountLabel={
