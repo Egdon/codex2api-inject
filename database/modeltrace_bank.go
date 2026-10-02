@@ -80,19 +80,39 @@ func (db *DB) GetModelTraceBankOverride(ctx context.Context) (*ModelTraceBankOve
 	return &override, nil
 }
 
-func (db *DB) SaveModelTraceBankOverride(ctx context.Context, override ModelTraceBankOverride) error {
+// ErrModelTraceBankConflict means the stored override changed after the
+// caller read it (a concurrent update or reset); the caller should re-read.
+var ErrModelTraceBankConflict = errors.New("ModelTrace bank override changed concurrently")
+
+// SaveModelTraceBankOverride installs override only if the stored revision is
+// still expectedRevision ("" meaning no override), so overlapping updates and
+// resets cannot be silently overwritten by a stale writer.
+func (db *DB) SaveModelTraceBankOverride(ctx context.Context, override ModelTraceBankOverride, expectedRevision string) error {
 	if err := db.ensureModelTraceBankSchema(ctx); err != nil {
 		return err
 	}
-	_, err := db.conn.ExecContext(ctx, `INSERT INTO modeltrace_bank_override (singleton_id, revision, built_at, bank_json, installed_at)
-		VALUES (1, $1, $2, $3, $4)
-		ON CONFLICT (singleton_id) DO UPDATE SET
-			revision = EXCLUDED.revision,
-			built_at = EXCLUDED.built_at,
-			bank_json = EXCLUDED.bank_json,
-			installed_at = EXCLUDED.installed_at`,
-		override.Revision, override.BuiltAt, string(override.BankJSON), override.InstalledAt.UTC())
-	return err
+	var result sql.Result
+	var err error
+	if expectedRevision == "" {
+		result, err = db.conn.ExecContext(ctx, `INSERT INTO modeltrace_bank_override (singleton_id, revision, built_at, bank_json, installed_at)
+			VALUES (1, $1, $2, $3, $4)
+			ON CONFLICT (singleton_id) DO NOTHING`,
+			override.Revision, override.BuiltAt, string(override.BankJSON), override.InstalledAt.UTC())
+	} else {
+		result, err = db.conn.ExecContext(ctx, `UPDATE modeltrace_bank_override
+			SET revision = $1, built_at = $2, bank_json = $3, installed_at = $4
+			WHERE singleton_id = 1 AND revision = $5`,
+			override.Revision, override.BuiltAt, string(override.BankJSON), override.InstalledAt.UTC(), expectedRevision)
+	}
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected == 0 {
+		return ErrModelTraceBankConflict
+	}
+	return nil
 }
 
 func (db *DB) DeleteModelTraceBankOverride(ctx context.Context) error {

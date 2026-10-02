@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,12 +24,23 @@ func TestModelTraceBankOverrideLifecycle(t *testing.T) {
 	}
 
 	installedAt := time.Date(2026, 10, 2, 8, 0, 0, 0, time.UTC)
-	for _, revision := range []string{"aaa", "bbb"} {
-		if err := db.SaveModelTraceBankOverride(ctx, ModelTraceBankOverride{
+	save := func(revision, expected string) error {
+		return db.SaveModelTraceBankOverride(ctx, ModelTraceBankOverride{
 			Revision: revision, BuiltAt: "2026-09-30T22:05:57Z", BankJSON: []byte(`{"rev":"` + revision + `"}`), InstalledAt: installedAt,
-		}); err != nil {
-			t.Fatalf("SaveModelTraceBankOverride(%s): %v", revision, err)
-		}
+		}, expected)
+	}
+	if err := save("aaa", ""); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	// A writer that read "no override" must not clobber the one just installed.
+	if err := save("zzz", ""); !errors.Is(err, ErrModelTraceBankConflict) {
+		t.Fatalf("stale insert error = %v, want conflict", err)
+	}
+	if err := save("zzz", "old"); !errors.Is(err, ErrModelTraceBankConflict) {
+		t.Fatalf("stale update error = %v, want conflict", err)
+	}
+	if err := save("bbb", "aaa"); err != nil {
+		t.Fatalf("CAS update: %v", err)
 	}
 	override, err := db.GetModelTraceBankOverride(ctx)
 	if err != nil || override == nil {
@@ -46,5 +58,9 @@ func TestModelTraceBankOverrideLifecycle(t *testing.T) {
 	}
 	if revision, err := db.GetModelTraceBankRevision(ctx); err != nil || revision != "" {
 		t.Fatalf("revision after delete = %q, %v", revision, err)
+	}
+	// An update that started before the reset must not reinstall its bank.
+	if err := save("ccc", "bbb"); !errors.Is(err, ErrModelTraceBankConflict) {
+		t.Fatalf("update after reset error = %v, want conflict", err)
 	}
 }

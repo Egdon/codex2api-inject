@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -119,6 +120,14 @@ func (h *Handler) UpdateModelTraceBank(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
+	// The stored revision is both the freshness baseline and the CAS token for
+	// the save. Falling back to the embedded bank here could downgrade a newer
+	// installed override, so a read failure aborts the update.
+	storedRevision, err := h.db.GetModelTraceBankRevision(ctx)
+	if err != nil {
+		writeError(c, http.StatusServiceUnavailable, "读取已安装的指纹库失败: "+err.Error())
+		return
+	}
 	active, _, _, _ := h.resolveModelTraceBanks(ctx)
 	if active == nil {
 		writeError(c, http.StatusInternalServerError, "ModelTrace 指纹库加载失败")
@@ -151,9 +160,14 @@ func (h *Handler) UpdateModelTraceBank(c *gin.Context) {
 		if !modelTraceBankNewer(candidate, active) {
 			response.Message = "上游指纹库没有比当前版本更新的训练数据"
 		} else {
-			if err := h.db.SaveModelTraceBankOverride(ctx, database.ModelTraceBankOverride{
+			err := h.db.SaveModelTraceBankOverride(ctx, database.ModelTraceBankOverride{
 				Revision: revision, BuiltAt: candidate.Info().BuiltAt, BankJSON: body, InstalledAt: time.Now(),
-			}); err != nil {
+			}, storedRevision)
+			if errors.Is(err, database.ErrModelTraceBankConflict) {
+				writeError(c, http.StatusConflict, "指纹库在更新期间被其他操作修改，请刷新后重试")
+				return
+			}
+			if err != nil {
 				writeError(c, http.StatusInternalServerError, "保存指纹库失败: "+err.Error())
 				return
 			}

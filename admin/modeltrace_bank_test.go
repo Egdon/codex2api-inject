@@ -129,7 +129,7 @@ func TestModelTraceBankIgnoresOverrideOlderThanEmbedded(t *testing.T) {
 		Revision: "3333333333333333333333333333333333333333", BuiltAt: "2026-01-01T00:00:00Z",
 		BankJSON:    modelTraceBankWithBuiltAt(t, embedded.BuiltAt().Add(-time.Hour).Format(time.RFC3339Nano)),
 		InstalledAt: time.Now(),
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("SaveModelTraceBankOverride: %v", err)
 	}
 	handler := &Handler{db: db}
@@ -148,7 +148,7 @@ func TestModelTraceBankFallsBackWhenOverrideIsCorrupt(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.SaveModelTraceBankOverride(context.Background(), database.ModelTraceBankOverride{
 		Revision: "4444444444444444444444444444444444444444", BankJSON: []byte(`{"schema":"other"}`), InstalledAt: time.Now(),
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("SaveModelTraceBankOverride: %v", err)
 	}
 	handler := &Handler{db: db}
