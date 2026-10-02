@@ -4236,8 +4236,7 @@
       "platform": "客户端 / 平台",
       "pair": "应用 / 内置 CLI",
       "source": "来源",
-      "history": "历史配对（{{count}}）",
-      "empty": "尚未同步，使用内置历史配对。",
+      "empty": "尚未同步，使用内置版本配对。",
       "unavailable": "版本不可用",
       "sources": {
         "official_appcast": "官方 appcast",
@@ -4246,7 +4245,7 @@
         "official_marketplace": "官方 Marketplace",
         "third_party_windows_mapping": "第三方 Windows 映射",
         "official_github_release": "官方 CLI 稳定版",
-        "builtin_observed": "内置历史配对",
+        "builtin_observed": "内置版本配对",
         "custom": "自定义覆盖"
       }
     },

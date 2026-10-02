@@ -487,8 +487,7 @@
       "platform": "用戶端 / 平台",
       "pair": "應用程式 / 內建 CLI",
       "source": "來源",
-      "history": "歷史配對（{{count}}）",
-      "empty": "尚未同步，使用內建歷史配對。",
+      "empty": "尚未同步，使用內建版本配對。",
       "unavailable": "版本無法使用",
       "sources": {
         "official_appcast": "官方 appcast",
@@ -497,7 +496,7 @@
         "official_marketplace": "官方 Marketplace",
         "third_party_windows_mapping": "第三方 Windows 對應",
         "official_github_release": "官方 CLI 穩定版",
-        "builtin_observed": "內建歷史配對",
+        "builtin_observed": "內建版本配對",
         "custom": "自訂覆寫"
       }
     },

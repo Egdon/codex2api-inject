@@ -11,12 +11,6 @@ function CodexVersionRow({ target }: { target: CodexClientVersionTarget }) {
       <td className="py-2 pr-3">{label}<br /><span className="font-mono">{target.target_platform}</span></td>
       <td className="py-2 pr-3 font-mono">
         {pair?.app_version ?? '—'}<br />CLI {pair?.cli_version ?? '—'}
-        {target.pairs.length > 1 && (
-          <details className="mt-1 font-sans">
-            <summary className="cursor-pointer text-muted-foreground">{t('settings.codexClientVersions.history', { count: target.pairs.length - 1 })}</summary>
-            {target.pairs.slice(1).map((old) => <div key={old.app_version} className="mt-1 font-mono">{old.app_version} / {old.cli_version}</div>)}
-          </details>
-        )}
       </td>
       <td className="py-2">{source ? t(`settings.codexClientVersions.sources.${source}`, { defaultValue: source }) : '—'}</td>
     </tr>

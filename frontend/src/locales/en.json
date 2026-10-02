@@ -4237,7 +4237,6 @@
       "platform": "Client / platform",
       "pair": "App / embedded CLI",
       "source": "Source",
-      "history": "Older pairs ({{count}})",
       "empty": "Not synced yet; using built-in observed pairs.",
       "unavailable": "Version unavailable",
       "sources": {
