@@ -129,6 +129,9 @@
 .quality-test-response-model { padding: 0 20px 14px; font-size: 11px; color: var(--color-muted-foreground); overflow-wrap: anywhere; }
 .quality-test-error { padding: 12px; margin-top: 12px; background: color-mix(in srgb, var(--color-destructive) 6%, transparent); color: var(--color-destructive); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
 .quality-test-error button { display: block; margin-top: 8px; }
+.quality-test-error small { display: block; margin-top: 6px; font-size: 11px; opacity: .85; }
+.quality-test-error.is-interrupted, .quality-test-error.is-note { color: hsl(var(--warning)); background: color-mix(in srgb, hsl(var(--warning)) 8%, transparent); }
+.quality-test-status.streamInterrupted { color: hsl(var(--warning)); }
 .quality-test-result-error { margin: 12px 16px; }
 .quality-test-review { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-top: 20px; padding: 20px 22px; border: 1px solid var(--color-border); border-radius: 14px; }
 .quality-test-review p { margin-top: 5px; max-width: 470px; font-size: 11px; line-height: 1.7; color: var(--color-muted-foreground); }

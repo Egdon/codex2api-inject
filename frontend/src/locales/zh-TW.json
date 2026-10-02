@@ -101,6 +101,12 @@
     "effort": "思考強度",
     "effortHint": "按所選強度傳送請求；可用層級由上游模型決定。",
     "fixedEffort": "此管道的思考強度已包含在模型名稱中，請直接選擇對應層級的模型。",
+    "timeout": "逾時上限",
+    "timeoutOption": "{{count}} 分鐘",
+    "timeoutHint": "超過上限自動停止；xhigh 或慢速方案產生長頁面建議選 30 分鐘。",
+    "partialKept": "上游連線在完成前中斷，已保留中斷前收到的 {{count}} 個字元。可點「重新檢測」再跑一次。",
+    "autoRetried": "連線在輸出前中斷，已自動重試 {{count}} 次。",
+    "rerun": "重新檢測",
     "efforts": {
       "default": "模型預設",
       "none": "不思考 · none",
@@ -131,7 +137,8 @@
       "running": "產生中",
       "completed": "已完成",
       "error": "測試失敗",
-      "stopped": "已停止"
+      "stopped": "已停止",
+      "streamInterrupted": "傳輸中斷"
     },
     "readyHint": "等待一次新的靈感與推理",
     "emptyTitle": "還沒有產生結果。",

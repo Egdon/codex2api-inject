@@ -101,6 +101,12 @@
     "effort": "Reasoning effort",
     "effortHint": "The selected effort is sent with the request. Available levels depend on the upstream model.",
     "fixedEffort": "Reasoning effort is part of this channel's model name. Select a model with the desired tier.",
+    "timeout": "Time limit",
+    "timeoutOption": "{{count}} min",
+    "timeoutHint": "The run stops at this limit. Choose 30 minutes for long pages on xhigh or slow plans.",
+    "partialKept": "The upstream connection dropped before completion; the {{count}} characters received so far are kept. Use “Run again” to retry.",
+    "autoRetried": "The connection dropped before any output and was retried automatically {{count}} time(s).",
+    "rerun": "Run again",
     "efforts": {
       "default": "Model default",
       "none": "None · none",
@@ -131,7 +137,8 @@
       "running": "Generating",
       "completed": "Completed",
       "error": "Failed",
-      "stopped": "Stopped"
+      "stopped": "Stopped",
+      "streamInterrupted": "Connection lost"
     },
     "readyHint": "Ready for a new creative challenge",
     "emptyTitle": "No result yet.",

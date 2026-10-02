@@ -101,6 +101,12 @@
     "effort": "思考强度",
     "effortHint": "按所选强度发送请求；可用档位由上游模型决定。",
     "fixedEffort": "该渠道的思考强度已包含在模型名称中，请直接选择对应档位的模型。",
+    "timeout": "超时上限",
+    "timeoutOption": "{{count}} 分钟",
+    "timeoutHint": "超过上限自动停止；xhigh 或慢速套餐生成长页面建议选 30 分钟。",
+    "partialKept": "上游连接在完成前中断，已保留中断前收到的 {{count}} 个字符。可点「重新检测」再跑一次。",
+    "autoRetried": "连接在输出前中断，已自动重试 {{count}} 次。",
+    "rerun": "重新检测",
     "efforts": {
       "default": "模型默认",
       "none": "不思考 · none",
@@ -131,7 +137,8 @@
       "running": "生成中",
       "completed": "已完成",
       "error": "测试失败",
-      "stopped": "已停止"
+      "stopped": "已停止",
+      "streamInterrupted": "传输中断"
     },
     "readyHint": "等待一次新的灵感与推理",
     "emptyTitle": "还没有生成结果。",

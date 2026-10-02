@@ -15,7 +15,7 @@ import { formatRelativeTime } from '../utils/time'
 import { useToast } from '../hooks/useToast'
 import { useVisibleChannels } from '../visibleChannels'
 import { formatAccountName } from '../lib/connectionTestModels'
-import { extractQualityTestHTML, PELICAN_PROMPT, isQualityTestActive, qualityTestPlanTone, clampQualityTestFrameHeight, QUALITY_TEST_BUILTIN_PRESETS, EMPTY_QUALITY_TEST_FACETS, type QualityTestJob, type QualityTestJobsFilter, type QualityTestPrompt } from '../lib/qualityTest'
+import { extractQualityTestHTML, PELICAN_PROMPT, isQualityTestActive, qualityTestPlanTone, qualityTestStatusKey, QUALITY_TEST_TIMEOUT_MINUTES, QUALITY_TEST_DEFAULT_TIMEOUT_MINUTES, clampQualityTestFrameHeight, QUALITY_TEST_BUILTIN_PRESETS, EMPTY_QUALITY_TEST_FACETS, type QualityTestJob, type QualityTestJobsFilter, type QualityTestPrompt } from '../lib/qualityTest'
 import { useQualityTestSVGExport, type QualityTestSVGExport } from '../hooks/useQualityTestSVGExport'
 import { getErrorMessage } from '../utils/error'
 import { useQualityTestJobs, useQualityTestDetail } from '../hooks/useQualityTestJobs'
@@ -133,12 +133,22 @@ function PreviewActions({ run, html, view, narrow, svgExport, onToggleNarrow, on
   </div>
 }
 
+// 运行结果提示:错误原文 + 中断时保留的部分输出 + 输出前自动重试次数。
+function RunNotice({ run }: { run: QualityTestJob | null }) {
+  const { t } = useTranslation()
+  if (!run || (!run.error && !run.retries)) return null
+  const partial = run.interrupted && run.output ? t('qualityTest.partialKept', { count: run.output.length }) : ''
+  const retried = run.retries ? t('qualityTest.autoRetried', { count: run.retries }) : ''
+  if (!run.error) return <div role="status" className="quality-test-error quality-test-result-error is-note">{retried}</div>
+  return <div role="alert" className={`quality-test-error quality-test-result-error ${run.interrupted ? 'is-interrupted' : ''}`}>{run.error}{partial ? <small>{partial}</small> : null}{retried ? <small>{retried}</small> : null}</div>
+}
+
 function DetailMeta({ label, value, mono = true, hint }: { label: string; value: string; mono?: boolean; hint?: string }) {
   return <div className="quality-test-dialog-meta" title={hint}><dt>{label}</dt><dd className={mono ? 'is-mono' : ''}>{value}</dd></div>
 }
 
 // 检测记录的结果弹窗:全屏拟态窗口,左侧渲染动画,右侧列出账号/模型/耗时等详情。
-function ResultDialog({ id, revision, onClose, onOpenStudio }: { id: number | undefined; revision: number; onClose: () => void; onOpenStudio: (id: number) => void }) {
+function ResultDialog({ id, revision, onClose, onOpenStudio, onRerun, rerunDisabled }: { id: number | undefined; revision: number; onClose: () => void; onOpenStudio: (id: number) => void; onRerun: (job: QualityTestJob) => void; rerunDisabled: (job: QualityTestJob) => boolean }) {
   const { t } = useTranslation()
   const { showToast } = useToast()
   const detail = useQualityTestDetail(id, revision)
@@ -171,12 +181,12 @@ function ResultDialog({ id, revision, onClose, onOpenStudio }: { id: number | un
       <div className="quality-test-dialog-layout">
         <div className="quality-test-dialog-stage">
           {detail.error ? <div role="alert" className="quality-test-error quality-test-result-error">{detail.error}</div> : null}
-          {run?.error ? <div role="alert" className="quality-test-error quality-test-result-error">{run.error}</div> : null}
+          <RunNotice run={run} />
           <ResultCanvas run={run} view={view} html={html} svgExport={svgExport} previewKey={previewKey} narrow={narrow} loading={detail.loading} />
         </div>
         <aside className="quality-test-dialog-info">
           <div className="quality-test-dialog-status">
-            <span className={`quality-test-status ${run?.status ?? ''}`} role="status">{running ? <RefreshCw className="size-3.5 animate-spin" /> : run?.status === 'completed' ? <Check className="size-3.5" /> : <span className="quality-test-status-dot" />}{t(`qualityTest.status.${run?.status ?? 'idle'}`)}</span>
+            <span className={`quality-test-status ${run ? qualityTestStatusKey(run) : ''}`} role="status">{running ? <RefreshCw className="size-3.5 animate-spin" /> : run?.status === 'completed' ? <Check className="size-3.5" /> : <span className="quality-test-status-dot" />}{t(`qualityTest.status.${qualityTestStatusKey(run)}`)}</span>
             {run ? <PlanBadge plan={run.plan_type} /> : null}
           </div>
           <h3>{t('qualityTest.runDetails')}</h3>
@@ -188,6 +198,7 @@ function ResultDialog({ id, revision, onClose, onOpenStudio }: { id: number | un
             <DetailMeta label={t('qualityTest.testTime')} value={run ? formatBeijingTime(run.created_at) : '—'} />
             <DetailMeta label={t('qualityTest.duration')} value={run ? formatSeconds(run.duration_ms) : '—'} />
             <DetailMeta label={t('qualityTest.firstContent')} value={formatSeconds(run?.first_content_ms)} hint={t('qualityTest.firstContentHint')} />
+            <DetailMeta label={t('qualityTest.timeout')} value={run?.timeout_ms ? t('qualityTest.timeoutOption', { count: Math.round(run.timeout_ms / 60000) }) : '—'} />
             <DetailMeta label={t('qualityTest.outputTokens')} value={run?.output_tokens?.toLocaleString() ?? '—'} />
             <DetailMeta label={t('qualityTest.reasoningTokens')} value={run?.reasoning_tokens?.toLocaleString() ?? '—'} />
           </dl>
@@ -200,7 +211,10 @@ function ResultDialog({ id, revision, onClose, onOpenStudio }: { id: number | un
           <span className="quality-test-hint">{t('qualityTest.isolatedPreview')}</span>
           <PreviewActions run={run} html={html} view={view} narrow={narrow} svgExport={svgExport} onToggleNarrow={() => setNarrow((value) => !value)} onReplay={() => setPreviewKey((key) => key + 1)} onCopy={() => void copySource()} />
         </div>
-        <Button size="sm" variant="outline" disabled={!id} onClick={() => id && onOpenStudio(id)}><ExternalLink className="size-3.5" />{t('qualityTest.openInStudio')}</Button>
+        <div className="flex items-center gap-2">
+          {run && !running && run.prompt ? <Button size="sm" variant="outline" disabled={rerunDisabled(run)} onClick={() => onRerun(run)}><RotateCcw className="size-3.5" />{t('qualityTest.rerun')}</Button> : null}
+          <Button size="sm" variant="outline" disabled={!id} onClick={() => id && onOpenStudio(id)}><ExternalLink className="size-3.5" />{t('qualityTest.openInStudio')}</Button>
+        </div>
       </div>
     </DialogContent>
   </Dialog>
@@ -273,6 +287,7 @@ export default function QualityTest() {
   const [reload, setReload] = useState(0)
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState('high')
+  const [timeoutMinutes, setTimeoutMinutes] = useState(QUALITY_TEST_DEFAULT_TIMEOUT_MINUTES)
   const [prompt, setPrompt] = useState(PELICAN_PROMPT)
   const [presets, setPresets] = useState<QualityTestPrompt[]>([])
   const [presetsLoading, setPresetsLoading] = useState(true)
@@ -422,12 +437,28 @@ export default function QualityTest() {
     setPreviewKey((key) => key + 1)
   }
 
-  async function startTest() {
-    if (submittingRef.current || !account || !model || !prompt.trim() || promptBytes > 16000 || slotsFull || accountBusy) return
+  function startTest() {
+    if (!account || !model || !prompt.trim() || promptBytes > 16000 || slotsFull || accountBusy) return
+    void submitTest(account.id, { model, reasoning_effort: effort, prompt, prompt_id: activePreset?.id, preset_key: activeBuiltin?.key, preset_name: activeBuiltin ? t(`qualityTest.presets.builtins.${activeBuiltin.key}`) : undefined, timeout_minutes: timeoutMinutes })
+  }
+
+  const rerunDisabled = (job: QualityTestJob) => submitting || slotsFull || records.active_jobs.some((item) => item.account_id === job.account_id)
+
+  // 重新检测沿用原记录的账号/模型/强度/提示词/预设;超时取原记录与当前表单中较大者。
+  function rerunJob(job: QualityTestJob) {
+    if (!job.prompt || rerunDisabled(job)) return
+    const previous = job.timeout_ms ? Math.round(job.timeout_ms / 60000) : 0
+    const timeout = QUALITY_TEST_TIMEOUT_MINUTES.find((value) => value >= Math.max(previous, timeoutMinutes)) ?? QUALITY_TEST_TIMEOUT_MINUTES[QUALITY_TEST_TIMEOUT_MINUTES.length - 1]
+    setModalID(undefined)
+    void submitTest(job.account_id, { model: job.model, reasoning_effort: job.reasoning_effort, prompt: job.prompt, prompt_id: job.preset_kind === 'custom' ? Number(job.preset_ref) || undefined : undefined, preset_key: job.preset_kind === 'builtin' ? job.preset_ref : undefined, preset_name: job.preset_kind === 'builtin' ? job.preset_name : undefined, timeout_minutes: timeout })
+  }
+
+  async function submitTest(accountId: number, body: Parameters<typeof api.createQualityTest>[1]) {
+    if (submittingRef.current) return
     submittingRef.current = true
     setSubmitting(true)
     try {
-      const result = await api.createQualityTest(account.id, { model, reasoning_effort: effort, prompt, prompt_id: activePreset?.id, preset_key: activeBuiltin?.key, preset_name: activeBuiltin ? t(`qualityTest.presets.builtins.${activeBuiltin.key}`) : undefined })
+      const result = await api.createQualityTest(accountId, body)
       if (!mountedRef.current) return
       selectJob(result.job.id, 'studio')
       setRecordPage(1)
@@ -517,7 +548,7 @@ export default function QualityTest() {
             <td><span className="quality-test-record-model">{job.model}</span></td><td><span className="quality-test-effort-chip">{job.reasoning_effort || t('qualityTest.efforts.default')}</span></td>
             <td><PresetLabel job={job} /></td>
             <td className="quality-test-record-time">{formatBeijingTime(job.created_at)}</td>
-            <td><span className={`quality-test-status quality-test-status-pill ${job.status}`}>{isQualityTestActive(job) ? <RefreshCw className="size-3 animate-spin" /> : <span className="quality-test-status-dot" />}{t(`qualityTest.status.${job.status}`)}</span></td>
+            <td><span className={`quality-test-status quality-test-status-pill ${qualityTestStatusKey(job)}`}>{isQualityTestActive(job) ? <RefreshCw className="size-3 animate-spin" /> : <span className="quality-test-status-dot" />}{t(`qualityTest.status.${qualityTestStatusKey(job)}`)}</span></td>
             <td className="quality-test-record-time is-numeric">{formatTime(job.duration_ms)}</td>
             <td className="quality-test-record-time is-numeric">{formatTime(job.first_content_ms)}</td>
             <td className="quality-test-record-time is-numeric">{job.output_tokens?.toLocaleString() ?? '—'}</td>
@@ -543,6 +574,9 @@ export default function QualityTest() {
             <label htmlFor="quality-effort">{t('qualityTest.effort')}</label>
             <Select id="quality-effort" value={effort} disabled={!options || options.reasoning_efforts.length < 2 || submitting} onValueChange={setEffort} options={(options?.reasoning_efforts ?? ['high']).map((item) => ({ value: item, label: item ? t(`qualityTest.efforts.${item}`) : t('qualityTest.efforts.default') }))} />
             <p className="quality-test-hint">{t(options?.reasoning_efforts.length === 1 ? 'qualityTest.fixedEffort' : 'qualityTest.effortHint')}</p>
+            <label htmlFor="quality-timeout">{t('qualityTest.timeout')}</label>
+            <Select id="quality-timeout" value={String(timeoutMinutes)} disabled={submitting} onValueChange={(value) => setTimeoutMinutes(Number(value))} options={QUALITY_TEST_TIMEOUT_MINUTES.map((value) => ({ value: String(value), label: t('qualityTest.timeoutOption', { count: value }) }))} />
+            <p className="quality-test-hint">{t('qualityTest.timeoutHint')}</p>
             <label htmlFor="quality-preset">{t('qualityTest.presets.select')}</label>
             <Select id="quality-preset" value={presetValue} disabled={submitting} onValueChange={applyPreset} options={[...QUALITY_TEST_BUILTIN_PRESETS.map((item) => ({ value: `builtin:${item.key}`, label: t(item.key === 'pelican' ? 'qualityTest.presets.selectDefault' : 'qualityTest.presets.builtinOption', { name: t(`qualityTest.presets.builtins.${item.key}`) }) })), ...presets.map((item) => ({ value: String(item.id), label: item.name })), ...(presetValue === 'custom' ? [{ value: 'custom', label: t('qualityTest.presets.selectCustom') }] : [])]} />
             <p className="quality-test-hint">{t(presets.length === 0 && !presetsLoading ? 'qualityTest.presets.selectEmptyHint' : 'qualityTest.presets.selectHint')}</p>
@@ -551,7 +585,7 @@ export default function QualityTest() {
             <p className="quality-test-hint">{t('qualityTest.promptHint')}</p>
             {promptBytes > 16000 ? <p role="alert" className="text-sm text-destructive">{t('qualityTest.promptTooLong')}</p> : null}
           </fieldset>
-          <Button size="lg" className="w-full" onClick={() => void startTest()} disabled={submitting || !account || !model || optionsLoading || !prompt.trim() || promptBytes > 16000 || slotsFull || accountBusy}>
+          <Button size="lg" className="w-full" onClick={startTest} disabled={submitting || !account || !model || optionsLoading || !prompt.trim() || promptBytes > 16000 || slotsFull || accountBusy}>
             {submitting ? <RefreshCw className="size-4 animate-spin" /> : <Play className="size-4" />}
             {t(submitting ? 'qualityTest.submitting' : accountBusy ? 'qualityTest.accountBusy' : slotsFull ? 'qualityTest.slotsFull' : 'qualityTest.start')}
           </Button>
@@ -564,11 +598,11 @@ export default function QualityTest() {
             <SegmentedPillGroup value={view} onChange={setView} label={t('qualityTest.result')} options={[{ value: 'preview', label: t('qualityTest.preview'), icon: <Eye className="size-3.5" /> }, { value: 'source', label: t('qualityTest.source'), icon: <Code2 className="size-3.5" /> }]} />
           </div>
           <div className="quality-test-run-meta">
-            <span className={`quality-test-status ${run?.status ?? ''}`} role="status">{running ? <RefreshCw className="size-3.5 animate-spin" /> : run?.status === 'completed' ? <Check className="size-3.5" /> : <span className="quality-test-status-dot" />}{t(`qualityTest.status.${run?.status ?? 'idle'}`)}</span>
+            <span className={`quality-test-status ${run ? qualityTestStatusKey(run) : ''}`} role="status">{running ? <RefreshCw className="size-3.5 animate-spin" /> : run?.status === 'completed' ? <Check className="size-3.5" /> : <span className="quality-test-status-dot" />}{t(`qualityTest.status.${qualityTestStatusKey(run)}`)}</span>
             <span title={run?.account_name}>{run ? `${run.account_name} · #${run.account_id} / ${run.model} / ${run.reasoning_effort || t('qualityTest.efforts.default')}` : t('qualityTest.readyHint')}</span>
           </div>
-          {run ? <div className="quality-test-record-detail-meta"><span><Clock3 className="size-3.5" />{formatBeijingTime(run.created_at)}</span><PlanBadge plan={run.plan_type} /><span>#{run.id}</span>{running ? <Button size="sm" variant="outline" disabled={cancelling || run.status === 'cancelling'} onClick={() => void stopTest()}><Square className="size-3.5" />{t(run.status === 'cancelling' ? 'qualityTest.status.cancelling' : 'qualityTest.stop')}</Button> : null}</div> : null}
-          {run?.error ? <div role="alert" className="quality-test-error quality-test-result-error">{run.error}</div> : null}
+          {run ? <div className="quality-test-record-detail-meta"><span><Clock3 className="size-3.5" />{formatBeijingTime(run.created_at)}</span><PlanBadge plan={run.plan_type} /><span>#{run.id}</span>{running ? <Button size="sm" variant="outline" disabled={cancelling || run.status === 'cancelling'} onClick={() => void stopTest()}><Square className="size-3.5" />{t(run.status === 'cancelling' ? 'qualityTest.status.cancelling' : 'qualityTest.stop')}</Button> : run.prompt ? <Button size="sm" variant="outline" disabled={rerunDisabled(run)} onClick={() => rerunJob(run)}><RotateCcw className="size-3.5" />{t('qualityTest.rerun')}</Button> : null}</div> : null}
+          <RunNotice run={run} />
           <ResultCanvas run={run} view={view} html={html} svgExport={svgExport} previewKey={previewKey} narrow={narrowPreview} loading={detail.loading} />
           <div className="quality-test-preview-actions">
             <span className="quality-test-hint">{t('qualityTest.isolatedPreview')}</span>
@@ -587,7 +621,7 @@ export default function QualityTest() {
         <ul>{['shape', 'mechanics', 'motion', 'completion'].map((item, index) => <li key={item}><span>0{index + 1}</span>{t(`qualityTest.criteria.${item}`)}</li>)}</ul>
       </section>
       </>}
-      <ResultDialog id={modalID} revision={revision} onClose={() => setModalID(undefined)} onOpenStudio={(id) => { setModalID(undefined); selectJob(id, 'studio') }} />
+      <ResultDialog id={modalID} revision={revision} onClose={() => setModalID(undefined)} onOpenStudio={(id) => { setModalID(undefined); selectJob(id, 'studio') }} onRerun={rerunJob} rerunDisabled={rerunDisabled} />
       <PresetEditorDialog draft={presetDraft} saving={presetSaving} onChange={(patch) => setPresetDraft((current) => current ? { ...current, ...patch } : current)} onClose={() => setPresetDraft(null)} onSave={() => void savePreset()} />
       {confirmDialog}
     </div>
