@@ -92,6 +92,9 @@ type RequestEnvelope struct {
 	currentUserExactText string
 	currentUserPrecheck  *currentUserPrecheck
 	precheckIncomplete   bool
+	// untrustedApprovalModel is the requested model of a structurally valid
+	// Codex auto-review request whose model is not in ApprovalReviewModels.
+	untrustedApprovalModel string
 }
 
 func BuildEnvelope(body []byte, endpoint string, requestedModel string, transport Transport, maxLen int) RequestEnvelope {

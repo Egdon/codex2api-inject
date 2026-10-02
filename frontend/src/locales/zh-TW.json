@@ -1481,6 +1481,8 @@
     "terminalCategoriesCollapsedDesc": "設定終局分類，以及二審通過後可放行的專用審計模型。",
     "terminalBypassModels": "終局二審豁免模型",
     "terminalBypassModelsHint": "以逗號分隔精確的請求模型 ID。僅對這些模型，二審明確通過後可以清除本地終局命中；二審錯誤或判定違規時仍會攔截。",
+    "approvalReviewModels": "審批範本可信模型",
+    "approvalReviewModelsHint": "以逗號分隔精確的請求模型 ID。只有這些模型發來的 Codex 自動審批(Guardian)請求，在通過封閉範本校驗後，父會話記錄才不再當作使用者輸入攔截；待審批動作仍會審計。自訂 provider 使用 API Key 時 Codex 會用 gpt-5.6-luna 或父會話模型發起審批，需要在這裡加入。留空表示不識別審批範本。",
     "localBlockMessage": "本機攔截提示文案",
     "localBlockMessagePlaceholder": "請求包含被 Prompt 檢查攔截的內容",
     "conversationLockEnabled": "上游 CYB 後鎖定目前對話",
@@ -1573,6 +1575,7 @@
     },
     "help": {
       "terminalBypassModels": "僅用於提示詞必然包含違規樣本的專用審計模型。依客戶端請求模型 ID 比對，不依映射後的上游模型比對。",
+      "approvalReviewModels": "範本可以偽造，只應加入專用於審批的模型。依客戶端請求模型 ID 比對，不依映射後的上游模型比對。攔截日誌出現 approval_review_model_untrusted 表示收到格式正確但模型不在此清單的審批請求。",
       "localBlockMessage": "僅用於本機 Prompt 檢查直接攔截請求時的使用者提示；不會取代上游策略、對話鎖定或使用者冷卻提示。",
       "conversationLockEnabled": "僅在上游明確回傳 cyber_policy 且簽名中繼資料含穩定會話指紋時鎖定。已鎖定請求不會重複累計 strike；沒有可靠視窗識別時不會猜測或誤鎖。",
       "conversationLockTTL": "鎖定超過此時長後自動解鎖；新的上游 CYB 決策仍可重新鎖定。預設 168 小時，最大 720 小時。",
