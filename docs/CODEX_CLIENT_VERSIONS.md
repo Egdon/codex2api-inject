@@ -25,7 +25,7 @@ Desktop 和 VSCode 的应用版本与其内置 CLI 版本一起同步、一起�
 4. 读取 `app.asar` 的头和根 `package.json` 所在块，直接跳过中间内容，取得真实桌面端构建号。
 5. 读取 `codex.exe` 的 PE 头，核对 x64/ARM64，定位只读 `.rdata`，分批读取最多 8 MiB 原始数据。CLI 编译版本必须同时出现在 `codex-doctor/<version>` 与 `version: <version>\nplatform: ` 两个固定字符串中，且版本一致。不会执行下载的二进制。
 
-如果压缩格式、块索引、哈希或版本字符串不受支持，保存失败状态并保留已有完整配对。初次同步没有历史配对时，使用明确标为 `builtin_observed` 的内置配对；不会改用任意最新 CLI，也不会继续下载全包。
+如果压缩格式、块索引、哈希或版本字符串不受支持，仅返回失败状态，不写入数据库，继续使用上一次成功同步的完整配对。初次同步没有缓存配对时，使用明确标为 `builtin_observed` 的内置配对；不会改用任意最新 CLI，也不会继续下载全包。
 
 读取预算对每个安装包独立生效：最多 **12 MiB Range 响应正文、64 次请求**，缓存块大小 256 KiB。服务器必须返回严格匹配的 `206`、`Content-Range`、正文长度和稳定的 ETag / Last-Modified；返回整包 `200` 时直接停止。只有格式正确的强 ETag 才作为 `If-Range` 发出，兼容 Marketplace 的未加引号 ETag。普通小文件最多 64 KiB，block map 和 ASAR 头分别最多 8 MiB。
 
@@ -50,9 +50,9 @@ Desktop 和 VSCode 的应用版本与其内置 CLI 版本一起同步、一起�
 
 ## 缓存和管理接口
 
-数据库自动创建 `codex_client_version_cache`，以 `(client_kind, target_platform)` 为主键，保存类型明确的目标状态和最多 20 个完整历史配对。每次只更新单个目标，事务成功后发布不可变内存快照。失败保留历史，重启会先加载缓存，即使关闭后台同步也会加载。
+数据库自动创建 `codex_client_version_cache`，以 `(client_kind, target_platform)` 为主键，每个目标只保存最后一次成功同步的完整版本配对，不累积历史。同步成功后更新单个目标，事务成功后发布不可变内存快照；同步或数据库写入失败时保留原数据和生效版本。重启会先加载缓存，即使关闭后台同步也会加载；旧缓存的历史配对在加载时清理，仅保留原生效配对。
 
-`GET /api/admin/settings` 的只读 `codex_client_versions` 展示 10 个 Desktop / VSCode 目标及配对、来源、状态、历史、检查时间和错误。普通设置保存不会写回此缓存。兼容字段 `codex_synced_desktop_mac_build`、`codex_synced_desktop_windows_build`、`codex_synced_vscode_build` 分别投影 macOS ARM64、Windows x64 和 VSCode Linux x64；旧版独立字符串不迁移成配对。
+`GET /api/admin/settings` 的只读 `codex_client_versions` 展示 10 个 Desktop / VSCode 目标及当前配对、来源、状态和最近成功检查时间；本次同步错误只在同步响应中返回。普通设置保存不会写回此缓存。兼容字段 `codex_synced_desktop_mac_build`、`codex_synced_desktop_windows_build`、`codex_synced_vscode_build` 分别投影 macOS ARM64、Windows x64 和 VSCode Linux x64；旧版独立字符串不迁移成配对。
 
 `POST /api/admin/settings/codex-client-versions/sync` 保留 `cli`、`desktop_mac`、`desktop_windows`、`vscode` 四类结果，增加 CLI 版本、来源、状态与各目标结果。并发调用合并，安装包解析最多并发 2 个；单一来源失败不阻断其他来源。
 
@@ -60,7 +60,7 @@ Desktop 和 VSCode 的应用版本与其内置 CLI 版本一起同步、一起�
 
 ## 验证
 
-关键回归覆盖 ZIP64、Range 拒绝整包与预算、版本/架构不匹配、原生 VSIX 与 WSL 区分、MSIX 独立块及哈希、稀疏 ASAR、alpha 字符串一致性、缓存失败/重启/并发合并、设置只读、手动覆盖、最低版本不可用以及 HTTP / WS 出站前拦截。
+关键回归覆盖 ZIP64、Range 拒绝整包与预算、版本/架构不匹配、原生 VSIX 与 WSL 区分、MSIX 独立块及哈希、稀疏 ASAR、alpha 字符串一致性、缓存失败不写库/重启清理历史/并发替换、设置只读、手动覆盖、最低版本不可用以及 HTTP / WS 出站前拦截。
 
 ```sh
 go test -tags=http2legacy ./proxy ./proxy/wsrelay ./admin ./database

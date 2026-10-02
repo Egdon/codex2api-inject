@@ -114,20 +114,23 @@ func persistCodexCandidateResult(ctx context.Context, db *database.DB, resolutio
 	target := newCodexClientVersionTarget(candidate.Kind, candidate.Target)
 	result := codexTargetSyncResult{}
 	if resolution.err != nil {
+		target.Pairs = append([]CodexClientVersionPair(nil), previous.Pairs...)
 		target.Error = resolution.err.Error()
 		if len(previous.Pairs) > 0 {
 			target.Status = "stale"
 		}
-	} else {
-		target.Status, target.Pairs = "verified", []CodexClientVersionPair{resolution.pair}
-		result.fetched = resolution.pair.AppVersion
-		result.updated = !codexTargetHasArtifact(previous, resolution.pair.ArtifactID)
-		if !result.updated {
-			target.Status = "cached"
-		}
+		result.target = target
+		return result
+	}
+	target.Status, target.Pairs = "verified", []CodexClientVersionPair{resolution.pair}
+	result.fetched = resolution.pair.AppVersion
+	result.updated = !codexTargetHasArtifact(previous, resolution.pair.ArtifactID)
+	if !result.updated {
+		target.Status = "cached"
 	}
 	saved, err := saveCodexClientVersionTarget(ctx, db, target)
 	if err != nil {
+		result.updated = false
 		previous.Status, previous.Error = "error", err.Error()
 		previous.ClientKind, previous.TargetPlatform = candidate.Kind, candidate.Target
 		result.target = previous

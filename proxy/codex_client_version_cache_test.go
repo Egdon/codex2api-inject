@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -38,32 +40,36 @@ func TestCodexClientVersionCacheRestartAndFailure(t *testing.T) {
 	if _, err := saveCodexClientVersionTarget(ctx, db, target); err != nil {
 		t.Fatal(err)
 	}
-	failure := newCodexClientVersionTarget(target.ClientKind, target.TargetPlatform)
-	failure.Error = "unsupported package layout"
-	if _, err := saveCodexClientVersionTarget(ctx, db, failure); err != nil {
+	before, err := db.GetCodexClientVersionCache(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	codexClientVersions.Store(nil)
-	if err := LoadCodexClientVersionCache(ctx, db); err != nil {
-		t.Fatal(err)
+	failure := persistCodexCandidateResult(ctx, db, codexCandidateResolution{
+		candidate: codexClientCandidate{Kind: target.ClientKind, Target: target.TargetPlatform},
+		err:       errors.New("unsupported package layout"),
+	})
+	if failure.target.Status != "stale" || failure.target.Error == "" || failure.updated {
+		t.Fatalf("failure result: %+v", failure)
 	}
-	view := CurrentCodexClientVersions()
-	if len(view) != 1 || len(view[0].Pairs) != 1 || view[0].Pairs[0].CLIVersion != "0.158.0-alpha.2.1" || view[0].Error == "" {
-		t.Fatalf("cache lost complete pair: %+v", view)
+	after, err := db.GetCodexClientVersionCache(ctx)
+	if err != nil || len(after) != 1 || before[0].Payload != after[0].Payload {
+		t.Fatalf("failed sync changed database: %+v, %v", after, err)
 	}
+	view := codexReloadLegacyVersionCache(t, db, target)
 	view[0].Pairs[0].CLIVersion = "changed"
 	if CurrentCodexClientVersions()[0].Pairs[0].CLIVersion == "changed" {
 		t.Fatal("snapshot mutable")
 	}
 }
 
-func TestCodexClientVersionCacheConcurrentHistoryAndFailedSave(t *testing.T) {
+func TestCodexClientVersionCacheConcurrentReplacementAndFailedSave(t *testing.T) {
 	db := codexTestVersionDB(t)
 	var wg sync.WaitGroup
-	for i := range codexClientPairHistoryLimit + 5 {
+	const updates = 25
+	for i := range updates {
 		wg.Go(func() {
 			target := newCodexClientVersionTarget("codex-vscode", "linux-x64")
-			target.CheckedAt = 1
+			target.CheckedAt = int64(i + 1)
 			target.Pairs = []CodexClientVersionPair{codexTestPair(fmt.Sprintf("26.928.%d", i))}
 			if _, err := saveCodexClientVersionTarget(context.Background(), db, target); err != nil {
 				t.Error(err)
@@ -73,8 +79,8 @@ func TestCodexClientVersionCacheConcurrentHistoryAndFailedSave(t *testing.T) {
 	}
 	wg.Wait()
 	view := CurrentCodexClientVersions()
-	if len(view[0].Pairs) != codexClientPairHistoryLimit || view[0].Pairs[0].AppVersion != "26.928.24" {
-		t.Fatalf("history: %+v", view)
+	if len(view[0].Pairs) != 1 || view[0].Pairs[0].AppVersion != "26.928.24" {
+		t.Fatalf("current pair: %+v", view)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -86,4 +92,35 @@ func TestCodexClientVersionCacheConcurrentHistoryAndFailedSave(t *testing.T) {
 	if CurrentCodexClientVersions()[0].Pairs[0].AppVersion != "26.928.24" {
 		t.Fatal("failed save published")
 	}
+}
+
+func codexReloadLegacyVersionCache(t *testing.T, db *database.DB, target CodexClientVersionTarget) []CodexClientVersionTarget {
+	t.Helper()
+	ctx := context.Background()
+	legacy := target
+	legacy.Pairs = append(legacy.Pairs, codexTestPair("26.923.1"))
+	_, err := db.MutateCodexClientVersionCache(ctx, database.CodexClientVersionCacheKey{ClientKind: target.ClientKind, TargetPlatform: target.TargetPlatform}, func(string) (string, error) {
+		data, err := json.Marshal(legacy)
+		return string(data), err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexClientVersions.Store(nil)
+	if err := LoadCodexClientVersionCache(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	view := CurrentCodexClientVersions()
+	if len(view) != 1 || len(view[0].Pairs) != 1 || view[0].Pairs[0].CLIVersion != "0.158.0-alpha.2.1" || view[0].Error != "" {
+		t.Fatalf("cache lost complete pair: %+v", view)
+	}
+	rows, err := db.GetCodexClientVersionCache(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := decodeCodexClientVersionTarget(rows[0].Payload)
+	if err != nil || len(saved.Pairs) != 1 {
+		t.Fatalf("legacy history retained: %+v, %v", saved, err)
+	}
+	return view
 }
