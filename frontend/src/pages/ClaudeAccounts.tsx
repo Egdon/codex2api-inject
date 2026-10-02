@@ -59,6 +59,7 @@ import RequestCountPills from "../components/RequestCountPills";
 import ColumnSettingsMenu from "../components/ColumnSettingsMenu";
 import { CompactStat } from "../components/CompactStat";
 import AccountGroupMultiSelect from "../components/AccountGroupMultiSelect";
+import BatchAccountGroupModal from "../components/BatchAccountGroupModal";
 import AccountQuotaDistributionChart from "../components/AccountQuotaDistributionChart";
 import AccountRateLimitRecoveryChart from "../components/AccountRateLimitRecoveryChart";
 import StateShell from "../components/StateShell";
@@ -688,6 +689,7 @@ export default function ClaudeAccounts({ headerSlot }: { headerSlot?: ReactNode 
   }, [visibleCols]);
   const [knownPlans, setKnownPlans] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batchGroupOpen, setBatchGroupOpen] = useState(false);
   const reloadAbortRef = useRef<AbortController | null>(null);
   const reloadGenerationRef = useRef(0);
   const legacyUsageRefreshRef = useRef<Set<number>>(new Set());
@@ -1879,6 +1881,10 @@ export default function ClaudeAccounts({ headerSlot }: { headerSlot?: ReactNode 
               <PowerOff className="size-3.5" />
               <span className="hidden sm:inline">{t("accounts.disable")}</span>
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setBatchGroupOpen(true)}>
+              <FolderOpen className="size-3.5" />
+              <span className="hidden sm:inline">{t("accounts.batchGroupEdit")}</span>
+            </Button>
             <HeaderActionMenu
               label={t("accounts.batchMore")}
               icon={<MoreHorizontal className="size-3.5" />}
@@ -2040,6 +2046,21 @@ export default function ClaudeAccounts({ headerSlot }: { headerSlot?: ReactNode 
           }}
         />
       ) : null}
+
+      <BatchAccountGroupModal
+        show={batchGroupOpen}
+        ids={selectedIds}
+        channel="claude"
+        groups={claudeGroups}
+        onClose={() => setBatchGroupOpen(false)}
+        onSaved={() => {
+          setBatchGroupOpen(false);
+          setSelected(new Set());
+          void reloadGroups();
+          void reload();
+        }}
+        onGroupsChanged={reloadGroups}
+      />
 
       {assignTarget ? (
         <AssignGroupsModal

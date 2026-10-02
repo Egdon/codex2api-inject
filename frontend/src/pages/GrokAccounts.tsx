@@ -74,6 +74,7 @@ import AccountGroupFilterSelect, {
   type AccountGroupFilterValue,
 } from "../components/AccountGroupFilterSelect";
 import AccountGroupMultiSelect from "../components/AccountGroupMultiSelect";
+import BatchAccountGroupModal from "../components/BatchAccountGroupModal";
 import { useImportGroupIds } from "../hooks/useImportGroupIds";
 import { useAccountTableColumns } from "../hooks/useAccountTableColumns";
 import { useIsDesktop } from "../hooks/useMediaQuery";
@@ -623,6 +624,7 @@ function GrokAccounts({
   const [exporting, setExporting] = useState(false);
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchModelsOpen, setBatchModelsOpen] = useState(false);
+  const [batchGroupOpen, setBatchGroupOpen] = useState(false);
   const [batchModelsDraft, setBatchModelsDraft] = useState<string[]>([]);
   const [batchModelInput, setBatchModelInput] = useState("");
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -662,19 +664,17 @@ function GrokAccounts({
     return () => window.clearTimeout(timer);
   }, [searchQuery]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void api.listAccountGroups()
-      .then((response) => {
-        if (cancelled) return;
-        const groups = response.groups ?? [];
-        setAllGroups(groups);
-        setGroupFilter((current) => pruneAccountGroupFilter(current, groups));
-        pruneImportGroupIds(groups);
-      })
-      .catch(() => undefined);
-    return () => { cancelled = true; };
+  const reloadGroups = useCallback(async () => {
+    const response = await api.listAccountGroups();
+    const groups = response.groups ?? [];
+    setAllGroups(groups);
+    setGroupFilter((current) => pruneAccountGroupFilter(current, groups));
+    pruneImportGroupIds(groups);
   }, [pruneImportGroupIds]);
+
+  useEffect(() => {
+    void reloadGroups().catch(() => undefined);
+  }, [reloadGroups]);
 
   useEffect(() => {
     try {
@@ -2468,6 +2468,17 @@ function GrokAccounts({
                 variant="outline"
                 size="sm"
                 disabled={batchBusy || batchTesting}
+                onClick={() => setBatchGroupOpen(true)}
+              >
+                <FolderOpen className="size-3.5" />
+                <span className="hidden sm:inline">
+                  {t("accounts.batchGroupEdit")}
+                </span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={batchBusy || batchTesting}
                 onClick={() => void handleBatchEnabled(true)}
               >
                 <Power className="size-3.5" />
@@ -3240,6 +3251,20 @@ function GrokAccounts({
         ctx={proxyBindingCtx}
         onClose={() => setQuickProxyAccount(null)}
         onSaved={() => reload()}
+      />
+
+      <BatchAccountGroupModal
+        show={batchGroupOpen}
+        ids={selectedIds}
+        channel="grok"
+        groups={grokGroups}
+        onClose={() => setBatchGroupOpen(false)}
+        onSaved={async () => {
+          setBatchGroupOpen(false);
+          clearSelection();
+          await reload();
+        }}
+        onGroupsChanged={reloadGroups}
       />
 
       {/* 快速设置账号分组(issue #487):与 Codex 账号页同一交互 */}
