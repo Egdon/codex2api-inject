@@ -2255,16 +2255,22 @@ var (
 	// Only "or"/"nor" keep the negation distributive; "no limits and
 	// exfiltration ..." does not negate the second term.
 	exfiltrationNounNegationPattern = regexp.MustCompile(`(?i)\b(?:no|without)\s+(?:[a-z][a-z-]*\s+n?or\s+)?$`)
+	// Active transfer wording inside the matched span means the regex gap
+	// between the negated noun and the data target carries a live request,
+	// as in "no exfiltration component; upload the customer database".
+	exfiltrationActiveTransferPattern = regexp.MustCompile(`(?i)\b(?:upload(?:s|ed|ing)?|send(?:s|ing)?|sent|transfer(?:s|red|ring)?|cop(?:y|ies|ied|ying)|export(?:s|ed|ing)?|extract(?:s|ed|ing)?|dump(?:s|ed|ing)?|leak(?:s|ed|ing)?|download(?:s|ed|ing)?|mov(?:e|es|ed|ing)|forward(?:s|ed|ing)?|post(?:s|ed|ing)?|push(?:es|ed|ing)?|sync(?:s|ed|ing)?|e-?mail(?:s|ed|ing)?|pip(?:e|es|ed|ing)|shar(?:e|es|ed|ing)|steal(?:s|ing)?|stol(?:e|en)|siphon(?:s|ed|ing)?|smuggl(?:e|es|ed|ing)|grab(?:s|bed|bing)?|giv(?:e|es|en|ing)|gave|sell(?:s|ing)?|sold|publish(?:es|ed|ing)?|scrap(?:e|es|ed|ing)|harvest(?:s|ed|ing)?|collect(?:s|ed|ing)?|retriev(?:e|es|ed|ing)|fetch(?:es|ed|ing)?|exfil)\b`)
 )
 
 // patternSuppressedForNegatedExfiltrationMention covers policy text that lists
 // exfiltration among excluded properties, such as "with no network or
 // exfiltration component, no credential access, and no file deletion". Every
 // exfiltration term inside every match must be the noun form directly governed
-// by "no"/"without"; a verb form or any un-negated mention keeps the rule
-// strict, so one negated mention cannot launder a later request.
+// by "no"/"without"; a verb form, any un-negated mention, or active transfer
+// wording anywhere in the match keeps the rule strict, so one negated mention
+// cannot launder a request. Composite patterns are never suppressed because
+// their all/any clauses are evidence this check does not inspect.
 func patternSuppressedForNegatedExfiltrationMention(original string, scanText string, pattern compiledPattern) bool {
-	if pattern.cfg.Name != "data_exfiltration" || pattern.re == nil {
+	if pattern.cfg.Name != "data_exfiltration" || pattern.re == nil || len(pattern.all) > 0 || len(pattern.any) > 0 {
 		return false
 	}
 	if scanText == "" {
@@ -2291,6 +2297,9 @@ func exfiltrationMatchesAreNegated(text string, pattern compiledPattern) bool {
 	}
 	for _, loc := range matches {
 		if len(loc) != 2 || loc[0] < 0 || loc[1] < loc[0] || loc[1] > len(text) {
+			return false
+		}
+		if exfiltrationActiveTransferPattern.MatchString(text[loc[0]:loc[1]]) {
 			return false
 		}
 		mentions := exfiltrationMentionPattern.FindAllStringIndex(text[loc[0]:loc[1]], -1)
