@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -55,7 +54,14 @@ func TestCodexClientVersionCacheRestartAndFailure(t *testing.T) {
 	if err != nil || len(after) != 1 || before[0].Payload != after[0].Payload {
 		t.Fatalf("failed sync changed database: %+v, %v", after, err)
 	}
-	view := codexReloadLegacyVersionCache(t, db, target)
+	codexClientVersions.Store(nil)
+	if err := LoadCodexClientVersionCache(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	view := CurrentCodexClientVersions()
+	if len(view) != 1 || len(view[0].Pairs) != 1 || view[0].Pairs[0].CLIVersion != "0.158.0-alpha.2.1" || view[0].Error != "" {
+		t.Fatalf("cache lost complete pair: %+v", view)
+	}
 	view[0].Pairs[0].CLIVersion = "changed"
 	if CurrentCodexClientVersions()[0].Pairs[0].CLIVersion == "changed" {
 		t.Fatal("snapshot mutable")
@@ -92,35 +98,4 @@ func TestCodexClientVersionCacheConcurrentReplacementAndFailedSave(t *testing.T)
 	if CurrentCodexClientVersions()[0].Pairs[0].AppVersion != "26.928.24" {
 		t.Fatal("failed save published")
 	}
-}
-
-func codexReloadLegacyVersionCache(t *testing.T, db *database.DB, target CodexClientVersionTarget) []CodexClientVersionTarget {
-	t.Helper()
-	ctx := context.Background()
-	legacy := target
-	legacy.Pairs = append(legacy.Pairs, codexTestPair("26.923.1"))
-	_, err := db.MutateCodexClientVersionCache(ctx, database.CodexClientVersionCacheKey{ClientKind: target.ClientKind, TargetPlatform: target.TargetPlatform}, func(string) (string, error) {
-		data, err := json.Marshal(legacy)
-		return string(data), err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	codexClientVersions.Store(nil)
-	if err := LoadCodexClientVersionCache(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	view := CurrentCodexClientVersions()
-	if len(view) != 1 || len(view[0].Pairs) != 1 || view[0].Pairs[0].CLIVersion != "0.158.0-alpha.2.1" || view[0].Error != "" {
-		t.Fatalf("cache lost complete pair: %+v", view)
-	}
-	rows, err := db.GetCodexClientVersionCache(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	saved, err := decodeCodexClientVersionTarget(rows[0].Payload)
-	if err != nil || len(saved.Pairs) != 1 {
-		t.Fatalf("legacy history retained: %+v, %v", saved, err)
-	}
-	return view
 }

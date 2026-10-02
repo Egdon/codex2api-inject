@@ -50,7 +50,7 @@ Desktop 和 VSCode 的应用版本与其内置 CLI 版本一起同步、一起�
 
 ## 缓存和管理接口
 
-数据库自动创建 `codex_client_version_cache`，以 `(client_kind, target_platform)` 为主键，每个目标只保存最后一次成功同步的完整版本配对，不累积历史。同步成功后更新单个目标，事务成功后发布不可变内存快照；同步或数据库写入失败时保留原数据和生效版本。重启会先加载缓存，即使关闭后台同步也会加载；旧缓存的历史配对在加载时清理，仅保留原生效配对。
+数据库自动创建 `codex_client_version_cache`，以 `(client_kind, target_platform)` 为主键，每个目标只保存最后一次成功同步的完整版本配对，不累积历史。同步成功后更新单个目标，事务成功后发布不可变内存快照；同步或数据库写入失败时保留原数据和生效版本。重启会先加载缓存，即使关闭后台同步也会加载。加载缓存不修改数据库；已有历史配对由实例管理员手动清理。
 
 `GET /api/admin/settings` 的只读 `codex_client_versions` 展示 10 个 Desktop / VSCode 目标及当前配对、来源、状态和最近成功检查时间；本次同步错误只在同步响应中返回。普通设置保存不会写回此缓存。兼容字段 `codex_synced_desktop_mac_build`、`codex_synced_desktop_windows_build`、`codex_synced_vscode_build` 分别投影 macOS ARM64、Windows x64 和 VSCode Linux x64；旧版独立字符串不迁移成配对。
 
@@ -60,7 +60,7 @@ Desktop 和 VSCode 的应用版本与其内置 CLI 版本一起同步、一起�
 
 ## 验证
 
-关键回归覆盖 ZIP64、Range 拒绝整包与预算、版本/架构不匹配、原生 VSIX 与 WSL 区分、MSIX 独立块及哈希、稀疏 ASAR、alpha 字符串一致性、缓存失败不写库/重启清理历史/并发替换、设置只读、手动覆盖、最低版本不可用以及 HTTP / WS 出站前拦截。
+关键回归覆盖 ZIP64、Range 拒绝整包与预算、版本/架构不匹配、原生 VSIX 与 WSL 区分、MSIX 独立块及哈希、稀疏 ASAR、alpha 字符串一致性、缓存失败不写库/重启恢复/并发替换、设置只读、手动覆盖、最低版本不可用以及 HTTP / WS 出站前拦截。
 
 ```sh
 go test -tags=http2legacy ./proxy ./proxy/wsrelay ./admin ./database

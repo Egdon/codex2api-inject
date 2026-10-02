@@ -91,7 +91,7 @@ func LoadCodexClientVersionCache(ctx context.Context, db *database.DB) error {
 	}
 	snapshot := &codexClientVersionSnapshot{targets: make(map[string]CodexClientVersionTarget)}
 	for _, row := range rows {
-		target, err := loadCodexClientVersionTarget(ctx, db, row)
+		target, err := decodeCodexClientVersionTarget(row.Payload)
 		if err != nil {
 			return err
 		}
@@ -103,27 +103,6 @@ func LoadCodexClientVersionCache(ctx context.Context, db *database.DB) error {
 	codexClientVersions.Store(snapshot)
 	refreshCodexClientVersionProjections()
 	return nil
-}
-
-// loadCodexClientVersionTarget 清理旧缓存的历史，仅保留当前生效配对。
-func loadCodexClientVersionTarget(ctx context.Context, db *database.DB, row database.CodexClientVersionCacheRow) (CodexClientVersionTarget, error) {
-	target, err := decodeCodexClientVersionTarget(row.Payload)
-	if err != nil || len(target.Pairs) <= 1 {
-		return target, err
-	}
-	raw, err := db.MutateCodexClientVersionCache(ctx, row.CodexClientVersionCacheKey, func(raw string) (string, error) {
-		current, err := decodeCodexClientVersionTarget(raw)
-		if err != nil {
-			return "", err
-		}
-		current.Pairs = current.Pairs[:min(len(current.Pairs), 1)]
-		data, err := json.Marshal(current)
-		return string(data), err
-	})
-	if err != nil {
-		return target, err
-	}
-	return decodeCodexClientVersionTarget(raw)
 }
 
 func mergeCodexClientVersionTarget(current, next CodexClientVersionTarget) CodexClientVersionTarget {
