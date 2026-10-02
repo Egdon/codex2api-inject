@@ -22,12 +22,13 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// Grok CLI 请求头契约的默认值（与 Grok CLI 0.2.106 实抓流量对齐），可用环境变量覆盖，
-// 上游升级 CLI 版本导致指纹校验失败时无需改代码。
-// 0.2.106 契约：UA 为 "grok-pager/<v> grok-shell/<v> (<os>; <arch>)"，
-// identifier=grok-pager、mode=interactive，不再携带 client-surface / client-name 头。
+// Grok CLI 请求头契约的默认值（与 Grok CLI 1.0.41 交互模式实抓流量对齐），可用环境变量覆盖，
+// 上游升级 CLI 版本导致指纹校验失败时无需改代码。上游会对过旧版本直接回 426
+// （"Your Grok CLI version (...) is outdated"），届时先用 GROK_CLIENT_VERSION 顶上再升默认值。
+// 1.0.41 契约：UA 为 "grok-pager/<v> grok-shell/<v> (<os>; <arch>)"（arch 用 Rust 命名
+// aarch64 / x86_64），identifier=grok-pager、mode=interactive，不携带 client-surface / client-name 头。
 var (
-	grokClientVersion    = grokEnv("GROK_CLIENT_VERSION", "0.2.106")
+	grokClientVersion    = grokEnv("GROK_CLIENT_VERSION", "1.0.41")
 	grokClientIdentifier = grokEnv("GROK_CLIENT_IDENTIFIER", "grok-pager")
 	grokClientMode       = grokEnv("GROK_CLIENT_MODE", "interactive")
 	grokTokenAuth        = grokEnv("GROK_TOKEN_AUTH", "xai-grok-cli")
@@ -38,6 +39,8 @@ var (
 	// 官方 Grok CLI 1.0.4 实抓：doom-loop 窗口 1024、会话内剩余压缩次数 1。
 	grokDoomLoopCheck        = grokEnv("GROK_DOOM_LOOP_CHECK", "1024")
 	grokCompactionsRemaining = grokEnv("GROK_COMPACTIONS_REMAINING", "1")
+	// 官方 Grok CLI 1.0.41 实抓：逐字重复检测窗口 64。
+	grokExactRepetitionCheck = grokEnv("GROK_EXACT_REPETITION_CHECK", "64")
 )
 
 func grokEnv(key, fallback string) string {
@@ -74,22 +77,38 @@ func grokUserAgentOS() string {
 	return runtime.GOOS
 }
 
-func grokUserAgent() string {
-	if grokClientIdentifier == "grok-shell" {
-		return fmt.Sprintf("grok-shell/%s (%s; %s)", grokClientVersion, grokUserAgentOS(), runtime.GOARCH)
+// grokUserAgentArch 返回 UA 里的架构名。官方 CLI 是 Rust 构建，用 aarch64 / x86_64
+// 而非 Go 的 arm64 / amd64。
+func grokUserAgentArch() string {
+	switch runtime.GOARCH {
+	case "arm64":
+		return "aarch64"
+	case "amd64":
+		return "x86_64"
 	}
-	return fmt.Sprintf("%s/%s grok-shell/%s (%s; %s)", grokClientIdentifier, grokClientVersion, grokClientVersion, grokUserAgentOS(), runtime.GOARCH)
+	return runtime.GOARCH
 }
 
-// grokAgentID 为每个账号生成稳定的 agent 标识（32 位 hex，与 Grok CLI 的
+func grokUserAgent() string {
+	if grokClientIdentifier == "grok-shell" {
+		return fmt.Sprintf("grok-shell/%s (%s; %s)", grokClientVersion, grokUserAgentOS(), grokUserAgentArch())
+	}
+	return fmt.Sprintf("%s/%s grok-shell/%s (%s; %s)", grokClientIdentifier, grokClientVersion, grokClientVersion, grokUserAgentOS(), grokUserAgentArch())
+}
+
+// grokAgentID 为每个账号生成稳定的 agent 标识（UUIDv5，与 Grok CLI 的
 // global agent id 形态一致）。
 func grokAgentID(account *auth.Account) string {
-	sum := sha256.Sum256(fmt.Appendf(nil, "codex2api:grok-agent:%d", account.ID()))
-	return hex.EncodeToString(sum[:16])
+	return uuid.NewSHA1(uuid.NameSpaceOID, fmt.Appendf(nil, "codex2api:grok-agent:%d", account.ID())).String()
 }
 
 func grokRandomHexID() string {
 	return strings.ReplaceAll(uuid.New().String(), "-", "")
+}
+
+// grokTraceparent 生成每请求独立的 W3C traceparent（官方 CLI 每次推理请求都带）。
+func grokTraceparent() string {
+	return "00-" + grokRandomHexID() + "-" + grokRandomHexID()[:16] + "-01"
 }
 
 // resolveGrokConversationID 给官方 Grok CLI 的 session/conv 头一个跨轮稳定值。
@@ -174,6 +193,7 @@ func applyGrokRequestHeaders(req *http.Request, account *auth.Account, bearer st
 	req.Header.Set("x-grok-client-identifier", grokClientIdentifier)
 	req.Header.Set("x-grok-client-mode", grokClientMode)
 	req.Header.Set("x-grok-doom-loop-check", grokDoomLoopCheck)
+	req.Header.Set("x-grok-exact-repetition-check", grokExactRepetitionCheck)
 	req.Header.Set("x-compactions-remaining", grokCompactionsRemaining)
 	if compactionAt := grokCompactionAtForAccount(account); compactionAt != "" {
 		req.Header.Set("x-compaction-at", compactionAt)
@@ -190,7 +210,8 @@ func applyGrokRequestHeaders(req *http.Request, account *auth.Account, bearer st
 	// grok-build 用根会话派生 conv-group，把主对话和子代理归到同一组。
 	// 只在已经发出 conv-id 时附带；算法与 xai-grok-shell derive_conversation_group_id 一致。
 	req.Header.Set("x-grok-conv-group-id", grokConversationGroupID(sessionID))
-	req.Header.Set("x-grok-req-id", grokRandomHexID())
+	req.Header.Set("x-grok-req-id", uuid.NewString())
+	req.Header.Set("traceparent", grokTraceparent())
 
 	if userID := account.GrokUserID(); userID != "" && !isAPIKey {
 		req.Header.Set("x-userid", userID)

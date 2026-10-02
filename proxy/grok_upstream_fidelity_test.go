@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"net/http"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/andybalholm/brotli"
 	"github.com/codex2api/auth"
+	"github.com/google/uuid"
 )
 
 func TestApplyGrokRequestHeadersAlignsOfficialCLI(t *testing.T) {
@@ -18,15 +22,40 @@ func TestApplyGrokRequestHeadersAlignsOfficialCLI(t *testing.T) {
 	account := &auth.Account{DBID: 1, UpstreamType: auth.UpstreamGrok, AccessToken: "at"}
 	applyGrokRequestHeaders(req, account, "tok", nil, nil)
 	checks := map[string]string{
-		"Accept":                   "text/event-stream",
-		"x-grok-doom-loop-check":   "1024",
-		"x-compactions-remaining":  "1",
-		"x-grok-client-identifier": grokClientIdentifier,
+		"Accept":                        "text/event-stream",
+		"x-grok-doom-loop-check":        "1024",
+		"x-compactions-remaining":       "1",
+		"x-grok-client-identifier":      grokClientIdentifier,
+		"x-grok-client-version":         grokClientVersion,
+		"x-grok-exact-repetition-check": "64",
 	}
 	for key, want := range checks {
 		if got := req.Header.Get(key); got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)
 		}
+	}
+	// 官方 CLI 的 agent-id / req-id 都是带连字符的 UUID，traceparent 每请求必带。
+	for _, key := range []string{"x-grok-agent-id", "x-grok-req-id"} {
+		if _, err := uuid.Parse(req.Header.Get(key)); err != nil || len(req.Header.Get(key)) != 36 {
+			t.Fatalf("%s = %q, want hyphenated UUID", key, req.Header.Get(key))
+		}
+	}
+	if !regexp.MustCompile(`^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`).MatchString(req.Header.Get("traceparent")) {
+		t.Fatalf("traceparent = %q", req.Header.Get("traceparent"))
+	}
+	ua := req.Header.Get("User-Agent")
+	if strings.Contains(ua, "arm64") || strings.Contains(ua, "amd64") || !strings.Contains(ua, "/"+grokClientVersion+" ") {
+		t.Fatalf("User-Agent = %q, want Rust arch names and client version", ua)
+	}
+}
+
+func TestGrokClientVersionDefaultNotOutdated(t *testing.T) {
+	// 上游对 1.0.13 以下的 CLI 版本回 426；默认值回退到 0.x 会让全部 Grok 请求失败。
+	if os.Getenv("GROK_CLIENT_VERSION") != "" {
+		t.Skip("GROK_CLIENT_VERSION overridden")
+	}
+	if strings.HasPrefix(grokClientVersion, "0.") {
+		t.Fatalf("grokClientVersion = %q is below the upstream minimum", grokClientVersion)
 	}
 }
 
