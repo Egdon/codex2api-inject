@@ -139,6 +139,75 @@ func TestParseCodexDetectorConcurrency(t *testing.T) {
 	}
 }
 
+func TestParseCodexDetectorSamples(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    int
+		wantErr bool
+	}{
+		{raw: "", want: proxy.ModelTraceTargetOutputs},
+		{raw: " 1 ", want: 1},
+		{raw: "2", want: 2},
+		{raw: "3", want: 3},
+		{raw: "0", wantErr: true},
+		{raw: "4", wantErr: true},
+		{raw: "x", wantErr: true},
+	}
+	for _, test := range tests {
+		got, err := parseCodexDetectorSamples(test.raw)
+		if test.wantErr {
+			if err == nil {
+				t.Errorf("parseCodexDetectorSamples(%q) = %d, want error", test.raw, got)
+			}
+			continue
+		}
+		if err != nil || got != test.want {
+			t.Errorf("parseCodexDetectorSamples(%q) = %d, %v; want %d", test.raw, got, err, test.want)
+		}
+	}
+}
+
+func TestModelDetectorSingleSampleSendsOneProbe(t *testing.T) {
+	var requests int
+	numbers := make([]string, 220)
+	for index := range numbers {
+		numbers[index] = strconv.Itoa(index%355 + 1)
+	}
+	answer := strings.Join(numbers, ",")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":"+strconv.Quote(answer)+"}}\n\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer upstream.Close()
+
+	account := &auth.Account{
+		DBID: 8, UpstreamType: auth.UpstreamClaude, ClaudeAuthKind: auth.ClaudeAuthKindAPIKey,
+		AccessToken: "claude-api-key", ClaudeBaseURL: upstream.URL, Models: []string{"claude-sonnet-4-5"},
+	}
+	store := auth.NewStore(nil, nil, nil)
+	t.Cleanup(store.Stop)
+	store.AddAccount(account)
+	handler := &Handler{store: store}
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Params = gin.Params{{Key: "id", Value: "8"}}
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/admin/accounts/8/model-detector?model=claude-sonnet-4-5&samples=1", nil)
+	handler.DetectCodexModel(c)
+
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || requests != 1 {
+		t.Fatalf("single-sample detector status=%d requests=%d body=%s", recorder.Code, requests, body)
+	}
+	if !strings.Contains(body, `"total":1,"max_attempts":2`) || !strings.Contains(body, `"calibration":{"queries":1`) {
+		t.Fatalf("single-sample detector did not report a 1-sample run: %s", body)
+	}
+}
+
 func gjsonString(body []byte, path string) string {
 	return gjson.GetBytes(body, path).String()
 }

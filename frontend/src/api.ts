@@ -541,6 +541,28 @@ export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   return search
 }
 
+export interface ModelTraceBankInfo {
+  origin: 'embedded' | 'override'
+  revision: string
+  built_at: string
+  models: string[]
+}
+
+export interface ModelTraceBankStatus {
+  active: ModelTraceBankInfo
+  embedded: ModelTraceBankInfo
+  override?: ModelTraceBankInfo
+  override_stale?: boolean
+  override_error?: string
+}
+
+export interface ModelTraceBankUpdateResult extends ModelTraceBankStatus {
+  updated: boolean
+  message: string
+  added_models?: string[]
+  removed_models?: string[]
+}
+
 export const api = {
   getBranding: () => requestPublic<SiteBranding>('/api/branding'),
   // 公开账号自助门户:生成 OpenAI 授权链接(无鉴权)。
@@ -1557,6 +1579,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url: url ?? '' }),
     }),
+  getModelTraceBank: () => request<ModelTraceBankStatus>('/modeltrace/bank'),
+  updateModelTraceBank: () =>
+    request<ModelTraceBankUpdateResult>('/modeltrace/bank/update', { method: 'POST', timeoutMs: 120_000 }),
+  resetModelTraceBank: () => request<ModelTraceBankStatus>('/modeltrace/bank', { method: 'DELETE' }),
 	updateOfficialPricingSyncConfig: (config: Pick<OfficialPricingSyncConfig, 'enabled' | 'interval_minutes' | 'include_openai' | 'include_grok' | 'include_claude'>) =>
 		request<OfficialPricingSyncConfig>('/model-pricing/official-sync/config', {
 			method: 'PUT',

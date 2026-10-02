@@ -22,6 +22,8 @@ const (
 	codexDetectorMaxAnswerBytes     = 256 * 1024
 	defaultCodexDetectorConcurrency = 1
 	maxCodexDetectorConcurrency     = 3
+	// Each valid sample may be retried once, matching the original 3/6 budget.
+	codexDetectorAttemptsPerSample = 2
 )
 
 type codexDetectorEvent struct {
@@ -47,7 +49,7 @@ type codexDetectorEvent struct {
 // Codex and Claude accounts use their native upstream lifecycle, while API
 // accounts use their configured base URL, credentials and proxy.
 //
-// GET /api/admin/accounts/:id/model-detector?model=gpt-5.6-sol
+// GET /api/admin/accounts/:id/model-detector?model=gpt-5.6-sol&samples=1
 func (h *Handler) DetectCodexModel(c *gin.Context) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -73,7 +75,7 @@ func (h *Handler) DetectCodexModel(c *gin.Context) {
 		return
 	}
 
-	detector, err := proxy.NewModelTraceDetector()
+	detector, err := h.currentModelTraceDetector(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ModelTrace 指纹库加载失败"})
 		return
@@ -88,7 +90,13 @@ func (h *Handler) DetectCodexModel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	challenges, err := detector.GenerateChallenges(proxy.ModelTraceMaxAttempts)
+	samples, err := parseCodexDetectorSamples(c.Query("samples"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	maxAttempts := samples * codexDetectorAttemptsPerSample
+	challenges, err := detector.GenerateChallenges(maxAttempts)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ModelTrace 挑战生成失败"})
 		return
@@ -96,9 +104,9 @@ func (h *Handler) DetectCodexModel(c *gin.Context) {
 
 	setupSSE(c)
 	if !sendSSEJSON(c, codexDetectorEvent{
-		Type: "start", Total: proxy.ModelTraceTargetOutputs, MaxAttempts: proxy.ModelTraceMaxAttempts,
+		Type: "start", Total: samples, MaxAttempts: maxAttempts,
 		Concurrency: concurrency, Model: model,
-		Source: "ModelTrace", SourceRevision: proxy.ModelTraceSourceRevision,
+		Source: "ModelTrace", SourceRevision: detector.Revision(),
 	}) {
 		return
 	}
@@ -106,11 +114,11 @@ func (h *Handler) DetectCodexModel(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), codexDetectorTimeout)
 	defer cancel()
 	ctx = proxy.WithCodexDetectorRequest(ctx)
-	outputs := make([]proxy.ModelTraceOutput, 0, proxy.ModelTraceMaxAttempts)
+	outputs := make([]proxy.ModelTraceOutput, 0, maxAttempts)
 	validOutputs := 0
 	nextChallenge := 0
-	for nextChallenge < len(challenges) && validOutputs < proxy.ModelTraceTargetOutputs && ctx.Err() == nil {
-		needed := proxy.ModelTraceTargetOutputs - validOutputs
+	for nextChallenge < len(challenges) && validOutputs < samples && ctx.Err() == nil {
+		needed := samples - validOutputs
 		batchSize := min(concurrency, needed, len(challenges)-nextChallenge)
 		results := make(chan codexDetectorProbeResult, batchSize)
 		for _, challenge := range challenges[nextChallenge : nextChallenge+batchSize] {
@@ -138,8 +146,8 @@ func (h *Handler) DetectCodexModel(c *gin.Context) {
 				validOutputs++
 			}
 			event := codexDetectorEvent{
-				Type: "progress", Index: validOutputs, Total: proxy.ModelTraceTargetOutputs,
-				Attempt: len(outputs), MaxAttempts: proxy.ModelTraceMaxAttempts, Concurrency: concurrency,
+				Type: "progress", Index: validOutputs, Total: samples,
+				Attempt: len(outputs), MaxAttempts: maxAttempts, Concurrency: concurrency,
 				ProbeID: result.challenge.ID, Status: status, ParsedNumbers: parsedNumbers,
 				MinimumNumbers: minimumNumbers, ElapsedMS: result.elapsedMS,
 			}
@@ -157,17 +165,17 @@ func (h *Handler) DetectCodexModel(c *gin.Context) {
 	report, err := detector.Analyze(outputs)
 	if err != nil {
 		sendSSEJSON(c, codexDetectorEvent{
-			Type: "complete", Index: validOutputs, Total: proxy.ModelTraceTargetOutputs,
-			Attempt: len(outputs), MaxAttempts: proxy.ModelTraceMaxAttempts, Concurrency: concurrency, Model: model,
-			Source: "ModelTrace", SourceRevision: proxy.ModelTraceSourceRevision,
+			Type: "complete", Index: validOutputs, Total: samples,
+			Attempt: len(outputs), MaxAttempts: maxAttempts, Concurrency: concurrency, Model: model,
+			Source: "ModelTrace", SourceRevision: detector.Revision(),
 			Status: "error", Error: sanitizeDetectorError(err.Error()),
 		})
 		return
 	}
 	sendSSEJSON(c, codexDetectorEvent{
-		Type: "complete", Index: validOutputs, Total: proxy.ModelTraceTargetOutputs,
-		Attempt: len(outputs), MaxAttempts: proxy.ModelTraceMaxAttempts, Concurrency: concurrency, Model: model,
-		Source: "ModelTrace", SourceRevision: proxy.ModelTraceSourceRevision, Status: "ok", Report: &report,
+		Type: "complete", Index: validOutputs, Total: samples,
+		Attempt: len(outputs), MaxAttempts: maxAttempts, Concurrency: concurrency, Model: model,
+		Source: "ModelTrace", SourceRevision: detector.Revision(), Status: "ok", Report: &report,
 	})
 }
 
@@ -176,6 +184,21 @@ type codexDetectorProbeResult struct {
 	answer    string
 	elapsedMS int64
 	err       error
+}
+
+// parseCodexDetectorSamples reads how many valid samples to collect. The bank
+// ships calibration for 1..ModelTraceTargetOutputs pooled samples, so fewer
+// samples trade accuracy for cost instead of using an uncalibrated score.
+func parseCodexDetectorSamples(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return proxy.ModelTraceTargetOutputs, nil
+	}
+	samples, err := strconv.Atoi(raw)
+	if err != nil || samples < 1 || samples > proxy.ModelTraceTargetOutputs {
+		return 0, fmt.Errorf("检测次数必须是 1 到 %d 的整数", proxy.ModelTraceTargetOutputs)
+	}
+	return samples, nil
 }
 
 func parseCodexDetectorConcurrency(raw string) (int, error) {
