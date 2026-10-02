@@ -583,6 +583,8 @@
     "online": "在线",
     "newVersionAvailable": "新版本 {{version}} 可用",
     "currentVersion": "当前版本：{{version}}",
+    "frontendBuildVersion": "前端构建：{{version}}",
+    "versionMismatch": "前端资源与服务版本不一致，建议重新构建前端后再编译程序。",
     "latestVersion": "最新版本：{{version}}",
     "versionLatest": "已是最新版本",
     "versionChecking": "正在检查最新版本…",

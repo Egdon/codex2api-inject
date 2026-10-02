@@ -253,6 +253,8 @@
     }
   },
   "common": {
+    "frontendBuildVersion": "前端建置：{{version}}",
+    "versionMismatch": "前端資源與服務版本不一致，建議重新建置前端後再編譯程式。",
     "success": "成功",
     "autoRefresh": "自動重新整理",
     "autoRefreshOff": "關閉自動重新整理",

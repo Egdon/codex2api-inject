@@ -1063,7 +1063,7 @@ export const api = {
   },
   updateAccountCredit: (id: number, data: { credit_enabled: boolean; credit_skip_usage_window: boolean }) =>
     request<MessageResponse>(`/accounts/${id}/credit`, { method: 'PATCH', body: JSON.stringify(data) }),
-  getHealth: () => request<HealthResponse>('/health'),
+  getHealth: (options?: { timeoutMs?: number }) => request<HealthResponse>('/health', options),
   getPromptFilterNewAPIBindings: () =>
     request<PromptFilterNewAPIBindingsResponse>('/prompt-filter/newapi-bindings'),
   getPromptFilterNewAPIBinding: (apiKeyId: number) =>
