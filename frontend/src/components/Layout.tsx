@@ -52,7 +52,7 @@ const mobileMoreNav = navDefs.filter((item) => !mobilePrimaryPathSet.has(item.to
 export default function Layout({ children }: PropsWithChildren) {
   const location = useLocation()
   const { t, i18n } = useTranslation()
-  const { hasUpdate, latestVersion, updateInfo, refreshVersion } = useVersionCheck(location.pathname)
+  const { currentVersion, frontendVersion, versionMismatch, hasUpdate, latestVersion, updateInfo, refreshVersion } = useVersionCheck(location.pathname)
   const { siteName, siteLogo, backgroundImage, backgroundOpacity, backgroundBlur, backgroundGlassOpacity, backgroundGlassBlur } = useBranding()
   const { theme, toggle } = useTheme()
   const { showToast } = useToast()
@@ -91,7 +91,7 @@ export default function Layout({ children }: PropsWithChildren) {
   const releaseURL = updateInfo?.release_url || (latestVersion
     ? `https://github.com/james-6-23/codex2api/releases/tag/${encodeURIComponent(latestVersion)}`
     : undefined)
-  const canApplyUpdate = hasUpdate && Boolean(updateInfo) && updateInfo?.supported !== false
+  const canApplyUpdate = hasUpdate && updateInfo?.has_update === true && updateInfo.supported !== false
   const updateUnavailableReason = updateInfo?.unsupported_reason
 
   const stopRestartPolling = useCallback(() => {
@@ -169,7 +169,7 @@ export default function Layout({ children }: PropsWithChildren) {
     const updatePosition = () => {
       const rect = versionButtonRef.current?.getBoundingClientRect()
       if (!rect) return
-      setVersionPopoverPos({ top: rect.bottom + 8, left: rect.left })
+      setVersionPopoverPos({ top: rect.bottom + 8, left: Math.max(8, Math.min(rect.left, window.innerWidth - 248)) })
     }
     updatePosition()
 
@@ -377,22 +377,27 @@ export default function Layout({ children }: PropsWithChildren) {
                     <h1 className="max-w-[160px] truncate text-[20px] leading-tight font-bold text-foreground" title={siteName}>
                       {siteName}
                     </h1>
-                    <div ref={versionPopoverRef} className="relative w-fit">
+                    <div className="relative w-fit">
                       <button
-                        ref={versionButtonRef}
                         type="button"
+                        aria-expanded={showVersionPopover}
+                        aria-controls={showVersionPopover ? 'version-details' : undefined}
                         className="relative inline-flex cursor-pointer items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary ring-1 ring-primary/10 transition-colors hover:bg-primary/15"
-                        title={hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
+                        title={versionMismatch ? t('common.versionMismatch') : hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
                         tabIndex={sidebarCollapsed ? -1 : 0}
-                        onClick={() => setShowVersionPopover((current) => !current)}
+                        onClick={(event) => {
+                          versionButtonRef.current = event.currentTarget
+                          setShowVersionPopover((current) => !current)
+                        }}
                       >
-                        {buildVersionLabel(__APP_VERSION__)}
-                        {hasUpdate && (
-                          <span className="absolute -top-1.5 left-1/2 size-2.5 -translate-x-1/2 rounded-full bg-red-500 shadow-sm ring-2 ring-[hsl(var(--sidebar-background))] animate-pulse" />
+                        {buildVersionLabel(currentVersion)}
+                        {(hasUpdate || versionMismatch) && (
+                          <span aria-hidden="true" className={cn('absolute -top-1.5 left-1/2 size-2.5 -translate-x-1/2 rounded-full shadow-sm ring-2 ring-[hsl(var(--sidebar-background))]', hasUpdate ? 'bg-red-500 animate-pulse' : 'bg-amber-500')} />
                         )}
                       </button>
                       {showVersionPopover && versionPopoverPos && createPortal(
                         <div
+                          id="version-details"
                           ref={versionPopoverRef}
                           style={{ position: 'fixed', top: versionPopoverPos.top, left: versionPopoverPos.left }}
                           className="z-[100] w-[240px] rounded-lg border border-border bg-popover p-3 text-left shadow-xl"
@@ -404,9 +409,19 @@ export default function Layout({ children }: PropsWithChildren) {
                                 : t('common.versionLatest')
                               : t('common.versionChecking')}
                           </div>
-                          <div className="mt-1 text-[11px] text-muted-foreground">
-                            {t('common.currentVersion', { version: __APP_VERSION__ })}
+                          <div className="mt-1 break-words text-[11px] text-muted-foreground">
+                            {t('common.currentVersion', { version: currentVersion })}
                           </div>
+                          {versionMismatch && (
+                            <>
+                              <div className="mt-1 break-words text-[11px] text-muted-foreground">
+                                {t('common.frontendBuildVersion', { version: frontendVersion })}
+                              </div>
+                              <div role="status" className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11px] font-medium leading-relaxed text-amber-700 dark:text-amber-300">
+                                {t('common.versionMismatch')}
+                              </div>
+                            </>
+                          )}
                           {latestVersion && (
                             <div className="mt-1 text-[11px] text-muted-foreground">
                               {t('common.latestVersion', { version: latestVersion })}
@@ -624,13 +639,18 @@ export default function Layout({ children }: PropsWithChildren) {
               </strong>
               <button
                 type="button"
+                aria-expanded={showVersionPopover}
+                aria-controls={showVersionPopover ? 'version-details' : undefined}
                 className="relative inline-flex shrink-0 items-center rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary ring-1 ring-primary/10 transition-colors hover:bg-primary/15"
-                title={hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
-                onClick={() => setShowVersionPopover((current) => !current)}
+                title={versionMismatch ? t('common.versionMismatch') : hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
+                onClick={(event) => {
+                  versionButtonRef.current = event.currentTarget
+                  setShowVersionPopover((current) => !current)
+                }}
               >
-                {buildVersionLabel(__APP_VERSION__)}
-                {hasUpdate && (
-                  <span className="absolute -top-1 -right-1 size-2 rounded-full bg-red-500 shadow-sm ring-2 ring-card animate-pulse" />
+                {buildVersionLabel(currentVersion)}
+                {(hasUpdate || versionMismatch) && (
+                  <span aria-hidden="true" className={cn('absolute -top-1 -right-1 size-2 rounded-full shadow-sm ring-2 ring-card', hasUpdate ? 'bg-red-500 animate-pulse' : 'bg-amber-500')} />
                 )}
               </button>
             </div>
@@ -773,7 +793,7 @@ export default function Layout({ children }: PropsWithChildren) {
                     {t('common.online')}
                   </span>
                   <span className="font-mono text-[11px] font-semibold">
-                    {buildVersionLabel(__APP_VERSION__)}
+                    {buildVersionLabel(currentVersion)}
                   </span>
                 </div>
               </div>

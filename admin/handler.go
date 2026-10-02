@@ -36,6 +36,7 @@ import (
 	"github.com/codex2api/database"
 	"github.com/codex2api/internal/imagestore"
 	"github.com/codex2api/internal/openaiidentity"
+	"github.com/codex2api/internal/version"
 	"github.com/codex2api/proxy"
 	"github.com/codex2api/security"
 	"github.com/codex2api/security/promptfilter"
@@ -7489,10 +7490,12 @@ func (h *Handler) refreshSingleAccount(ctx context.Context, id int64) error {
 
 // GetHealth 系统健康检查（扩展版）
 func (h *Handler) GetHealth(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, healthResponse{
-		Status:    "ok",
-		Available: h.store.AvailableCount(),
-		Total:     h.store.AccountCount(),
+		Status:       "ok",
+		Available:    h.store.AvailableCount(),
+		Total:        h.store.AccountCount(),
+		BuildVersion: version.Current(),
 	})
 }
 

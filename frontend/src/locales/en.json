@@ -583,6 +583,8 @@
     "online": "Online",
     "newVersionAvailable": "New version {{version}} available",
     "currentVersion": "Current version: {{version}}",
+    "frontendBuildVersion": "Frontend build: {{version}}",
+    "versionMismatch": "The frontend and service versions differ. Rebuild the frontend before compiling the program again.",
     "latestVersion": "Latest version: {{version}}",
     "versionLatest": "You are on the latest version",
     "versionChecking": "Checking for the latest version…",
