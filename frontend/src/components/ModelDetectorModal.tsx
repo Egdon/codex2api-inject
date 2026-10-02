@@ -5,10 +5,13 @@ import {
   ExternalLink,
   Fingerprint,
   Loader2,
+  RefreshCw,
+  RotateCcw,
   XCircle,
 } from "lucide-react";
 import type { AccountRow } from "../types";
-import { getAdminKey } from "../api";
+import { api, getAdminKey, type ModelTraceBankStatus } from "../api";
+import { useToast } from "../hooks/useToast";
 import Modal from "./Modal";
 import { Button } from "@/components/ui/button";
 import { DraftNumberInput } from "@/components/ui/draft-number-input";
@@ -82,8 +85,20 @@ interface DetectorEvent {
 }
 
 const TARGET_OUTPUTS = 3;
-const MAX_ATTEMPTS = 6;
+const ATTEMPTS_PER_SAMPLE = 2;
 const MAX_CONCURRENCY = 3;
+const SAMPLES_STORAGE_KEY = "model_detector_samples";
+
+function loadSamples() {
+  try {
+    const stored = Number(window.localStorage.getItem(SAMPLES_STORAGE_KEY));
+    if (Number.isInteger(stored) && stored >= 1 && stored <= TARGET_OUTPUTS)
+      return stored;
+  } catch {
+    // Storage may be unavailable; fall back to the recommended count.
+  }
+  return TARGET_OUTPUTS;
+}
 
 function percentage(value: number | undefined, digits = 1) {
   if (!Number.isFinite(value)) return "-";
@@ -104,21 +119,87 @@ export default function ModelDetectorModal({
   const { t } = useTranslation();
   const [model, setModel] = useState(defaultModel || requestModels[0] || "");
   const [concurrency, setConcurrency] = useState(1);
+  const [samples, setSamples] = useState(loadSamples);
   const [status, setStatus] = useState<
     "idle" | "running" | "complete" | "error"
   >("idle");
   const [progress, setProgress] = useState(0);
-  const [total, setTotal] = useState(TARGET_OUTPUTS);
+  const [total, setTotal] = useState(samples);
   const [attempt, setAttempt] = useState(0);
-  const [maxAttempts, setMaxAttempts] = useState(MAX_ATTEMPTS);
+  const [maxAttempts, setMaxAttempts] = useState(
+    samples * ATTEMPTS_PER_SAMPLE,
+  );
   const [lastParsed, setLastParsed] = useState<number | null>(null);
   const [lastMinimum, setLastMinimum] = useState<number | null>(null);
   const [lastStatus, setLastStatus] = useState("");
   const [error, setError] = useState("");
   const [report, setReport] = useState<DetectorReport | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const { showToast } = useToast();
+  const [bank, setBank] = useState<ModelTraceBankStatus | null>(null);
+  const [bankBusy, setBankBusy] = useState(false);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getModelTraceBank()
+      .then((status) => {
+        if (!cancelled) setBank(status);
+      })
+      .catch(() => {
+        // The bank bar is informational; detection still works without it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const updateBank = async () => {
+    setBankBusy(true);
+    try {
+      const result = await api.updateModelTraceBank();
+      setBank(result);
+      if (!result.updated) {
+        showToast(t("accounts.detectorBankUpToDate"));
+      } else if (result.added_models?.length) {
+        showToast(
+          t("accounts.detectorBankUpdatedWithModels", {
+            models: result.added_models.join(", "),
+          }),
+        );
+      } else {
+        showToast(t("accounts.detectorBankUpdated"));
+      }
+    } catch (caught) {
+      showToast(
+        caught instanceof Error
+          ? caught.message
+          : t("accounts.detectorBankUpdateFailed"),
+        "error",
+      );
+    } finally {
+      setBankBusy(false);
+    }
+  };
+
+  const resetBank = async () => {
+    setBankBusy(true);
+    try {
+      setBank(await api.resetModelTraceBank());
+      showToast(t("accounts.detectorBankReset"));
+    } catch (caught) {
+      showToast(
+        caught instanceof Error
+          ? caught.message
+          : t("accounts.detectorBankUpdateFailed"),
+        "error",
+      );
+    } finally {
+      setBankBusy(false);
+    }
+  };
 
   const modelOptions = useMemo(() => {
     const merged = Array.from(
@@ -127,6 +208,32 @@ export default function ModelDetectorModal({
     return merged.map((value) => ({ label: value, value }));
   }, [defaultModel, requestModels]);
 
+  const sampleOptions = useMemo(
+    () =>
+      Array.from({ length: TARGET_OUTPUTS }, (_, index) => {
+        const count = index + 1;
+        return {
+          label:
+            count === TARGET_OUTPUTS
+              ? t("accounts.detectorSamplesRecommended", { count })
+              : t("accounts.detectorSamplesOption", { count }),
+          value: String(count),
+        };
+      }),
+    [t],
+  );
+
+  const changeSamples = (value: string) => {
+    const next = Number(value);
+    if (!Number.isInteger(next) || next < 1 || next > TARGET_OUTPUTS) return;
+    setSamples(next);
+    try {
+      window.localStorage.setItem(SAMPLES_STORAGE_KEY, String(next));
+    } catch {
+      // Remembering the choice is best-effort.
+    }
+  };
+
   const start = async () => {
     if (!model || status === "running") return;
     abortRef.current?.abort();
@@ -134,9 +241,9 @@ export default function ModelDetectorModal({
     abortRef.current = controller;
     setStatus("running");
     setProgress(0);
-    setTotal(TARGET_OUTPUTS);
+    setTotal(samples);
     setAttempt(0);
-    setMaxAttempts(MAX_ATTEMPTS);
+    setMaxAttempts(samples * ATTEMPTS_PER_SAMPLE);
     setLastParsed(null);
     setLastMinimum(null);
     setLastStatus("");
@@ -147,6 +254,7 @@ export default function ModelDetectorModal({
       const params = new URLSearchParams({
         model,
         concurrency: String(concurrency),
+        samples: String(samples),
       });
       const response = await fetch(
         `/api/admin/accounts/${account.id}/model-detector?${params.toString()}`,
@@ -178,22 +286,22 @@ export default function ModelDetectorModal({
           try {
             const event = JSON.parse(trimmed.slice(6)) as DetectorEvent;
             if (event.type === "start") {
-              setTotal(event.total || TARGET_OUTPUTS);
-              setMaxAttempts(event.max_attempts || MAX_ATTEMPTS);
+              setTotal(event.total || samples);
+              setMaxAttempts(event.max_attempts || samples * ATTEMPTS_PER_SAMPLE);
             } else if (event.type === "progress") {
               setProgress(event.index || 0);
-              setTotal(event.total || TARGET_OUTPUTS);
+              setTotal(event.total || samples);
               setAttempt(event.attempt || 0);
-              setMaxAttempts(event.max_attempts || MAX_ATTEMPTS);
+              setMaxAttempts(event.max_attempts || samples * ATTEMPTS_PER_SAMPLE);
               setLastParsed(event.parsed_numbers ?? null);
               setLastMinimum(event.minimum_numbers ?? null);
               setLastStatus(event.status || "");
             } else if (event.type === "complete") {
               sawComplete = true;
               setProgress(event.index || 0);
-              setTotal(event.total || TARGET_OUTPUTS);
+              setTotal(event.total || samples);
               setAttempt(event.attempt || 0);
-              setMaxAttempts(event.max_attempts || MAX_ATTEMPTS);
+              setMaxAttempts(event.max_attempts || samples * ATTEMPTS_PER_SAMPLE);
               if (event.report) {
                 setReport(event.report);
                 setStatus("complete");
@@ -268,16 +376,83 @@ export default function ModelDetectorModal({
     >
       <div className="space-y-4">
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-          {t("accounts.detectorDisclaimer")}
+          {t("accounts.detectorDisclaimer", {
+            samples,
+            attempts: samples * ATTEMPTS_PER_SAMPLE,
+          })}
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem] sm:max-w-lg">
+        {bank && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+            <span
+              className="min-w-0"
+              title={bank.active.models.join("\n")}
+            >
+              {t("accounts.detectorBankSummary", {
+                count: bank.active.models.length,
+                revision: bank.active.revision.slice(0, 7),
+                date: bank.active.built_at.slice(0, 10),
+              })}
+              {" · "}
+              {bank.active.origin === "override"
+                ? t("accounts.detectorBankOriginOverride")
+                : t("accounts.detectorBankOriginEmbedded")}
+              {bank.override_stale ? (
+                <span className="ml-1 text-amber-700 dark:text-amber-300">
+                  {t("accounts.detectorBankOverrideStale")}
+                </span>
+              ) : null}
+              {bank.override_error ? (
+                <span className="ml-1 text-amber-700 dark:text-amber-300">
+                  {t("accounts.detectorBankOverrideInvalid")}
+                </span>
+              ) : null}
+            </span>
+            <span className="flex items-center gap-1.5">
+              {bank.override ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={bankBusy || running}
+                  onClick={() => void resetBank()}
+                >
+                  <RotateCcw className="size-3" />
+                  {t("accounts.detectorBankResetAction")}
+                </Button>
+              ) : null}
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                disabled={bankBusy || running}
+                onClick={() => void updateBank()}
+              >
+                <RefreshCw
+                  className={`size-3 ${bankBusy ? "animate-spin" : ""}`}
+                />
+                {t("accounts.detectorBankUpdateAction")}
+              </Button>
+            </span>
+          </div>
+        )}
+
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_8rem] sm:max-w-2xl">
           <label className="block min-w-0 space-y-1 text-xs font-medium">
             <span>{t("accounts.detectorRequestModel")}</span>
             <Select
               value={model}
               onValueChange={setModel}
               options={modelOptions}
+              disabled={running}
+            />
+          </label>
+          <label className="block space-y-1 text-xs font-medium">
+            <span>{t("accounts.detectorSamples")}</span>
+            <Select
+              value={String(samples)}
+              onValueChange={changeSamples}
+              options={sampleOptions}
               disabled={running}
             />
           </label>

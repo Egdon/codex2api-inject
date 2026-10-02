@@ -2,7 +2,9 @@ package proxy
 
 // This file ports ModelTrace's dependency-free browser fingerprint core to Go.
 // The model bank is pinned and embedded so detection never depends on a remote
-// service or exposes account credentials outside the normal proxy path.
+// service or exposes account credentials outside the normal proxy path. An
+// operator may install a newer upstream bank explicitly; it must pass the same
+// validation plus an algorithm pin, and the embedded copy remains the fallback.
 
 import (
 	"crypto/rand"
@@ -18,14 +20,17 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 	"unicode"
 )
 
 const (
 	ModelTraceSourceURL      = "https://github.com/xqy2006/ModelTrace"
-	ModelTraceSourceRevision = "3f0dd2f4b451ad424f3b165a108a468efe4d4d81"
-	ModelTraceTargetOutputs  = 3
-	ModelTraceMaxAttempts    = 6
+	ModelTraceSourceRevision = "d4131b30243dfa05e70180b5eedde742103f1d73"
+	// ModelTraceTargetOutputs is the bank's recommended sample count and the
+	// largest pooled count it ships calibration for.
+	ModelTraceTargetOutputs = 3
 
 	modelTraceValueMin          = 1
 	modelTraceValueMax          = 355
@@ -39,10 +44,21 @@ var modelTraceBankJSON []byte
 
 type modelTraceBank struct {
 	Schema             string                           `json:"schema"`
+	BuiltAt            string                           `json:"built_at"`
+	Method             modelTraceMethod                 `json:"method"`
 	RecommendedQueries int                              `json:"recommended_queries"`
 	Models             []modelTraceModel                `json:"models"`
 	Calibration        map[string]modelTraceCalibration `json:"calibration"`
 	Robust             modelTraceRobust                 `json:"robust"`
+}
+
+// modelTraceMethod describes the scoring algorithm a bank was trained for. The
+// Go port only implements one, so banks for any other method are rejected.
+type modelTraceMethod struct {
+	Name               string  `json:"name"`
+	Range              []int   `json:"range"`
+	Alpha              float64 `json:"alpha"`
+	OrderedBlockWeight float64 `json:"ordered_block_weight"`
 }
 
 type modelTraceModel struct {
@@ -73,6 +89,7 @@ type modelTraceArtifact struct {
 }
 
 type modelTraceOrderedArtifact struct {
+	Feature              string        `json:"feature"`
 	FeatureMean          []float64     `json:"feature_mean"`
 	FeatureScale         []float64     `json:"feature_scale"`
 	NuisanceBasis        [][]float64   `json:"nuisance_basis"`
@@ -151,9 +168,25 @@ type ModelTraceReport struct {
 	SourceRevision       string                        `json:"source_revision"`
 }
 
+const (
+	ModelTraceBankOriginEmbedded = "embedded"
+	ModelTraceBankOriginOverride = "override"
+)
+
 // ModelTraceDetector is immutable and safe for concurrent use after loading.
 type ModelTraceDetector struct {
-	bank modelTraceBank
+	bank     modelTraceBank
+	revision string
+	origin   string
+	builtAt  time.Time
+}
+
+// ModelTraceBankInfo summarizes a loaded bank for the admin UI.
+type ModelTraceBankInfo struct {
+	Origin   string   `json:"origin"`
+	Revision string   `json:"revision"`
+	BuiltAt  string   `json:"built_at"`
+	Models   []string `json:"models"`
 }
 
 var (
@@ -161,27 +194,66 @@ var (
 	modelTraceLoaded   *ModelTraceDetector
 	modelTraceLoadErr  error
 	modelTraceDigits   = regexp.MustCompile(`[0-9]+`)
+
+	// modelTraceOverrideCache keeps the last parsed override so detection runs do
+	// not re-decode a ~1 MB bank while its stored revision is unchanged.
+	modelTraceOverrideCache atomic.Pointer[ModelTraceDetector]
 )
 
+// NewModelTraceDetector returns the embedded bank's detector.
 func NewModelTraceDetector() (*ModelTraceDetector, error) {
 	modelTraceLoadOnce.Do(func() {
-		var bank modelTraceBank
-		if err := json.Unmarshal(modelTraceBankJSON, &bank); err != nil {
-			modelTraceLoadErr = fmt.Errorf("decode ModelTrace bank: %w", err)
-			return
-		}
-		if err := validateModelTraceBank(&bank); err != nil {
-			modelTraceLoadErr = err
-			return
-		}
-		modelTraceLoaded = &ModelTraceDetector{bank: bank}
+		modelTraceLoaded, modelTraceLoadErr = parseModelTraceBank(modelTraceBankJSON, ModelTraceSourceRevision, ModelTraceBankOriginEmbedded)
 	})
 	return modelTraceLoaded, modelTraceLoadErr
+}
+
+// ParseModelTraceBankOverride validates an operator-installed bank.
+func ParseModelTraceBankOverride(data []byte, revision string) (*ModelTraceDetector, error) {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return nil, errors.New("ModelTrace bank revision is required")
+	}
+	return parseModelTraceBank(data, revision, ModelTraceBankOriginOverride)
+}
+
+// CacheModelTraceOverride remembers the parsed override that is installed.
+func CacheModelTraceOverride(detector *ModelTraceDetector) {
+	modelTraceOverrideCache.Store(detector)
+}
+
+// CachedModelTraceOverride returns the cached override when it matches revision.
+func CachedModelTraceOverride(revision string) *ModelTraceDetector {
+	if cached := modelTraceOverrideCache.Load(); cached != nil && cached.revision == revision {
+		return cached
+	}
+	return nil
+}
+
+func parseModelTraceBank(data []byte, revision, origin string) (*ModelTraceDetector, error) {
+	var bank modelTraceBank
+	if err := json.Unmarshal(data, &bank); err != nil {
+		return nil, fmt.Errorf("decode ModelTrace bank: %w", err)
+	}
+	if err := validateModelTraceBank(&bank); err != nil {
+		return nil, err
+	}
+	builtAt, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(bank.BuiltAt))
+	return &ModelTraceDetector{bank: bank, revision: revision, origin: origin, builtAt: builtAt}, nil
 }
 
 func validateModelTraceBank(bank *modelTraceBank) error {
 	if bank.Schema != "robust-number-fingerprint-bank" || bank.RecommendedQueries != ModelTraceTargetOutputs {
 		return errors.New("unsupported ModelTrace bank")
+	}
+	// The data alone cannot prove the scoring code is unchanged, so pin the
+	// declared method to the one this port implements.
+	method := bank.Method
+	if method.Name != "Ordered-block + nuisance-Hellinger" || len(method.Range) != 2 ||
+		method.Range[0] != modelTraceValueMin || method.Range[1] != modelTraceValueMax ||
+		method.Alpha != modelTraceAlpha || method.OrderedBlockWeight != bank.Robust.OrderedBlocks.Weight ||
+		bank.Robust.OrderedBlocks.Feature != "four position blocks x 16 value bins plus final-digit distribution" {
+		return errors.New("ModelTrace bank uses an unsupported scoring method")
 	}
 	if !bank.Robust.RobustReady || len(bank.Models) < 2 || len(bank.Robust.ModelOrder) != len(bank.Models) {
 		return errors.New("incomplete ModelTrace bank")
@@ -256,6 +328,15 @@ func (d *ModelTraceDetector) Models() []string {
 }
 
 func (d *ModelTraceDetector) BankSchema() string { return d.bank.Schema }
+
+func (d *ModelTraceDetector) Revision() string { return d.revision }
+
+// BuiltAt is the bank's training timestamp; zero when the bank omits it.
+func (d *ModelTraceDetector) BuiltAt() time.Time { return d.builtAt }
+
+func (d *ModelTraceDetector) Info() ModelTraceBankInfo {
+	return ModelTraceBankInfo{Origin: d.origin, Revision: d.revision, BuiltAt: d.bank.BuiltAt, Models: d.Models()}
+}
 
 func (d *ModelTraceDetector) GenerateChallenges(count int) ([]ModelTraceChallenge, error) {
 	if count < 1 || count > 41 {
@@ -480,7 +561,7 @@ func (d *ModelTraceDetector) Analyze(outputs []ModelTraceOutput) (ModelTraceRepo
 		Calibration:      ModelTraceCalibrationResult{Queries: calibrationQueries, Beta: calibration.Beta, CVAccuracy: calibration.CVAccuracy},
 		FamilyPrediction: winningFamily, FamilyPredictionName: familyNames[winningFamily], FamilyProbability: familyProbabilities[winningFamily],
 		FamilyProbabilities: familyResults, Method: "统一全局稳健数字指纹", CandidateScope: "closed_set",
-		BankSchema: d.bank.Schema, Source: "ModelTrace", SourceURL: ModelTraceSourceURL, SourceRevision: ModelTraceSourceRevision,
+		BankSchema: d.bank.Schema, Source: "ModelTrace", SourceURL: ModelTraceSourceURL, SourceRevision: d.revision,
 	}, nil
 }
 
