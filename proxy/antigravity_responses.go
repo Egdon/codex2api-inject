@@ -56,7 +56,6 @@ const (
 	antigravityOAuthDailyEndpoint    = "https://daily-cloudcode-pa.googleapis.com"
 	antigravityOAuthSandboxEndpoint  = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 	antigravityOfficialBodyUserAgent = "antigravity"
-	antigravityOfficialHTTPUserAgent = "antigravity/hub/2.9.1 windows/amd64"
 	antigravityZeroWidthSpace        = "\u200B"
 )
 
@@ -109,7 +108,7 @@ func ExecuteAntigravityResponsesRequest(ctx context.Context, account *auth.Accou
 	if project == "" || bearer == "" {
 		return nil, fmt.Errorf("antigravity account %d has no project_id or access token", account.ID())
 	}
-	gemini, err := responsesToGeminiInternal(body, project, model)
+	gemini, err := responsesToGeminiInternalForAccount(body, project, model, account)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +198,7 @@ func executeAntigravityOAuthRequest(ctx context.Context, account *auth.Account, 
 				}
 				req.Header.Set("Authorization", "Bearer "+bearer)
 				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("User-Agent", antigravityOfficialHTTPUserAgent)
+				req.Header.Set("User-Agent", auth.AntigravityUserAgent())
 				if useUserProject {
 					req.Header.Set("x-goog-user-project", project)
 				}
@@ -470,6 +469,13 @@ func executeAntigravityInteractionsRequest(ctx context.Context, account *auth.Ac
 }
 
 func responsesToGeminiInternal(raw []byte, project, model string) (map[string]any, error) {
+	return responsesToGeminiInternalForAccount(raw, project, model, nil)
+}
+
+// responsesToGeminiInternalForAccount caps max_output_tokens at the limit the
+// account's synchronized catalog reports for the wire model, falling back to
+// the static per-family limit when the catalog has none.
+func responsesToGeminiInternalForAccount(raw []byte, project, model string, account *auth.Account) (map[string]any, error) {
 	var in map[string]any
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, fmt.Errorf("decode Responses request: %w", err)
@@ -649,7 +655,11 @@ func responsesToGeminiInternal(raw []byte, project, model string) (map[string]an
 	isGeminiModel := strings.HasPrefix(strings.ToLower(strings.TrimSpace(wireModel)), "gemini-")
 	if n, ok := in["max_output_tokens"].(float64); ok && !isGeminiModel {
 		maxOutputTokens := int(n)
-		if limit := antigravityGeminiMaxOutputTokens(wireModel); maxOutputTokens > limit {
+		limit, ok := account.AntigravityModelMaxOutputTokens(wireModel)
+		if !ok {
+			limit = antigravityGeminiMaxOutputTokens(wireModel)
+		}
+		if maxOutputTokens > limit {
 			maxOutputTokens = limit
 		}
 		generationConfig["maxOutputTokens"] = maxOutputTokens
@@ -947,12 +957,6 @@ func antigravityGeminiThinkingBudget(requestedModel, wireModel string, reasoning
 		}
 		effort := antigravityGeminiReasoningTier(reasoning)
 		switch strings.ToLower(strings.TrimSpace(wireModel)) {
-		case "gemini-3.5-flash-extra-low":
-			budget = 1000
-		case "gemini-3.5-flash-low":
-			budget = 4000
-		case "gemini-3-flash-agent":
-			budget = 10000
 		case "gemini-3.6-flash-low":
 			budget = 4096
 		case "gemini-3.6-flash-medium":
@@ -990,12 +994,6 @@ func antigravityGeminiThinkingBudget(requestedModel, wireModel string, reasoning
 func antigravityGeminiThinkingBudgetCap(model string) int {
 	name := strings.ToLower(strings.TrimSpace(model))
 	switch name {
-	case "gemini-3.5-flash-extra-low":
-		return 1000
-	case "gemini-3.5-flash-low":
-		return 4000
-	case "gemini-3-flash-agent":
-		return 10000
 	case "gemini-3.6-flash-low":
 		return 4096
 	case "gemini-3.6-flash-medium":

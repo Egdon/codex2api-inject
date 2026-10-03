@@ -27,7 +27,7 @@ func newAntigravityConnectionTestAccount() *auth.Account {
 		UpstreamType:         auth.UpstreamAntigravity,
 		AccessToken:          "google-token",
 		AntigravityProjectID: "project-1",
-		Models:               []string{"gemini-3.5-flash-extra-low", "gemini-3.5-flash-low", "gemini-3-flash-agent"},
+		Models:               []string{"gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"},
 		Status:               auth.StatusReady,
 		HealthTier:           auth.HealthTierHealthy,
 	}
@@ -68,7 +68,7 @@ func TestConnectionAntigravityUsesNativeExecutorAndStreamsContent(t *testing.T) 
 	if !gotStream {
 		t.Fatal("Antigravity connection test must request a streamed response")
 	}
-	if gotModel != "gemini-3.5-flash-low" {
+	if gotModel != "gemini-3.6-flash-low" {
 		t.Fatalf("test model = %q, want published cheapest flash tier", gotModel)
 	}
 	if gotPrompt != "manual prompt" {
@@ -113,7 +113,7 @@ func TestRunSingleBatchTestAntigravityUsesNativeExecutor(t *testing.T) {
 	calls := 0
 	handler.antigravityCapabilityProbe = func(_ context.Context, _ *auth.Account, model string, _ []byte, stream bool, _ string) (*http.Response, error) {
 		calls++
-		if !stream || model != "gemini-3.5-flash-low" {
+		if !stream || model != "gemini-3.6-flash-low" {
 			t.Fatalf("executor args model=%q stream=%v", model, stream)
 		}
 		return &http.Response{
@@ -137,7 +137,7 @@ func TestRunSingleBatchTestAntigravityCapacity503IsRateLimited(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusServiceUnavailable,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":503,"status":"UNAVAILABLE","message":"No capacity available for model gemini-3.5-flash-low on the server","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"MODEL_CAPACITY_EXHAUSTED"}]}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":503,"status":"UNAVAILABLE","message":"No capacity available for model gemini-3.6-flash-low on the server","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"MODEL_CAPACITY_EXHAUSTED"}]}}`)),
 		}, nil
 	}
 	status, _ := handler.runSingleBatchTest(context.Background(), account)

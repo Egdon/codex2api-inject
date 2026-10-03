@@ -188,10 +188,12 @@ type Account struct {
 	AntigravityHardBlocked     bool
 	AntigravityHardBlockReason string
 	// antigravityQuota* 是 antigravity_quota 凭据投影出的调度排序键（已用百分比），
-	// 见 scheduling_usage_key.go；随控制面同步快照更新。
+	// 见 scheduling_usage_key.go；随控制面同步快照更新。antigravityModelMaxOutput
+	// 是同一快照里各上游模型自报的最大输出 token(键为小写模型 ID)。
 	antigravityQuotaUsedPercent float64
 	antigravityQuotaObservedAt  time.Time
 	antigravityQuotaValid       bool
+	antigravityModelMaxOutput   map[string]int
 	BaseURL                     string
 	APIKey                      string
 	Models                      []string

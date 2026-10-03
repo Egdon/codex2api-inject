@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/codex2api/auth"
@@ -9,7 +10,6 @@ import (
 
 func TestAntigravityPublicModelCatalogIsExact(t *testing.T) {
 	want := []string{
-		"gemini-3.5-flash-low", "gemini-3.5-flash-medium", "gemini-3.5-flash-high",
 		"gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high",
 		"gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high",
 		"gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high",
@@ -23,7 +23,7 @@ func TestAntigravityPublicModelCatalogIsExact(t *testing.T) {
 	}
 
 	for _, logical := range []string{
-		"gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.1-pro",
+		"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.1-pro",
 	} {
 		if _, ok := antigravityPublicModel(logical); ok {
 			t.Fatalf("logical compatibility model %q leaked into the public catalog", logical)
@@ -47,9 +47,6 @@ func TestAntigravityLogicalModelsResolveEffortToBacking(t *testing.T) {
 		model, effort, wire string
 		budget              int
 	}{
-		{model: "gemini-3.5-flash", effort: "low", wire: "gemini-3.5-flash-extra-low", budget: 1000},
-		{model: "gemini-3.5-flash", effort: "medium", wire: "gemini-3.5-flash-low", budget: 4000},
-		{model: "gemini-3.5-flash", effort: "high", wire: "gemini-3-flash-agent", budget: 10000},
 		{model: "gemini-3.6-flash", effort: "low", wire: "gemini-3.6-flash-low", budget: 4096},
 		{model: "gemini-3.6-flash", effort: "medium", wire: "gemini-3.6-flash-medium", budget: 8192},
 		{model: "gemini-3.6-flash", effort: "high", wire: "gemini-3.6-flash-high", budget: 24576},
@@ -68,7 +65,7 @@ func TestAntigravityLogicalModelsResolveEffortToBacking(t *testing.T) {
 			}
 		})
 	}
-	if variant, _ := antigravityResolvedVariant("gemini-3.5-flash", nil); variant.level != "medium" {
+	if variant, _ := antigravityResolvedVariant("gemini-3.6-flash", nil); variant.level != "medium" {
 		t.Fatalf("Flash default = %q, want medium", variant.level)
 	}
 	if variant, _ := antigravityResolvedVariant("gemini-3.1-pro", nil); variant.level != "high" {
@@ -87,8 +84,16 @@ func TestAntigravityPublishedModelsProjectCompleteRawCatalog(t *testing.T) {
 	if got := AntigravityPublishedModelIDs(raw); !reflect.DeepEqual(got, want) {
 		t.Fatalf("published raw projection = %v, want %v", got, want)
 	}
-	if got := AntigravityPublishedModelIDs(auth.AntigravityDefaultModelIDs()); !reflect.DeepEqual(got, want) {
-		t.Fatalf("default raw projection = %v, want %v", got, want)
+	// The fallback catalog omits Claude: which generation an account may call is
+	// only known after sync.
+	wantDefault := make([]string, 0, len(want))
+	for _, model := range want {
+		if !strings.HasPrefix(model, "claude-") {
+			wantDefault = append(wantDefault, model)
+		}
+	}
+	if got := AntigravityPublishedModelIDs(auth.AntigravityDefaultModelIDs()); !reflect.DeepEqual(got, wantDefault) {
+		t.Fatalf("default raw projection = %v, want %v", got, wantDefault)
 	}
 
 	account := &auth.Account{UpstreamType: auth.UpstreamAntigravity, AccessToken: "token", Models: raw}
@@ -103,10 +108,32 @@ func TestAntigravityPublishedModelsProjectCompleteRawCatalog(t *testing.T) {
 }
 
 func TestAntigravityPublishedModelsRequireCompleteLogicalFamily(t *testing.T) {
-	raw := []string{"gemini-3.5-flash-low", "gemini-3.7-flash-tiered"}
-	want := []string{"gemini-3.5-flash-medium", "gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high"}
+	raw := []string{"gemini-3.6-flash-medium", "gemini-3.7-flash-tiered"}
+	want := []string{"gemini-3.6-flash-medium", "gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high"}
 	if got := AntigravityPublishedModelIDs(raw); !reflect.DeepEqual(got, want) {
 		t.Fatalf("partial raw projection = %v, want %v", got, want)
+	}
+}
+
+func TestAntigravityRetiredModelsAreNeitherPublishedNorRouted(t *testing.T) {
+	retired := []string{
+		"gemini-3.5-flash-extra-low", "gemini-3.5-flash-low", "gemini-3-flash-agent", "gemini-2.5-pro",
+	}
+	raw := append([]string{"gemini-3.6-flash-low", "gemini-3.5-flash-lite", "gemini-3-flash"}, retired...)
+	want := []string{"gemini-3.6-flash-low", "gemini-3-flash", "gemini-3.5-flash-lite"}
+	if got := AntigravityPublishedModelIDs(raw); !reflect.DeepEqual(got, want) {
+		t.Fatalf("published = %v, want %v", got, want)
+	}
+	account := &auth.Account{UpstreamType: auth.UpstreamAntigravity, AccessToken: "token", Models: raw}
+	for _, model := range append(retired, "gemini-3.5-flash", "gemini-3.5-flash-medium", "gemini-3.5-flash-high") {
+		if wire, ok := antigravityResolvePublicModelForAccount(account, model); ok {
+			t.Fatalf("retired model %q routed to %q", model, wire)
+		}
+	}
+	for _, model := range want {
+		if !antigravityAccountSupportsPublicModel(account, model) {
+			t.Fatalf("live model %q rejected", model)
+		}
 	}
 }
 

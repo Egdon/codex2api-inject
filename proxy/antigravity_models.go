@@ -42,18 +42,6 @@ type antigravityPublicModelDefinition struct {
 // base model with separate reasoning controls; these IDs remain callable.
 var antigravityPublicModelCatalog = []antigravityPublicModelDefinition{
 	{
-		id: "gemini-3.5-flash-low", wireModel: "gemini-3.5-flash-extra-low",
-		variants: []antigravityReasoningVariant{{level: "low", wireModel: "gemini-3.5-flash-extra-low", thinkingBudget: 1000}},
-	},
-	{
-		id: "gemini-3.5-flash-medium", wireModel: "gemini-3.5-flash-low",
-		variants: []antigravityReasoningVariant{{level: "medium", wireModel: "gemini-3.5-flash-low", thinkingBudget: 4000}},
-	},
-	{
-		id: "gemini-3.5-flash-high", wireModel: "gemini-3-flash-agent",
-		variants: []antigravityReasoningVariant{{level: "high", wireModel: "gemini-3-flash-agent", thinkingBudget: 10000}},
-	},
-	{
 		id: "gemini-3.6-flash-low", wireModel: "gemini-3.6-flash-low",
 		variants: []antigravityReasoningVariant{{level: "low", wireModel: "gemini-3.6-flash-low", thinkingBudget: 4096}},
 	},
@@ -75,11 +63,6 @@ var antigravityPublicModelCatalog = []antigravityPublicModelDefinition{
 // antigravityLogicalCompatibilityCatalog keeps the former logical model names
 // callable for existing clients and supplies the native Codex base model names.
 var antigravityLogicalCompatibilityCatalog = []antigravityPublicModelDefinition{
-	{id: "gemini-3.5-flash", defaultReasoningLevel: "medium", variants: []antigravityReasoningVariant{
-		{level: "low", wireModel: "gemini-3.5-flash-extra-low", thinkingBudget: 1000},
-		{level: "medium", wireModel: "gemini-3.5-flash-low", thinkingBudget: 4000},
-		{level: "high", wireModel: "gemini-3-flash-agent", thinkingBudget: 10000},
-	}},
 	{id: "gemini-3.6-flash", defaultReasoningLevel: "medium", variants: []antigravityReasoningVariant{
 		{level: "low", wireModel: "gemini-3.6-flash-low", thinkingBudget: 4096},
 		{level: "medium", wireModel: "gemini-3.6-flash-medium", thinkingBudget: 8192},
@@ -99,6 +82,26 @@ var antigravityLogicalCompatibilityCatalog = []antigravityPublicModelDefinition{
 		{level: "low", wireModel: "gemini-3.1-pro-low", thinkingBudget: 1001},
 		{level: "high", wireModel: "gemini-pro-agent", thinkingBudget: 10001},
 	}},
+}
+
+// antigravityRetiredModels are still listed by the upstream catalog but no
+// longer serve requests: every Gemini 3.5 Flash backing answers with a plain
+// "no longer available" text and no finish reason, and gemini-2.5-pro returns
+// "No capacity available". Former public IDs are listed too so they can never
+// re-enter through raw pass-through. They are neither published nor routed.
+var antigravityRetiredModels = map[string]struct{}{
+	"gemini-3.5-flash":           {},
+	"gemini-3.5-flash-extra-low": {},
+	"gemini-3.5-flash-low":       {},
+	"gemini-3.5-flash-medium":    {},
+	"gemini-3.5-flash-high":      {},
+	"gemini-3-flash-agent":       {},
+	"gemini-2.5-pro":             {},
+}
+
+func antigravityRetiredModel(model string) bool {
+	_, retired := antigravityRetiredModels[strings.ToLower(strings.TrimSpace(model))]
+	return retired
 }
 
 func antigravityPublicModel(model string) (antigravityPublicModelDefinition, bool) {
@@ -236,7 +239,7 @@ func AntigravityPublishedModelIDs(rawModels []string) []string {
 		name := strings.ToLower(model)
 		// Provider-internal chat placeholders, IDE tab completions, and an
 		// alternate physical backing of a known base are not extra chat models.
-		if name == "chat_20706" || name == "chat_23310" || strings.HasPrefix(name, "tab_") {
+		if name == "chat_20706" || name == "chat_23310" || strings.HasPrefix(name, "tab_") || antigravityRetiredModel(name) {
 			continue
 		}
 		if strings.HasSuffix(name, "-tiered") {
@@ -288,7 +291,7 @@ func antigravityAccountSupportsPublicModel(account *auth.Account, model string) 
 // antigravityResolvePublicModelForAccount accepts both logical models and old
 // aliases, while requiring the physical backing(s) needed by that contract.
 func antigravityResolvePublicModelForAccount(account *auth.Account, model string) (string, bool) {
-	if account == nil {
+	if account == nil || antigravityRetiredModel(model) {
 		return "", false
 	}
 	wires := AntigravityWireModelIDs(model)
