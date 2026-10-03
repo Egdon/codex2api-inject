@@ -3,7 +3,11 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"strings"
@@ -12,6 +16,7 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/codex2api/auth"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 func TestApplyGrokRequestHeadersAlignsOfficialCLI(t *testing.T) {
@@ -49,6 +54,102 @@ func TestApplyGrokRequestHeadersAlignsOfficialCLI(t *testing.T) {
 	}
 }
 
+func TestEnsureGrokPromptCacheKeyMatchesSession(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("Session-Id", "sess-stable")
+	body := []byte(`{"model":"grok-4.7","input":"hi"}`)
+	got := ensureGrokPromptCacheKey(body, headers, body)
+	if gjson.GetBytes(got, "prompt_cache_key").String() != "sess-stable" {
+		t.Fatalf("prompt_cache_key = %s", got)
+	}
+	again := ensureGrokPromptCacheKey(got, headers, body)
+	if gjson.GetBytes(again, "prompt_cache_key").String() != "sess-stable" {
+		t.Fatalf("existing key rewritten: %s", again)
+	}
+
+	explicit := []byte(`{"model":"grok-4.7","prompt_cache_key":"memory-capture-1","input":"hi"}`)
+	kept := ensureGrokPromptCacheKey(explicit, headers, explicit)
+	if gjson.GetBytes(kept, "prompt_cache_key").String() != "memory-capture-1" {
+		t.Fatalf("explicit side key overwritten: %s", kept)
+	}
+}
+
+func TestCompressGrokRequestBodyMatchesCLIThreshold(t *testing.T) {
+	t.Setenv("GROK_REQUEST_COMPRESSION", "")
+	oauth := &auth.Account{UpstreamType: auth.UpstreamGrok, AccessToken: "at"}
+	apiKey := &auth.Account{UpstreamType: auth.UpstreamGrok, APIKey: "sk"}
+	small := bytes.Repeat([]byte("a"), 4<<10)
+	large := bytes.Repeat([]byte("a"), grokRequestCompressionMinBytes+1024)
+
+	if _, encoding := compressGrokRequestBody(oauth, small); encoding != "" {
+		t.Fatalf("small oauth body encoding = %q", encoding)
+	}
+	compressed, encoding := compressGrokRequestBody(oauth, large)
+	if encoding != "zstd" || len(compressed) == 0 || len(compressed) >= len(large) {
+		t.Fatalf("large oauth body encoding=%q len=%d plain=%d", encoding, len(compressed), len(large))
+	}
+	if _, encoding := compressGrokRequestBody(apiKey, large); encoding != "" {
+		t.Fatalf("api key body encoding = %q, want plain", encoding)
+	}
+
+	t.Setenv("GROK_REQUEST_COMPRESSION", "off")
+	if _, encoding := compressGrokRequestBody(oauth, large); encoding != "" {
+		t.Fatalf("disabled compression still encoded: %q", encoding)
+	}
+	t.Setenv("GROK_REQUEST_COMPRESSION", "zstd")
+	if _, encoding := compressGrokRequestBody(apiKey, large); encoding != "zstd" {
+		t.Fatalf("forced compression encoding = %q", encoding)
+	}
+}
+
+func TestExecuteGrokProtocolRequestPinsCacheKeyAndCompresses(t *testing.T) {
+	t.Setenv("GROK_REQUEST_COMPRESSION", "")
+	var gotHeader http.Header
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Clone()
+		gotBody = readUpstreamRequestBody(r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\n")
+	}))
+	defer server.Close()
+
+	account := &auth.Account{UpstreamType: auth.UpstreamGrok, AccessToken: "at", BaseURL: server.URL + "/v1"}
+	account.SetGrokRoutingState(auth.GrokRoutingState{Models: []auth.GrokModelRoute{{
+		ModelID: "grok-4.5", BaseURL: server.URL + "/v1", APIBackend: auth.GrokProtocolResponses,
+	}}})
+	payload, err := json.Marshal(map[string]any{
+		"model":  "grok-4.5",
+		"stream": true,
+		"input":  strings.Repeat("a", grokRequestCompressionMinBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := make(http.Header)
+	headers.Set("Session-Id", "sess-har")
+	resp, err := ExecuteGrokProtocolRequest(context.Background(), account, GrokProtocolResponses, payload, payload, "", headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if gotHeader.Get("Content-Encoding") != "zstd" {
+		t.Fatalf("Content-Encoding = %q", gotHeader.Get("Content-Encoding"))
+	}
+	if gotHeader.Get("x-grok-session-id") != "sess-har" {
+		t.Fatalf("session = %q", gotHeader.Get("x-grok-session-id"))
+	}
+	if gotHeader.Get("x-grok-client-version") != "1.0.46" && os.Getenv("GROK_CLIENT_VERSION") == "" {
+		t.Fatalf("client version = %q", gotHeader.Get("x-grok-client-version"))
+	}
+	if gjson.GetBytes(gotBody, "prompt_cache_key").String() != "sess-har" {
+		t.Fatalf("prompt_cache_key = %s", gotBody)
+	}
+	if gotHeader.Get("x-compaction-at") != "400000" && os.Getenv("GROK_COMPACTION_AT") == "" {
+		t.Fatalf("x-compaction-at = %q", gotHeader.Get("x-compaction-at"))
+	}
+}
+
 func TestGrokClientVersionDefaultNotOutdated(t *testing.T) {
 	// 上游对 1.0.13 以下的 CLI 版本回 426；默认值回退到 0.x 会让全部 Grok 请求失败。
 	if os.Getenv("GROK_CLIENT_VERSION") != "" {
@@ -56,6 +157,9 @@ func TestGrokClientVersionDefaultNotOutdated(t *testing.T) {
 	}
 	if strings.HasPrefix(grokClientVersion, "0.") {
 		t.Fatalf("grokClientVersion = %q is below the upstream minimum", grokClientVersion)
+	}
+	if grokClientVersion != "1.0.46" {
+		t.Fatalf("grokClientVersion = %q, want 1.0.46", grokClientVersion)
 	}
 }
 

@@ -2028,15 +2028,22 @@ func ExecuteGrokProtocolRequest(ctx context.Context, account *auth.Account, inbo
 	if proxyOverride != "" {
 		proxyURL = proxyOverride
 	}
+	conversationBody := inboundBody
+	if len(conversationBody) == 0 {
+		conversationBody = responsesBody
+	}
+	if route.Protocol == GrokProtocolResponses {
+		preflight.Body = ensureGrokPromptCacheKey(preflight.Body, headers, conversationBody)
+	}
 	logGrokPrefixFingerprint(preflight.Body, preflight.TurnIndex, preflight.Model)
 	send := func(payload []byte, clientVersion string) (*http.Response, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, route.Endpoint, bytes.NewReader(payload))
+		if route.Protocol == GrokProtocolResponses {
+			payload = ensureGrokPromptCacheKey(payload, headers, conversationBody)
+		}
+		outbound, encoding := compressGrokRequestBody(account, payload)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, route.Endpoint, bytes.NewReader(outbound))
 		if reqErr != nil {
 			return nil, ErrInternalError("创建请求失败", reqErr)
-		}
-		conversationBody := inboundBody
-		if len(conversationBody) == 0 {
-			conversationBody = responsesBody
 		}
 		applyGrokRequestHeaders(req, account, bearer, headers, conversationBody)
 		if clientVersion != "" {
@@ -2051,6 +2058,9 @@ func ExecuteGrokProtocolRequest(ctx context.Context, account *auth.Account, inbo
 		applyGrokRequestHeaders(req, account, bearer, headers, conversationBody)
 		if clientVersion != "" {
 			req.Header.Set("x-grok-client-version", clientVersion)
+		}
+		if encoding != "" {
+			req.Header.Set("Content-Encoding", encoding)
 		}
 		turnIndex := preflight.TurnIndex
 		if !bytes.Equal(payload, preflight.Body) {

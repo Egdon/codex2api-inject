@@ -22,13 +22,13 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// Grok CLI 请求头契约的默认值（与 Grok CLI 1.0.41 交互模式实抓流量对齐），可用环境变量覆盖，
+// Grok CLI 请求头契约的默认值（与 Grok CLI 1.0.46 交互模式实抓流量对齐），可用环境变量覆盖，
 // 上游升级 CLI 版本导致指纹校验失败时无需改代码。上游会对过旧版本直接回 426
 // （"Your Grok CLI version (...) is outdated"），届时先用 GROK_CLIENT_VERSION 顶上再升默认值。
-// 1.0.41 契约：UA 为 "grok-pager/<v> grok-shell/<v> (<os>; <arch>)"（arch 用 Rust 命名
+// 1.0.46 契约：UA 为 "grok-pager/<v> grok-shell/<v> (<os>; <arch>)"（arch 用 Rust 命名
 // aarch64 / x86_64），identifier=grok-pager、mode=interactive，不携带 client-surface / client-name 头。
 var (
-	grokClientVersion    = grokEnv("GROK_CLIENT_VERSION", "1.0.41")
+	grokClientVersion    = grokEnv("GROK_CLIENT_VERSION", "1.0.46")
 	grokClientIdentifier = grokEnv("GROK_CLIENT_IDENTIFIER", "grok-pager")
 	grokClientMode       = grokEnv("GROK_CLIENT_MODE", "interactive")
 	grokTokenAuth        = grokEnv("GROK_TOKEN_AUTH", "xai-grok-cli")
@@ -36,12 +36,17 @@ var (
 	// context window 500k × 80%；环境变量非空时作为逃生阀直接覆盖推导结果。
 	grokCompactionAtOverride = strings.TrimSpace(os.Getenv("GROK_COMPACTION_AT"))
 	grokCompactionAtDefault  = "400000"
-	// 官方 Grok CLI 1.0.4 实抓：doom-loop 窗口 1024、会话内剩余压缩次数 1。
+	// 官方 Grok CLI 1.0.46 实抓：doom-loop 窗口 1024、会话内剩余压缩次数 1。
 	grokDoomLoopCheck        = grokEnv("GROK_DOOM_LOOP_CHECK", "1024")
 	grokCompactionsRemaining = grokEnv("GROK_COMPACTIONS_REMAINING", "1")
-	// 官方 Grok CLI 1.0.41 实抓：逐字重复检测窗口 64。
+	// 官方 Grok CLI 1.0.46 实抓：逐字重复检测窗口 64。
 	grokExactRepetitionCheck = grokEnv("GROK_EXACT_REPETITION_CHECK", "64")
 )
+
+// grokRequestCompressionMinBytes 对齐 Grok CLI 1.0.46：大约 40KB 以下的
+// /v1/responses 发明文，更大的请求体带 Content-Encoding: zstd。
+// 实抓明文最大 42648 字节，压缩体对应的 JSON 最小 79497 字节，64KiB 落在两者之间。
+const grokRequestCompressionMinBytes = 64 << 10
 
 func grokEnv(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
@@ -58,15 +63,80 @@ const grokCompactionThresholdPercent = 80
 // grokCompactionAtForAccount 决定发给上游的 x-compaction-at。
 // 优先级：环境变量显式覆盖 > 按账号观测到的上下文窗口推导 > 默认值。
 // 观测值来自上游响应头，因此首个请求必然走默认值；观测到的窗口与默认假设一致时
-// 推导结果也与默认值相同，即行为不变、仅在上游改窗口后自动跟上。
+// 推导结果也与默认值相同。
+//
+// 推导结果低于默认 400000 时保持默认值。cli-chat-proxy 对 grok-4.7-build-fast
+// 固定返回 x-grok-context-window: 256000，官方 CLI 1.0.46 仍发 400000，
+// 而且超过 256k input token 的请求可以完成。按 256000 的 80% 发 204800 会让
+// 客户端提前压缩，打断已经命中的前缀缓存。观测窗口大于默认假设时仍按 80% 跟上。
 func grokCompactionAtForAccount(account *auth.Account) string {
 	if grokCompactionAtOverride != "" {
 		return grokCompactionAtOverride
 	}
 	if window := account.GetGrokContextWindow(); window > 0 {
-		return strconv.FormatInt(window*grokCompactionThresholdPercent/100, 10)
+		derived := window * grokCompactionThresholdPercent / 100
+		floor, err := strconv.ParseInt(grokCompactionAtDefault, 10, 64)
+		if err != nil || derived < floor {
+			return grokCompactionAtDefault
+		}
+		return strconv.FormatInt(derived, 10)
 	}
 	return grokCompactionAtDefault
+}
+
+// grokRequestCompressionEnabled 报告这次 Grok 上游请求是否压缩 body。
+//
+// GROK_REQUEST_COMPRESSION 是部署级逃生阀，优先于默认策略。未设置时只压缩
+// OAuth / cli-chat-proxy 账号：/v1/settings 的 accept_request_encodings 是 ["zstd"]。
+// API Key 走 xAI 公开 API，没有这份实抓，默认保持明文。
+func grokRequestCompressionEnabled(account *auth.Account) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("GROK_REQUEST_COMPRESSION"))) {
+	case "zstd", "on", "true", "1":
+		return true
+	case "off", "none", "false", "0", "plain":
+		return false
+	}
+	return account != nil && account.GrokAuthKind() != auth.GrokAuthKindAPIKey
+}
+
+// compressGrokRequestBody 按官方 CLI 的阈值压缩 Grok /v1/responses 请求体。
+//
+// 返回 (出站字节, Content-Encoding)。第二个返回值为空串表示发明文。
+// 压缩失败或压完没有变小都退回明文。编码器与 Codex 路径共用，EncodeAll 可并发调用。
+func compressGrokRequestBody(account *auth.Account, body []byte) ([]byte, string) {
+	if len(body) < grokRequestCompressionMinBytes || !grokRequestCompressionEnabled(account) {
+		return body, ""
+	}
+	encoder := codexRequestZstdEncoder()
+	if encoder == nil {
+		return body, ""
+	}
+	compressed := encoder.EncodeAll(body, nil)
+	if len(compressed) == 0 || len(compressed) >= len(body) {
+		return body, ""
+	}
+	return compressed, "zstd"
+}
+
+// ensureGrokPromptCacheKey 让 /v1/responses 带上稳定的 prompt_cache_key。
+//
+// 官方 CLI 1.0.46 的主会话把这个字段设成 x-grok-session-id，165/166 次请求都带，
+// 前缀缓存命中约 92.8%。下游已经给出的 key 原样保留：memory / turn-summary
+// 这类旁路调用用另一套 key，避免挤掉主会话前缀。缺省时补上与会话头相同的稳定值，
+// 不使用每请求随机 UUID。
+func ensureGrokPromptCacheKey(body []byte, headers http.Header, conversationBody []byte) []byte {
+	if strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()) != "" {
+		return body
+	}
+	key := resolveGrokConversationID(headers, conversationBody)
+	if key == "" {
+		return body
+	}
+	updated, err := sjson.SetBytes(body, "prompt_cache_key", key)
+	if err != nil {
+		return body
+	}
+	return updated
 }
 
 // grokUserAgentOS 返回 UA 里的平台名。官方 CLI 用 "macos" 而非 Go 的 "darwin"。
@@ -268,11 +338,16 @@ func ExecuteGrokRequest(ctx context.Context, account *auth.Account, requestBody 
 	model := preflight.Model
 
 	send := func(body []byte) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		body = ensureGrokPromptCacheKey(body, headers, conversationBody)
+		outbound, encoding := compressGrokRequestBody(account, body)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(outbound))
 		if err != nil {
 			return nil, ErrInternalError("创建请求失败", err)
 		}
 		applyGrokRequestHeaders(req, account, bearer, headers, conversationBody)
+		if encoding != "" {
+			req.Header.Set("Content-Encoding", encoding)
+		}
 		// 与官方 CLI 对齐的指纹头：会话内轮次序号 + 完整 Accept-Encoding。
 		req.Header.Set("x-grok-turn-idx", strconv.Itoa(turnIdx))
 		req.Header.Set("Accept-Encoding", "gzip, br, deflate")
@@ -398,11 +473,12 @@ func recordGrokRateLimitHeaders(account *auth.Account, header http.Header) {
 }
 
 // sanitizeGrokRequestBody 剥离 Codex 管道注入的、Grok 上游不接受的字段。
+// prompt_cache_key 要留下：cli-chat-proxy 接受它，并用它做前缀缓存路由。
 func sanitizeGrokRequestBody(body []byte) []byte {
 	if !gjson.ValidBytes(body) {
 		return body
 	}
-	for _, path := range []string{"client_metadata", "prompt_cache_key", "service_tier", "safety_identifier"} {
+	for _, path := range []string{"client_metadata", "service_tier", "safety_identifier"} {
 		if gjson.GetBytes(body, path).Exists() {
 			if updated, err := sjson.DeleteBytes(body, path); err == nil {
 				body = updated
