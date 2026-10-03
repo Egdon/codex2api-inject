@@ -35,9 +35,15 @@ import {
   ArrowUp,
   ArrowUpDown,
   Clock,
+  TriangleAlert,
 } from "lucide-react";
-import { api, getAdminKey } from "../api";
-import { grokDisplayModels, grokModelSummaryTitle } from "../lib/grokModelDisplay";
+import { api } from "../api";
+import {
+  DEFAULT_GROK_TEST_MODELS,
+  grokDisplayModels,
+  grokModelSummaryTitle,
+} from "../lib/grokModelDisplay";
+import TestConnectionModal from "../components/TestConnectionModal";
 import type { ProxyRow } from "../api";
 import { ProxyField } from "../components/ProxyField";
 import AccountProxyBadge from "../components/AccountProxyBadge";
@@ -138,16 +144,6 @@ import {
 } from "../lib/modelMapping";
 import { cn } from "@/lib/utils";
 
-const DEFAULT_GROK_TEST_MODELS = [
-  "grok-4.7",
-  "grok-4.6",
-  "grok-4.5",
-  "grok-4",
-  "grok-3-fast",
-  "grok-3",
-  "grok-2",
-];
-
 // 前端渲染成"限流"的账号状态集合(与 StatusBadge locale 一致)。free 账号进这些状态
 // 但拿不到用量数字时,GrokUsageCell 用满格灰条兜底表意"已耗尽"。
 const GROK_LIMITED_STATUSES = new Set([
@@ -210,6 +206,7 @@ interface GrokRowHandlers {
   test: (account: AccountRow) => void;
   usage: (account: AccountRow) => void;
   refresh: (account: AccountRow) => void;
+  authJson: (account: AccountRow) => void;
   toggleEnabled: (account: AccountRow) => void;
   edit: (account: AccountRow) => void;
   editGroups: (account: AccountRow) => void;
@@ -605,6 +602,7 @@ function GrokAccounts({
   const devicePollTimer = useRef<number | null>(null);
 
   const [testingAccount, setTestingAccount] = useState<AccountRow | null>(null);
+  const [authJsonAccount, setAuthJsonAccount] = useState<AccountRow | null>(null);
   const [usageAccount, setUsageAccount] = useState<AccountRow | null>(null);
   const [quickGroupAccount, setQuickGroupAccount] = useState<AccountRow | null>(
     null,
@@ -1172,6 +1170,7 @@ function GrokAccounts({
     test: (account) => openTestingAccount(account),
     usage: (account) => setUsageAccount(account),
     refresh: (account) => void handleRefresh(account),
+    authJson: (account) => setAuthJsonAccount(account),
     toggleEnabled: (account) => void handleToggleEnabled(account),
     // openEdit/handleRefresh 等在组件体更靠后定义,这里一律用闭包延迟取值,避开 TDZ。
     edit: (account) => openEdit(account),
@@ -1189,6 +1188,7 @@ function GrokAccounts({
       test: (account) => rowHandlersRef.current.test(account),
       usage: (account) => rowHandlersRef.current.usage(account),
       refresh: (account) => rowHandlersRef.current.refresh(account),
+      authJson: (account) => rowHandlersRef.current.authJson(account),
       toggleEnabled: (account) => rowHandlersRef.current.toggleEnabled(account),
       edit: (account) => rowHandlersRef.current.edit(account),
       editGroups: (account) => rowHandlersRef.current.editGroups(account),
@@ -3228,10 +3228,17 @@ function GrokAccounts({
       </Modal>
 
       {testingAccount ? (
-        <GrokTestConnectionModal
+        <TestConnectionModal
           account={testingAccount}
           onClose={() => setTestingAccount(null)}
           onSettled={() => void reload()}
+        />
+      ) : null}
+
+      {authJsonAccount ? (
+        <GrokAuthJsonModal
+          account={authJsonAccount}
+          onClose={() => setAuthJsonAccount(null)}
         />
       ) : null}
 
@@ -3405,7 +3412,8 @@ function GrokAccounts({
           void handleRefresh(detailAccount);
         }}
         onGenerateAuthJson={() => {
-          // Grok 不支持导出 auth.json；Sheet 内已对 grok 账号隐藏该按钮。
+          if (!detailAccount) return;
+          setAuthJsonAccount(detailAccount);
         }}
         onToggleEnabled={() => {
           if (!detailAccount) return;
@@ -3991,6 +3999,7 @@ const MemoGrokAccountTableRow = memo(function MemoGrokAccountTableRow({
       onTest={() => handlers.test(account)}
       onUsage={() => handlers.usage(account)}
       onRefresh={() => handlers.refresh(account)}
+      onAuthJson={() => handlers.authJson(account)}
       onToggleEnabled={() => handlers.toggleEnabled(account)}
       onEdit={() => handlers.edit(account)}
       onEditGroups={() => handlers.editGroups(account)}
@@ -4041,6 +4050,7 @@ const MemoGrokAccountCard = memo(function MemoGrokAccountCard({
       onTest={() => handlers.test(account)}
       onUsage={() => handlers.usage(account)}
       onRefresh={() => handlers.refresh(account)}
+      onAuthJson={() => handlers.authJson(account)}
       onToggleEnabled={() => handlers.toggleEnabled(account)}
       onEdit={() => handlers.edit(account)}
       onEditGroups={() => handlers.editGroups(account)}
@@ -4065,6 +4075,7 @@ function GrokAccountCard({
   onTest,
   onUsage,
   onRefresh,
+  onAuthJson,
   onToggleEnabled,
   onEdit,
   onEditGroups,
@@ -4085,6 +4096,7 @@ function GrokAccountCard({
   onTest: () => void;
   onUsage: () => void;
   onRefresh: () => void;
+  onAuthJson: () => void;
   onToggleEnabled: () => void;
   onEdit: () => void;
   onEditGroups: () => void;
@@ -4185,6 +4197,7 @@ function GrokAccountCard({
               onTest={onTest}
               onUsage={onUsage}
               onRefresh={onRefresh}
+              onAuthJson={onAuthJson}
               onToggleEnabled={onToggleEnabled}
               onEdit={onEdit}
               onDelete={onDelete}
@@ -4295,6 +4308,7 @@ function GrokAccountActions({
   onTest,
   onUsage,
   onRefresh,
+  onAuthJson,
   onToggleEnabled,
   onEdit,
   onDelete,
@@ -4305,6 +4319,7 @@ function GrokAccountActions({
   onTest: () => void;
   onUsage: () => void;
   onRefresh: () => void;
+  onAuthJson: () => void;
   onToggleEnabled: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -4344,6 +4359,18 @@ function GrokAccountActions({
           onClick={onRefresh}
         >
           <RefreshCw className={cn("size-3.5", busy && "animate-spin")} />
+        </Button>
+      ) : null}
+      {isOAuth ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="size-8"
+          title={t("grok.actionAuthJson")}
+          disabled={busy}
+          onClick={onAuthJson}
+        >
+          <FileJson className="size-3.5" />
         </Button>
       ) : null}
       <Button
@@ -4401,6 +4428,7 @@ function GrokAccountTableRow({
   onTest,
   onUsage,
   onRefresh,
+  onAuthJson,
   onToggleEnabled,
   onEdit,
   onEditGroups,
@@ -4423,6 +4451,7 @@ function GrokAccountTableRow({
   onTest: () => void;
   onUsage: () => void;
   onRefresh: () => void;
+  onAuthJson: () => void;
   onToggleEnabled: () => void;
   onEdit: () => void;
   onEditGroups: () => void;
@@ -4635,6 +4664,7 @@ function GrokAccountTableRow({
             onTest={onTest}
             onUsage={onUsage}
             onRefresh={onRefresh}
+            onAuthJson={onAuthJson}
             onToggleEnabled={onToggleEnabled}
             onEdit={onEdit}
             onDelete={onDelete}
@@ -5470,271 +5500,174 @@ function GrokUsageBar({
   );
 }
 
-type TestEvent = {
-  type: string;
-  text?: string;
-  model?: string;
-  success?: boolean;
-  error?: string;
-};
-
-function GrokTestConnectionModal({
+// GrokAuthJsonModal 生成 Grok CLI（~/.grok/auth.json）格式凭据，版式对齐 Codex 的
+// 生成 auth.json 弹窗；默认不带 refresh token，避免与网关争用同一 RT 家族。
+function GrokAuthJsonModal({
   account,
   onClose,
-  onSettled,
 }: {
   account: AccountRow;
   onClose: () => void;
-  onSettled: () => void;
 }) {
   const { t } = useTranslation();
-  const [output, setOutput] = useState<string[]>([]);
-  const [status, setStatus] = useState<
-    "connecting" | "streaming" | "success" | "error"
-  >("connecting");
-  const [errorMsg, setErrorMsg] = useState("");
-  const [model, setModel] = useState("");
-  const [selectedModel, setSelectedModel] = useState("");
-  const [modelOptions, setModelOptions] = useState<string[]>([]);
-  const [modelOptionsReady, setModelOptionsReady] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const outputEndRef = useRef<HTMLDivElement>(null);
-  const settledRef = useRef(false);
-  const onSettledRef = useRef(onSettled);
-  onSettledRef.current = onSettled;
-
-  const markSettled = useCallback(() => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    onSettledRef.current();
-  }, []);
+  const { showToast } = useToast();
+  const [includeRefreshToken, setIncludeRefreshToken] = useState(false);
+  const [json, setJson] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const accountModels = grokDisplayModels(account).filter(
-      (m) => m.trim() && !m.toLowerCase().includes("image"),
-    );
-    const next =
-      accountModels.length > 0
-        ? accountModels
-        : account.grok_models && account.grok_models.status !== "unknown" ? [] : [...DEFAULT_GROK_TEST_MODELS];
-    setModelOptions(next);
-    setSelectedModel(next[0] ?? "");
-    setModelOptionsReady(true);
-  }, [account.models, account.grok_models]);
-
-  useEffect(() => {
-    if (!modelOptionsReady || !selectedModel) return;
-
-    setOutput([]);
-    setStatus("connecting");
-    setErrorMsg("");
-    setModel(selectedModel);
-    settledRef.current = false;
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const run = async () => {
-      if (controller.signal.aborted) return;
-      try {
-        const params = new URLSearchParams({ model: selectedModel });
-        const res = await fetch(
-          `/api/admin/accounts/${account.id}/test?${params.toString()}`,
-          {
-            signal: controller.signal,
-            headers: getAdminKey() ? { "X-Admin-Key": getAdminKey() } : {},
-          },
-        );
-        if (!res.ok) {
-          const body = await res.text();
-          let msg = `HTTP ${res.status}`;
-          try {
-            const parsed = JSON.parse(body);
-            if (parsed.error) msg = parsed.error;
-          } catch {
-            /* ignore */
-          }
-          setStatus("error");
-          setErrorMsg(msg);
-          markSettled();
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          setStatus("error");
-          setErrorMsg(t("accounts.browserStreamingUnsupported"));
-          markSettled();
-          return;
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let receivedTerminal = false;
-
-        const processLines = (lines: string[]) => {
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
-            try {
-              const event: TestEvent = JSON.parse(trimmed.slice(6));
-              switch (event.type) {
-                case "test_start":
-                  setModel(event.model || selectedModel);
-                  setStatus("streaming");
-                  break;
-                case "content":
-                  if (event.text) setOutput((prev) => [...prev, event.text!]);
-                  break;
-                case "test_complete":
-                  receivedTerminal = true;
-                  setStatus(event.success ? "success" : "error");
-                  markSettled();
-                  break;
-                case "error":
-                  receivedTerminal = true;
-                  setStatus("error");
-                  setErrorMsg(event.error || t("accounts.unknownError"));
-                  markSettled();
-                  break;
-              }
-            } catch {
-              /* ignore */
-            }
-          }
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            buffer += decoder.decode();
-            break;
-          }
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          processLines(lines);
-        }
-        if (buffer.trim()) processLines([buffer]);
-        if (!receivedTerminal) {
-          setStatus("error");
-          setErrorMsg(t("accounts.connectionEndedUnexpectedly"));
-          markSettled();
-        }
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setStatus("error");
-        setErrorMsg(
-          err instanceof Error ? err.message : t("accounts.connectionFailed"),
-        );
-        markSettled();
-      }
-    };
-
-    const timer = window.setTimeout(() => void run(), 50);
+    let active = true;
+    setLoading(true);
+    setError("");
+    setJson("");
+    api
+      .downloadGrokAuthJSON(account.id, includeRefreshToken)
+      .then((blob) => blob.text())
+      .then((text) => {
+        if (active) setJson(text.trim());
+      })
+      .catch((err: unknown) => {
+        if (active) setError(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
-      window.clearTimeout(timer);
-      controller.abort();
+      active = false;
     };
-  }, [account.id, markSettled, modelOptionsReady, selectedModel, t]);
+  }, [account.id, includeRefreshToken]);
 
-  useEffect(() => {
-    outputEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [output]);
+  const expiresAt = useMemo(() => {
+    try {
+      const parsed = JSON.parse(json) as Record<string, { expires_at?: string }>;
+      return Object.values(parsed)[0]?.expires_at ?? "";
+    } catch {
+      return "";
+    }
+  }, [json]);
 
-  const statusText = {
-    connecting: t("accounts.connecting"),
-    streaming: t("accounts.receivingResponse"),
-    success: t("accounts.testSuccess"),
-    error: t("accounts.testFailed"),
-  }[status];
-  const StatusIcon = {
-    connecting: Loader2,
-    streaming: Loader2,
-    success: CheckCircle2,
-    error: XCircle,
-  }[status];
-  const statusIconSpin = status === "connecting" || status === "streaming";
-  const statusColor = {
-    connecting: "text-muted-foreground",
-    streaming: "text-[hsl(var(--info))]",
-    success: "text-[hsl(var(--success))]",
-    error: "text-destructive",
-  }[status];
+  const handleCopy = async () => {
+    try {
+      await copyTextToClipboard(json);
+      showToast(t("accounts.authJsonCopied"));
+    } catch (err) {
+      showToast(
+        t("accounts.authJsonCopyFailed", { error: getErrorMessage(err) }),
+        "error",
+      );
+    }
+  };
+
+  const handleExport = () => {
+    downloadBlob(new Blob([`${json}\n`], { type: "application/json" }), "auth.json");
+    showToast(t("accounts.authJsonExported"));
+  };
+
+  const modes = [
+    { full: false, label: t("grok.authJsonModeAccess") },
+    { full: true, label: t("grok.authJsonModeFull") },
+  ];
 
   return (
     <Modal
       show
-      title={t("accounts.testConnectionTitle", {
-        account: accountLabel(account),
-      })}
-      onClose={() => {
-        abortRef.current?.abort();
-        onClose();
-      }}
-      footer={
-        <Button
-          variant="outline"
-          onClick={() => {
-            abortRef.current?.abort();
-            onClose();
-          }}
-        >
-          {t("common.close")}
-        </Button>
-      }
-      contentClassName="sm:max-w-[680px]"
+      title={t("grok.authJsonTitle")}
+      contentClassName="sm:max-w-[720px]"
+      onClose={onClose}
     >
       <div className="space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <span
-            className={cn(
-              "flex items-center gap-1.5 text-sm font-semibold",
-              statusColor,
-            )}
-          >
-            <StatusIcon
-              className={cn("size-4", statusIconSpin && "animate-spin")}
-            />
-            {statusText}
-          </span>
-          <Select
-            className="w-52 max-w-full"
-            compact
-            value={selectedModel}
-            onValueChange={setSelectedModel}
-            options={modelOptions.map((item) => ({
-              label: item,
-              value: item,
-            }))}
-            placeholder={model || t("settings.testModel")}
-            disabled={!modelOptionsReady || modelOptions.length === 0}
-          />
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+          <FileJson className="mt-0.5 size-5 shrink-0 text-primary" />
+          <div className="min-w-0 space-y-1">
+            <div className="text-sm font-semibold text-foreground">
+              {accountLabel(account)}
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {t("grok.authJsonDesc")}
+            </p>
+          </div>
         </div>
 
-        {(output.length > 0 ||
-          status === "connecting" ||
-          status === "streaming") && (
+        <div className="space-y-2">
           <div
-            className="max-h-[240px] min-h-[80px] overflow-auto rounded-lg border border-border bg-muted/30 p-3 text-[13px] leading-relaxed break-all whitespace-pre-wrap"
-            style={{ fontFamily: "var(--font-geist-mono)" }}
+            role="radiogroup"
+            className="inline-flex rounded-lg border border-border bg-muted/30 p-0.5"
           >
-            {output.length === 0 && status === "connecting" ? (
-              <span className="animate-pulse text-muted-foreground">
-                {t("accounts.sendingTestRequest")}
-              </span>
-            ) : (
-              output.join("")
-            )}
-            <div ref={outputEndRef} />
+            {modes.map((mode) => {
+              const active = includeRefreshToken === mode.full;
+              return (
+                <button
+                  key={String(mode.full)}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  disabled={loading}
+                  onClick={() => setIncludeRefreshToken(mode.full)}
+                  className={cn(
+                    "rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed",
+                    active
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {mode.label}
+                </button>
+              );
+            })}
+          </div>
+          {includeRefreshToken ? (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <span>{t("grok.authJsonFullWarning")}</span>
+            </div>
+          ) : (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {expiresAt
+                ? t("grok.authJsonAccessHint", {
+                    time: formatBeijingTime(expiresAt, ""),
+                  })
+                : t("grok.authJsonAccessHintNoExpiry")}
+            </p>
+          )}
+        </div>
+
+        {error ? (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {t("grok.authJsonFailed", { error })}
+          </div>
+        ) : (
+          <div>
+            <div className="mb-2 text-xs font-semibold text-muted-foreground">
+              {t("accounts.authJsonPreview")}
+            </div>
+            <textarea
+              readOnly
+              value={json}
+              placeholder={loading ? t("grok.authJsonLoading") : ""}
+              className="min-h-[260px] w-full resize-y rounded-lg border border-border bg-muted/30 p-3 text-[12px] leading-relaxed text-muted-foreground outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+              style={{ fontFamily: "var(--font-geist-mono)" }}
+            />
           </div>
         )}
 
-        {status === "error" && errorMsg ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {errorMsg}
-          </div>
-        ) : null}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>
+            {t("common.close")}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!json}
+            onClick={() => void handleCopy()}
+          >
+            <Copy className="size-4" />
+            {t("accounts.copyAuthJson")}
+          </Button>
+          <Button disabled={!json} onClick={handleExport}>
+            <Download className="size-4" />
+            {t("accounts.exportAuthJson")}
+          </Button>
+        </div>
       </div>
     </Modal>
   );

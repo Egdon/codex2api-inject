@@ -754,6 +754,23 @@ func grokClaimString(claims map[string]any, key string) string {
 	return ""
 }
 
+// GrokAccessTokenHints returns the unverified sub/iat/exp claims of a Grok
+// access token. They are export/display hints only, never authorization facts.
+func GrokAccessTokenHints(token string) (subject string, issuedAt, expiresAt time.Time) {
+	claims := grokJWTClaims(token)
+	if claims == nil {
+		return "", time.Time{}, time.Time{}
+	}
+	subject = grokClaimString(claims, "sub")
+	if iat, ok := claims["iat"].(float64); ok && iat > 0 {
+		issuedAt = time.Unix(int64(iat), 0)
+	}
+	if exp, ok := claims["exp"].(float64); ok && exp > 0 {
+		expiresAt = time.Unix(int64(exp), 0)
+	}
+	return subject, issuedAt, expiresAt
+}
+
 // ==================== OAuth 浏览器授权（PKCE） ====================
 
 // GrokTokenData 是一次 Grok OAuth 刷新 / 授权兑换的结果。

@@ -1635,6 +1635,9 @@ export const api = {
   },
   downloadAccountAuthJSON: (id: number) =>
     requestBlob(`/accounts/${id}/auth-json`),
+  // Grok CLI(~/.grok/auth.json)格式;不带 refresh token 时不会与网关争用同一 RT 家族。
+  downloadGrokAuthJSON: (id: number, includeRefreshToken: boolean) =>
+    requestBlob(`/accounts/${id}/grok/auth-json?include_refresh_token=${includeRefreshToken}`),
   /**
    * 导出 Grok 账号凭据。ids 为空则导出全部 Grok 账号。
    * 单个账号返回裸 JSON，多个账号返回 ZIP（内部每账号一个 <邮箱>.json）。

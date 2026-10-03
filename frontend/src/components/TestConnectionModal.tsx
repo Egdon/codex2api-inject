@@ -38,6 +38,7 @@ import {
   uniqueTestModels,
 } from "../lib/connectionTestModels";
 import { orderAntigravityTestModels } from "../lib/antigravityModels";
+import { grokConnectionTestModels } from "../lib/grokModelDisplay";
 import { cn } from "@/lib/utils";
 import { useToast } from "../hooks/useToast";
 import Modal from "./Modal";
@@ -140,6 +141,8 @@ export default function TestConnectionModal({
   const isOpenAIResponsesAccount = Boolean(
     account.openai_responses_api || account.grok_api,
   );
+  // 白名单为空的 Grok 账号以上游模型目录为准，不能只读 account.models。
+  const isGrokAccount = Boolean(account.grok_api);
   const isCodexOAuthAccount = !isClaudeAccount && !isOpenAIResponsesAccount && !isAntigravityAccount;
   const supportsModelDetector = isCodexOAuthAccount || isClaudeAccount || Boolean(account.openai_responses_api && !account.grok_api);
 
@@ -190,6 +193,17 @@ export default function TestConnectionModal({
           );
           setModelOptions(fallbackModels);
           setSelectedModel((current) => current || fallbackModels[0] || "");
+          return;
+        }
+
+        if (isGrokAccount) {
+          const grokModels = grokConnectionTestModels(account);
+          const preferredModel = grokModels.find(
+            (item) => item.toLowerCase() === settings.test_model.toLowerCase(),
+          );
+          const nextModels = uniqueTestModels(grokModels, preferredModel, false);
+          setModelOptions(nextModels);
+          setSelectedModel((current) => current || nextModels[0] || "");
           return;
         }
 
@@ -251,6 +265,10 @@ export default function TestConnectionModal({
           );
           setModelOptions(fallbackModels);
           setSelectedModel((current) => current || fallbackModels[0] || "");
+        } else if (isGrokAccount) {
+          const fallbackModels = uniqueTestModels(grokConnectionTestModels(account), undefined, false);
+          setModelOptions(fallbackModels);
+          setSelectedModel((current) => current || fallbackModels[0] || "");
         } else if (isOpenAIResponsesAccount) {
           const accountModels = (account.models ?? []).filter(
             isConnectionTestModel,
@@ -283,7 +301,7 @@ export default function TestConnectionModal({
     return () => {
       active = false;
     };
-  }, [account.antigravity_quota, account.claude_api, account.model_mapping, account.models, isAntigravityAccount, isClaudeAccount, isOpenAIResponsesAccount]);
+  }, [account.antigravity_quota, account.claude_api, account.grok_models, account.model_mapping, account.models, isAntigravityAccount, isClaudeAccount, isGrokAccount, isOpenAIResponsesAccount]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 

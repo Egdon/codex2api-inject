@@ -545,6 +545,10 @@ func visiblePersistedModelIDs(items []database.GrokModelCatalogItem, authKind st
 // grokAccessTokenStale reports whether a control-plane sync should refresh an
 // OAuth access token before issuing its read-only requests.
 func grokAccessTokenStale(account *auth.Account) bool {
+	return grokAccessTokenExpiresWithin(account, 2*time.Minute)
+}
+
+func grokAccessTokenExpiresWithin(account *auth.Account, window time.Duration) bool {
 	if account == nil {
 		return true
 	}
@@ -553,7 +557,7 @@ func grokAccessTokenStale(account *auth.Account) bool {
 	if strings.TrimSpace(account.AccessToken) == "" {
 		return true
 	}
-	return !account.ExpiresAt.IsZero() && time.Now().Add(2*time.Minute).After(account.ExpiresAt)
+	return !account.ExpiresAt.IsZero() && time.Now().Add(window).After(account.ExpiresAt)
 }
 
 func (h *Handler) syncGrokAccountState(ctx context.Context, id int64) (*grokStateSyncResult, error) {
