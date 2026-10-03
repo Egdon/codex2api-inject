@@ -6987,16 +6987,26 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		upstreamCtx = context.WithValue(upstreamCtx, encryptedContentSessionKey{}, sessionIdentity.affinityID)
 		upstreamCtx = WithPayloadRuleIdentity(upstreamCtx, attemptIdentity)
 		lastUpstreamCancel = upstreamCancel
-		ttftGuard := newFirstTokenTimeoutGuard(currentFirstTokenTimeout(), upstreamCancel)
+		// 非流式且要下发 Antigravity 思考时上游改取非流式(见下),首个 token 要等整段
+		// 生成完才到,首字超时守卫不适用。
+		bufferAntigravity := account.IsAntigravityAPI() && AntigravityBuffersUpstream(account, isStream, codexBody)
+		var ttftGuard *firstTokenTimeoutGuard
+		if !bufferAntigravity {
+			ttftGuard = newFirstTokenTimeoutGuard(currentFirstTokenTimeout(), upstreamCancel)
+		}
 		var resp *http.Response
 		var reqErr error
 		if account.IsAntigravityAPI() {
 			// Chat 入站已在上面翻译成 Responses 形态，正是 Antigravity 适配器的入参；
 			// 回程走下面的 Responses→Chat 翻译（issue #595）。该翻译只吃 SSE——
 			// TranslateRequest 恒置 stream:true，非流式客户端也是在网关侧聚合的，
-			// 所以上游一律取流，不跟随下游 stream 标志。
+			// 所以上游默认取流，不跟随下游 stream 标志。例外是非流式客户端要思考内容:
+			// 上游流式几乎不下发 thought 摘要,改取非流式再回放成 SSE（issue #752）。
 			// Antigravity 只认原生公共模型 ID，账号级 OpenAI 别名不参与映射。
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(upstreamCtx, func() (*http.Response, error) {
+				if bufferAntigravity {
+					return ExecuteAntigravityResponsesRequestBuffered(upstreamCtx, account, attemptEffectiveModel, codexBody, proxyURL)
+				}
 				return ExecuteAntigravityResponsesRequest(upstreamCtx, account, attemptEffectiveModel, codexBody, true, proxyURL)
 			})
 		} else if isRelayAccount {

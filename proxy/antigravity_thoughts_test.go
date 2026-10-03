@@ -243,3 +243,68 @@ func TestAntigravityExecutorExposesThoughtsEndToEnd(t *testing.T) {
 		t.Fatalf("downstream stream lacks reasoning deltas: %s", body)
 	}
 }
+
+func TestAntigravityBufferedExecutorReplaysUnstreamedAnswerAsSSE(t *testing.T) {
+	withAntigravityExposeThoughts(t, true)
+	var path string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path + "?" + r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		// generateContent answers with indented JSON; it must not break SSE framing.
+		_, _ = io.WriteString(w, "{\n  \"response\": {\n    \"candidates\": [{\"content\": {\"parts\": [\n      {\"text\": \"Let me think\", \"thought\": true},\n      {\"text\": \"391\"}\n    ]}, \"finishReason\": \"STOP\"}],\n    \"usageMetadata\": {\"promptTokenCount\": 2, \"candidatesTokenCount\": 1, \"thoughtsTokenCount\": 4, \"totalTokenCount\": 7}\n  }\n}\n")
+	}))
+	defer server.Close()
+	previous := antigravityOAuthEndpointBases
+	antigravityOAuthEndpointBases = []string{server.URL}
+	t.Cleanup(func() { antigravityOAuthEndpointBases = previous })
+
+	account := &auth.Account{DBID: 7522, UpstreamType: auth.UpstreamAntigravity, AccessToken: "test-token", AntigravityProjectID: "test-project", Models: []string{"gemini-3.8-flash-tiered"}}
+	resp, err := ExecuteAntigravityResponsesRequestBuffered(context.Background(), account, "gemini-3.8-flash-high", []byte(`{"input":"hello"}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(strings.TrimSuffix(path, "?"), ":generateContent") {
+		t.Fatalf("buffered call hit %q, want generateContent", path)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	var reasoning, text string
+	var completed bool
+	for _, event := range readAntigravityTestEvents(t, resp.Body) {
+		switch event.Get("type").String() {
+		case "response.reasoning_summary_text.delta":
+			reasoning += event.Get("delta").String()
+		case "response.output_text.delta":
+			text += event.Get("delta").String()
+		case "response.completed":
+			completed = true
+		}
+	}
+	if reasoning != "Let me think" || text != "391" || !completed {
+		t.Fatalf("replayed stream reasoning=%q text=%q completed=%v", reasoning, text, completed)
+	}
+}
+
+func TestAntigravityBuffersUpstreamOnlyForNonStreamOAuthWithThoughts(t *testing.T) {
+	oauth := &auth.Account{UpstreamType: auth.UpstreamAntigravity, AccessToken: "token"}
+	apiKey := &auth.Account{UpstreamType: auth.UpstreamAntigravity, APIKey: "key"}
+	body := []byte(`{"input":"hi"}`)
+	withAntigravityExposeThoughts(t, false)
+	if AntigravityBuffersUpstream(oauth, false, body) {
+		t.Fatal("buffered with thoughts disabled")
+	}
+	withAntigravityExposeThoughts(t, true)
+	if !AntigravityBuffersUpstream(oauth, false, body) {
+		t.Fatal("non-stream OAuth request with thoughts must buffer")
+	}
+	if AntigravityBuffersUpstream(oauth, true, body) {
+		t.Fatal("streaming clients must keep upstream streaming")
+	}
+	if AntigravityBuffersUpstream(apiKey, false, body) {
+		t.Fatal("API-key accounts must keep streaming")
+	}
+	if AntigravityBuffersUpstream(oauth, false, []byte(`{"input":"hi","reasoning":{"summary":"none"}}`)) {
+		t.Fatal("reasoning.summary none opts out of buffering")
+	}
+}

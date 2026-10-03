@@ -97,12 +97,33 @@ func antigravityOAuthEndpointList() []string {
 // ExecuteAntigravityResponsesRequest adapts an OpenAI Responses request to the
 // Cloud Code v1internal Gemini envelope used by both Antigravity projects.
 func ExecuteAntigravityResponsesRequest(ctx context.Context, account *auth.Account, model string, body []byte, stream bool, proxyURL string) (*http.Response, error) {
+	return executeAntigravityResponses(ctx, account, model, body, stream, stream, proxyURL)
+}
+
+// ExecuteAntigravityResponsesRequestBuffered returns the same Responses SSE as
+// a streamed call but reads the upstream answer unstreamed. Cloud Code's
+// streamGenerateContent almost never carries thought summaries while
+// generateContent always does, so a client that waits for the whole answer
+// anyway gets its reasoning this way. API-key accounts keep streaming.
+func ExecuteAntigravityResponsesRequestBuffered(ctx context.Context, account *auth.Account, model string, body []byte, proxyURL string) (*http.Response, error) {
+	return executeAntigravityResponses(ctx, account, model, body, false, true, proxyURL)
+}
+
+// AntigravityBuffersUpstream reports whether a non-streaming Chat/Messages
+// request should use ExecuteAntigravityResponsesRequestBuffered: only when
+// thoughts are exposed for this request on an OAuth account.
+func AntigravityBuffersUpstream(account *auth.Account, downstreamStream bool, body []byte) bool {
+	return !downstreamStream && account != nil && account.AntigravityAuthKind() != auth.AntigravityAuthKindAPIKey &&
+		antigravityExposeThoughtsForRequest(body)
+}
+
+func executeAntigravityResponses(ctx context.Context, account *auth.Account, model string, body []byte, upstreamStream, sseOut bool, proxyURL string) (*http.Response, error) {
 	resetUpstreamAttemptTrace(ctx)
 	if account == nil {
 		return nil, fmt.Errorf("antigravity account is nil")
 	}
 	if account.AntigravityAuthKind() == auth.AntigravityAuthKindAPIKey {
-		return executeAntigravityInteractionsRequest(ctx, account, model, body, stream, proxyURL)
+		return executeAntigravityInteractionsRequest(ctx, account, model, body, sseOut, proxyURL)
 	}
 	project, bearer := account.AntigravityCredentials()
 	if project == "" || bearer == "" {
@@ -125,7 +146,23 @@ func ExecuteAntigravityResponsesRequest(ctx context.Context, account *auth.Accou
 	// custom_tool_call by name and will not accept a function_call for a tool it
 	// declared as custom.
 	customTools := antigravityCustomToolNames(body)
-	return executeAntigravityOAuthRequest(ctx, account, payload, antigravityOAuthGenerateCall(stream), proxyURL, wireModel, func(resp *http.Response, stream bool, _ string) (*http.Response, error) {
+	return executeAntigravityOAuthRequest(ctx, account, payload, antigravityOAuthGenerateCall(upstreamStream), proxyURL, wireModel, func(resp *http.Response, stream bool, _ string) (*http.Response, error) {
+		if !stream && sseOut {
+			// A generateContent body has the shape of one streamed chunk; replay
+			// it as a single compact SSE event through the stream converter.
+			raw, readErr := readBoundedAntigravityBody(resp.Body, antigravityResponseBodyLimit)
+			if readErr != nil {
+				return nil, fmt.Errorf("read Antigravity JSON response: %w", readErr)
+			}
+			var compact bytes.Buffer
+			if compactErr := json.Compact(&compact, raw); compactErr != nil {
+				return nil, fmt.Errorf("decode Antigravity JSON response: %w", compactErr)
+			}
+			event := append(append([]byte("data: "), compact.Bytes()...), '\n', '\n')
+			resp.Body = io.NopCloser(bytes.NewReader(event))
+			resp.ContentLength = -1
+			stream = true
+		}
 		if stream {
 			resp.Body = newAntigravitySSEResponseBodyWithThoughts(resp.Body, customTools, exposeThoughts, publicModel)
 			resp.Header.Set("Content-Type", "text/event-stream")

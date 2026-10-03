@@ -4599,7 +4599,7 @@
       "title": "Thinking output",
       "description": "Controls whether Gemini models' thinking is forwarded to clients. Applies only to Gemini models on OAuth accounts; API-key accounts are unaffected.",
       "label": "Forward thinking content",
-      "hint": "When enabled, thought summaries are requested from upstream (includeThoughts) and returned as reasoning output: a reasoning item on /v1/responses, reasoning_content on /v1/chat/completions, and a thinking block on /v1/messages. Requests that set reasoning.summary to none get no thinking content.",
+      "hint": "When enabled, thought summaries are requested from upstream (includeThoughts) and returned as reasoning output: a reasoning item on /v1/responses, reasoning_content on /v1/chat/completions, and a thinking block on /v1/messages. /v1/responses requests that set reasoning.summary to none get no thinking content. Upstream streaming responses rarely carry thought summaries; use non-streaming requests to get them reliably (non-streaming chat/messages switch to the unstreamed upstream call).",
       "saved": "Thinking output setting saved"
     },
     "channelTest": {

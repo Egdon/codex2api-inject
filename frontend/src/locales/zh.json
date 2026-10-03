@@ -4596,7 +4596,7 @@
       "title": "思考内容",
       "description": "控制是否把 Gemini 模型的思考过程下发给客户端。只对 OAuth 账号的 Gemini 模型生效，API Key 账号不受影响。",
       "label": "下发思考内容",
-      "hint": "开启后向上游请求思考摘要（includeThoughts），并以 reasoning 输出下发：/v1/responses 为 reasoning 项，/v1/chat/completions 为 reasoning_content，/v1/messages 为 thinking 块。请求显式设置 reasoning.summary 为 none 时不下发。",
+      "hint": "开启后向上游请求思考摘要（includeThoughts），并以 reasoning 输出下发：/v1/responses 为 reasoning 项，/v1/chat/completions 为 reasoning_content，/v1/messages 为 thinking 块。/v1/responses 请求显式设置 reasoning.summary 为 none 时不下发。上游流式响应几乎不带思考摘要，稳定拿到需用非流式请求（非流式的 chat/messages 会改用上游非流式接口）。",
       "saved": "思考内容设置已保存"
     },
     "channelTest": {
