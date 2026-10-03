@@ -14,129 +14,13 @@ import (
 )
 
 const (
-	codexMSIXChunkBytes  = 1 << 20
-	codexMSIXBudgetBytes = 36 << 20
-	codexASARHeaderMax   = 8 << 20
-	codexASAROutputMax   = 64 << 20
-	codexPackageJSONMax  = 64 << 10
-	codexMSIXBaseURL     = "https://persistent.oaistatic.com/codex-app-prod/"
+	codexASARHeaderMax  = 8 << 20
+	codexASAROutputMax  = 64 << 20
+	codexPackageJSONMax = 64 << 10
+	codexMSIXBaseURL    = "https://persistent.oaistatic.com/codex-app-prod/"
 )
 
 var errCodexMSIXNotFound = errors.New("MSIX not found")
-
-type codexRangeReader struct {
-	ctx        context.Context
-	client     *http.Client
-	url        string
-	size       int64
-	etag       string
-	used       int64
-	cacheStart int64
-	cache      []byte
-}
-
-func codexRangeMetadata(resp *http.Response) (start, end, total int64, err error) {
-	if resp.StatusCode != http.StatusPartialContent {
-		return 0, 0, 0, fmt.Errorf("Range request returned HTTP %d", resp.StatusCode)
-	}
-	n, err := fmt.Sscanf(resp.Header.Get("Content-Range"), "bytes %d-%d/%d", &start, &end, &total)
-	if err != nil || n != 3 || start < 0 || end < start || total <= end {
-		return 0, 0, 0, fmt.Errorf("invalid Content-Range %q", resp.Header.Get("Content-Range"))
-	}
-	return start, end, total, nil
-}
-
-func newCodexRangeReader(ctx context.Context, client *http.Client, url string) (*codexRangeReader, error) {
-	r := &codexRangeReader{ctx: ctx, client: client, url: url}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Range", "bytes=0-0")
-	req.Header.Set("Accept-Encoding", "identity")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("MSIX range probe %s: %w", url, errCodexMSIXNotFound)
-	}
-	start, end, size, err := codexRangeMetadata(resp)
-	if err != nil {
-		return nil, fmt.Errorf("MSIX range probe: %w", err)
-	}
-	if start != 0 || end != 0 {
-		return nil, fmt.Errorf("MSIX range probe returned unexpected interval")
-	}
-	r.size, r.etag = size, resp.Header.Get("ETag")
-	return r, nil
-}
-
-func (r *codexRangeReader) fetch(start int64) error {
-	end := start + codexMSIXChunkBytes - 1
-	if end >= r.size {
-		end = r.size - 1
-	}
-	count := end - start + 1
-	if r.used+count > codexMSIXBudgetBytes {
-		return fmt.Errorf("MSIX Range budget exceeded")
-	}
-	req, err := http.NewRequestWithContext(r.ctx, http.MethodGet, r.url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-	req.Header.Set("Accept-Encoding", "identity")
-	if r.etag != "" {
-		req.Header.Set("If-Range", r.etag)
-	}
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	gotStart, gotEnd, total, err := codexRangeMetadata(resp)
-	if err != nil {
-		return fmt.Errorf("MSIX Range response mismatch: %w", err)
-	}
-	if gotStart != start || gotEnd != end || total != r.size {
-		return fmt.Errorf("MSIX Range response interval changed")
-	}
-	if r.etag != "" && resp.Header.Get("ETag") != "" && resp.Header.Get("ETag") != r.etag {
-		return fmt.Errorf("MSIX archive changed during Range read")
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, count+1))
-	if err != nil {
-		return fmt.Errorf("MSIX Range body read: %w", err)
-	}
-	if int64(len(data)) != count {
-		return fmt.Errorf("MSIX Range body length mismatch")
-	}
-	r.cacheStart, r.cache = start, data
-	r.used += count
-	return nil
-}
-
-func (r *codexRangeReader) ReadAt(p []byte, offset int64) (int, error) {
-	if offset < 0 || offset >= r.size {
-		return 0, io.EOF
-	}
-	n := 0
-	for len(p) > 0 && offset < r.size {
-		if offset < r.cacheStart || offset >= r.cacheStart+int64(len(r.cache)) {
-			if err := r.fetch(offset / codexMSIXChunkBytes * codexMSIXChunkBytes); err != nil {
-				return n, err
-			}
-		}
-		copied := copy(p, r.cache[offset-r.cacheStart:])
-		p, offset, n = p[copied:], offset+int64(copied), n+copied
-	}
-	if len(p) > 0 {
-		return n, io.EOF
-	}
-	return n, nil
-}
 
 func codexASARPackageLocation(source io.Reader) (int64, int64, int64, error) {
 	var prefix [16]byte
@@ -189,6 +73,10 @@ func codexASARPackageVersion(source io.Reader) (string, error) {
 	if _, err := io.ReadFull(source, data); err != nil {
 		return "", err
 	}
+	return codexDesktopPackageVersion(data)
+}
+
+func codexDesktopPackageVersion(data []byte) (string, error) {
 	var pkg struct {
 		Version string `json:"version"`
 	}

@@ -39,6 +39,7 @@ type WsConnection struct {
 	// 不能用当前配置重新推导，否则设置变更后会记录并未发送的 UA。
 	upstreamUserAgent      string
 	upstreamUserAgentKnown bool
+	upstreamClientIdentity string
 
 	// 创建/复用该连接的账号。仅用于读取当前动态并发上限，让 response_id
 	// 续链复用路径也能在账号上限下调后收敛空闲连接数。
@@ -1258,6 +1259,7 @@ func (m *Manager) createConnection(
 	wc.PoolKey = poolKey
 	wc.upstreamUserAgent = strings.TrimSpace(headers.Get("User-Agent"))
 	wc.upstreamUserAgentKnown = true
+	wc.upstreamClientIdentity = websocketClientIdentity(headers)
 	wc.httpResp = resp
 	wc.onDisconnected = m.getOnDisconnected()
 	wc.onReadFailure = m.DiscardConnection

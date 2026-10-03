@@ -80,7 +80,8 @@ func codexBuildRequest(ctx context.Context, client *http.Client, spec codexBuild
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json;api-version=7.1-preview.1")
 	}
-	return client.Do(req)
+	resp, err := client.Do(req)
+	return resp, codexVersionSourceError(err)
 }
 
 func codexReadSmallResponse(resp *http.Response, limit int64) ([]byte, error) {
@@ -132,15 +133,15 @@ func FetchCodexDesktopMacBuild(ctx context.Context, proxyURL string) (string, er
 
 // FetchCodexVSCodeBuild 只选择 Marketplace openai.chatgpt 的稳定版。
 func FetchCodexVSCodeBuild(ctx context.Context, proxyURL string) (string, error) {
-	// 1=versions, 16=version properties；跳过文件元数据以减少响应体。
-	const query = `{"filters":[{"criteria":[{"filterType":7,"value":"openai.chatgpt"}]}],"flags":17}`
+	// 只获取最新稳定版与预览版，避免读取全部历史。
+	const query = codexLatestMarketplaceQuery
 	client, closeClient := codexBuildHTTPClient(codexMarketplaceURL, proxyURL)
 	defer closeClient()
 	resp, err := codexBuildRequest(ctx, client, codexBuildRequestSpec{Method: http.MethodPost, URL: codexMarketplaceURL, Body: strings.NewReader(query)})
 	if err != nil {
 		return "", err
 	}
-	data, err := codexReadSmallResponse(resp, 4<<20)
+	data, err := codexReadSmallResponse(resp, codexClientMetadataMax)
 	if err != nil {
 		return "", err
 	}

@@ -2287,6 +2287,8 @@ export interface SystemSettings {
   codex_synced_desktop_mac_build?: string
   codex_synced_desktop_windows_build?: string
   codex_synced_vscode_build?: string
+  /** 已验证的应用与内置 CLI 配对；只读，不随设置保存。 */
+  codex_client_versions?: CodexClientVersionTarget[]
   codex_effective_cli_version?: string
   codex_user_agent_config: string
   usage_log_mode: 'full' | 'errors' | 'off' | string
@@ -4284,6 +4286,41 @@ export interface CodexUserAgentPersona {
   user_agent: string
   originator: string
   version: string
+  app_version?: string
+  target_platform?: string
+  source?: string
+  status?: string
+}
+
+export interface CodexClientVersionPair {
+  app_version: string
+  cli_version: string
+  package_version?: string
+  source: string
+  artifact_url?: string
+  artifact_id?: string
+  verified_at?: number
+}
+
+export interface CodexClientVersionTarget {
+  client_kind: string
+  target_platform: string
+  status: string
+  error?: string
+  checked_at: number
+  pairs: CodexClientVersionPair[]
+}
+
+export interface CodexClientVersionSyncResult {
+  fetched_version?: string
+  synced_version?: string
+  effective_version: string
+  cli_version?: string
+  source?: string
+  status: string
+  targets?: CodexClientVersionTarget[]
+  updated: boolean
+  error?: string
 }
 
 export interface CodexUserAgentPreview {

@@ -405,7 +405,9 @@ func TestExecuteRequestViaWebsocketSendFailureRemovesEffectiveProxyConnection(t 
 		t.Fatalf("buildWebsocketURL: %v", err)
 	}
 	effectiveProxy := effectiveProxyURL(account, "")
-	key := manager.poolKey(account.ID(), wsURL, sessionID, effectiveProxy)
+	exec := NewExecutorWithManager(manager)
+	headers := exec.prepareWebsocketHeaders(context.Background(), account.AccessToken, account, account.AccountID, sessionID, "", nil, http.Header{}, nil, "")
+	key := manager.poolKey(account.ID(), wsURL, websocketClientPoolKey(sessionID, headers), effectiveProxy)
 	session := NewSession(account.ID(), manager)
 	session.SetConnected(true)
 	conn := &WsConnection{
@@ -422,7 +424,6 @@ func TestExecuteRequestViaWebsocketSendFailureRemovesEffectiveProxyConnection(t 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	exec := NewExecutorWithManager(manager)
 	_, err = exec.ExecuteRequestViaWebsocket(ctx, account, []byte(`{"model":"gpt-5.4","input":"hi"}`), sessionID, "", "", nil, http.Header{}, "")
 	if err == nil {
 		t.Fatal("expected final send failure")
@@ -655,7 +656,7 @@ func TestPrepareWebsocketHeadersGeneratedDesktopClientSendsMatchingOriginator(t 
 
 	headers := exec.prepareWebsocketHeaders(context.Background(), "token-123", &auth.Account{DBID: 42, AccountID: "42"}, "42", "session-123", "api-key-1", nil, ginHeaders, nil, "")
 
-	wantUA := "Codex Desktop/0.153.3 (Windows 10.0.26100; x86_64) unknown (Codex Desktop; 26.901.41123)"
+	wantUA := "Codex Desktop/0.153.3 (Windows 10.0.26100; x86_64) unknown (Codex Desktop; 26.901.51231)"
 	if got := headers.Get("User-Agent"); got != wantUA {
 		t.Fatalf("User-Agent = %q, want %q", got, wantUA)
 	}
@@ -710,4 +711,10 @@ func TestSingleMachineFingerprintWebsocketBodyAndHeaders(t *testing.T) {
 	if gjson.GetBytes(rewritten, "prompt_cache_key").String() != "isolated-cache" {
 		t.Fatal("WS cache partition changed")
 	}
+}
+
+// prepareWebsocketHeaders 是测试辅助：忽略身份解析错误，只断言组装出的握手头。
+func (e *Executor) prepareWebsocketHeaders(ctx context.Context, accessToken string, account *auth.Account, accountID, sessionID, apiKey string, deviceCfg *proxy.DeviceProfileConfig, ginHeaders http.Header, wsBody []byte, affinityKey string) http.Header {
+	headers, _ := e.prepareWebsocketHeadersChecked(ctx, accessToken, account, accountID, sessionID, apiKey, deviceCfg, ginHeaders, wsBody, affinityKey)
+	return headers
 }

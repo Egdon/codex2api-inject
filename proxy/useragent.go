@@ -375,33 +375,26 @@ func validCodexClientVersionString(value string) bool {
 	return ok
 }
 
-// codexUserAgentFromConfig 按全局 UA 配置生成出站身份。accountID 只在号池模式下参与
+// codexUserAgentFromConfigChecked 按全局 UA 配置生成出站身份。accountID 只在号池模式下参与
 // 画像抽取(同一账号恒得同一画像)。
-func codexUserAgentFromConfig(raw string, accountID int64, versionFloor string) (userAgent, version string, ok bool) {
+func codexUserAgentFromConfigChecked(raw string, accountID int64, versionFloor string) (string, string, bool, error) {
 	cfg := codexUserAgentConfigFromJSON(raw)
 	if isEmptyCodexUserAgentConfig(cfg) {
-		return "", "", false
+		return "", "", false, nil
+	}
+	if cfg.RawUserAgent != "" {
+		return cfg.RawUserAgent, codexVersionFromUserAgent(cfg.RawUserAgent, cfg.ClientVersion), true, nil
 	}
 	if cfg.Mode == CodexUserAgentModePool {
 		return codexPoolPersona(cfg, accountID, versionFloor)
-	}
-	if cfg.RawUserAgent != "" {
-		// raw UA 只贡献指纹形状；版本段可解析时抬升到当前生效的最新版
-		// （含远端同步值）再叠加最低版本门槛重建，避免照抄示例值后被钉死在旧版。
-		if _, rawVersion, parsed := parseCodexClientVersionDetails(cfg.RawUserAgent); parsed && rawVersion != "" {
-			rebuilt := effectiveCodexClientVersion(rawVersion, effectiveLatestCodexCLIVersion())
-			rebuilt = effectiveCodexClientVersion(rebuilt, versionFloor)
-			return replaceCodexUserAgentVersion(cfg.RawUserAgent, rebuilt), rebuilt, true
-		}
-		return cfg.RawUserAgent, codexVersionFromUserAgent(cfg.RawUserAgent, strings.TrimSpace(cfg.ClientVersion)), true
 	}
 	return buildCodexStructuredUserAgent(cfg, versionFloor)
 }
 
 // buildCodexStructuredUserAgent 按形态预设填补留空字段并拼出 UA:客户端名、末尾标记名、
-// 平台与终端取形态默认值,CLI 版本与构建号走目录配对(见 resolveCodexVersionPair)。
+// 平台与终端取形态默认值,CLI 版本与构建号由 resolveCodexCurrentVersions 选择完整配对。
 // 未指定形态且客户端名认不出时按 custom 处理,末尾标记复用客户端名与 CLI 版本。
-func buildCodexStructuredUserAgent(cfg CodexUserAgentConfig, versionFloor string) (userAgent, version string, ok bool) {
+func buildCodexStructuredUserAgent(cfg CodexUserAgentConfig, versionFloor string) (userAgent, version string, ok bool, err error) {
 	kind := effectiveCodexClientKind(cfg)
 	spec, hasSpec := codexUAKindSpecFor(kind)
 	clientName := strings.TrimSpace(cfg.ClientName)
@@ -421,23 +414,19 @@ func buildCodexStructuredUserAgent(cfg CodexUserAgentConfig, versionFloor string
 		clientName = firstNonEmptyString(clientName, latestCodexClientName)
 		appName = clientName
 	}
-	fallback := codexUAVersionPair{}
-	if hasSpec && len(spec.VersionPairs) > 0 {
-		fallback = heaviestCodexPair(spec.VersionPairs)
-	}
 	osName := firstNonEmptyString(cfg.OSName, platform.OSName)
-	cliVersion, appVersion := resolveCodexCurrentVersions(spec, codexVersionSelection{
-		OSName: osName, CLIOverride: cfg.ClientVersion, AppOverride: cfg.AppVersion,
-		VersionFloor: versionFloor, Fallback: fallback,
+	cliVersion, appVersion, err := resolveCodexCurrentVersions(spec, codexVersionSelection{
+		OSName: osName, Arch: firstNonEmptyString(cfg.Arch, platform.Arch), CLIOverride: cfg.ClientVersion, AppOverride: cfg.AppVersion,
+		VersionFloor: versionFloor,
 	})
-	if hasSpec && spec.AppFollowsCLI && cfg.AppVersion != "" {
-		appVersion = cfg.AppVersion
+	if err != nil {
+		return "", "", false, err
 	}
 	appName = firstNonEmptyString(cfg.AppName, appName)
 	osVersion := firstNonEmptyString(cfg.OSVersion, platform.OSVersion)
 	arch := firstNonEmptyString(cfg.Arch, platform.Arch)
 	terminal = firstNonEmptyString(cfg.Terminal, terminal)
-	return formatCodexUserAgentWithApp(clientName, cliVersion, osName, osVersion, arch, terminal, appName, appVersion), cliVersion, true
+	return formatCodexUserAgentWithApp(clientName, cliVersion, osName, osVersion, arch, terminal, appName, appVersion), cliVersion, true, nil
 }
 
 func firstNonEmptyString(values ...string) string {
@@ -466,25 +455,6 @@ func formatCodexUserAgentWithApp(clientName, clientVersion, osName, osVersion, a
 	appVersion = firstNonEmptyString(appVersion, clientVersion)
 	platform := strings.TrimSpace(osName + " " + osVersion)
 	return fmt.Sprintf("%s/%s (%s; %s) %s (%s; %s)", clientName, clientVersion, platform, arch, terminal, appName, appVersion)
-}
-
-func effectiveCodexClientVersion(version, versionFloor string) string {
-	version = normalizeCodexClientVersionText(version)
-	versionFloor = normalizeCodexClientVersionText(versionFloor)
-	if version == "" {
-		version = latestCodexCLIVersion
-	}
-	if versionFloor == "" {
-		return version
-	}
-	cmp, ok := compareCodexClientVersions(version, versionFloor)
-	if !ok {
-		return version
-	}
-	if cmp < 0 {
-		return versionFloor
-	}
-	return version
 }
 
 func normalizeCodexClientVersionText(value string) string {

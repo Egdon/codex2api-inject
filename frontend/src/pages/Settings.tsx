@@ -5,10 +5,11 @@ import { api, resetAdminAuthState, setAdminKey } from '../api'
 import { formatBeijingTime } from '../utils/time'
 import DisplayTimezoneSelect from '../components/DisplayTimezoneSelect'
 import PageHeader from '../components/PageHeader'
+import CodexClientVersionsPanel from '../components/CodexClientVersionsPanel'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
 import { useToast } from '../hooks/useToast'
-import type { AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
+import type { AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexClientVersionSyncResult, CodexClientVersionTarget, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
 import { ANTIGRAVITY_DEFAULT_MODELS } from '../lib/antigravityModels'
 import { countPayloadRules, PAYLOAD_RULE_GROUPS } from './PayloadRules'
 import { getErrorMessage } from '../utils/error'
@@ -159,6 +160,20 @@ const CODEX_CLIENT_SYNC_SOURCES = [
   { key: 'vscode', label: 'VS Code' },
 ] as const
 type CodexClientSyncSource = (typeof CODEX_CLIENT_SYNC_SOURCES)[number]['key']
+
+// 设置接口只返回最后一次成功的配对；本次同步失败的目标把状态与错误叠加上去，面板才能显示失败原因。
+function overlayCodexClientSyncFailures(targets: CodexClientVersionTarget[], result: Record<CodexClientSyncSource, CodexClientVersionSyncResult>): CodexClientVersionTarget[] {
+  const failures = new Map<string, CodexClientVersionTarget>()
+  for (const source of CODEX_CLIENT_SYNC_SOURCES) {
+    for (const target of result[source.key].targets ?? []) {
+      if (target.error) failures.set(`${target.client_kind}/${target.target_platform}`, target)
+    }
+  }
+  return targets.map((target) => {
+    const failure = failures.get(`${target.client_kind}/${target.target_platform}`)
+    return failure ? { ...target, status: failure.status, error: failure.error } : target
+  })
+}
 const CODEX_UA_FALLBACK_POOL_MIX: Record<string, number> = { 'codex-desktop': 50, 'codex-vscode': 30, 'codex-tui': 20 }
 const CODEX_UA_STRING_KEYS = ['raw_user_agent', 'client_name', 'client_version', 'os_name', 'os_version', 'arch', 'terminal', 'client_kind', 'app_name', 'app_version', 'mode'] as const
 // 与后端 inferCodexClientKind 同规则:未指定形态的旧配置按客户端名推断。
@@ -2704,6 +2719,7 @@ export default function Settings() {
   const [effectiveCliVersion, setEffectiveCliVersion] = useState('')
   const [syncedAppBuilds, setSyncedAppBuilds] = useState({ desktop_mac: '', desktop_windows: '', vscode: '' })
   const [clientSyncErrors, setClientSyncErrors] = useState<Partial<Record<CodexClientSyncSource, string>>>({})
+  const [codexClientVersions, setCodexClientVersions] = useState<CodexClientVersionTarget[]>([])
   const logoFileInputRef = useRef<HTMLInputElement>(null)
   const backgroundFileInputRef = useRef<HTMLInputElement>(null)
   const persistedBrandingRef = useRef<Partial<SiteBranding> | null>(null)
@@ -2998,6 +3014,7 @@ export default function Settings() {
       desktop_windows: settings.codex_synced_desktop_windows_build ?? '',
       vscode: settings.codex_synced_vscode_build ?? '',
     })
+    setCodexClientVersions(settings.codex_client_versions ?? [])
     setModelList(modelsResp.models ?? [])
     setModelItems(modelsResp.items ?? [])
     setModelsLastSyncedAt(modelsResp.last_synced_at)
@@ -3186,6 +3203,12 @@ export default function Settings() {
         if (error) errors[source.key] = error
       }
       setClientSyncErrors(errors)
+      try {
+        const settings = await api.getSettings()
+        setCodexClientVersions(overlayCodexClientSyncFailures(settings.codex_client_versions ?? [], result))
+      } catch {
+        // 同步本身已成功；面板沿用旧数据，下次加载设置时刷新。
+      }
       const failed = Object.keys(errors).length > 0
       showToast(failed ? t('settings.clientVersionSyncPartial') : t('settings.clientVersionSyncSuccess'), failed ? 'error' : 'success')
     } catch (error) {
@@ -3342,6 +3365,7 @@ export default function Settings() {
         })
         .catch((err: unknown) => {
           if (cancelled) return
+          setCodexUAPreview(null)
           setCodexUAPreviewError(err instanceof Error ? err.message : String(err))
         })
     }, 250)
@@ -3349,7 +3373,7 @@ export default function Settings() {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [settingsForm.codex_user_agent_config, settingsForm.client_compat_mode, settingsForm.codex_min_cli_version])
+  }, [settingsForm.codex_user_agent_config, settingsForm.client_compat_mode, settingsForm.codex_min_cli_version, codexClientVersions])
   const codexUAMode: 'single' | 'pool' = codexUserAgentConfig.mode === 'pool' ? 'pool' : 'single'
   const codexUAKind: CodexUAKind = CODEX_UA_KINDS.includes(codexUserAgentConfig.client_kind as CodexUAKind)
     ? (codexUserAgentConfig.client_kind as CodexUAKind)
@@ -3449,26 +3473,13 @@ export default function Settings() {
   const codexUAEffectiveAppName = (codexUserAgentConfig.app_name ?? '').trim() || codexUAKindSpec?.default_app_name || (codexUserAgentConfig.client_name ?? '').trim() || DEFAULT_CODEX_UA_CONFIG.client_name
   const codexUAAppNamePresetValue = codexUAAppNameOptions.some((option) => option.value === codexUAEffectiveAppName && option.value !== 'custom') ? codexUAEffectiveAppName : 'custom'
   const codexUAShowAppNamePreset = codexUAKind !== 'custom' && !codexUAAppFollowsCLI && (codexUAKindSpec?.app_names?.length ?? 0) > 1
-  const codexUAClientVersionPlaceholder = (() => {
-    const pairs = codexUAKindSpec?.version_pairs ?? []
-    if ((codexUAKind === 'codex-desktop' || codexUAKind === 'codex-vscode') && syncedCliVersion) {
-      return effectiveCliVersion
-    }
-    if (pairs.length > 0) {
-      return pairs.reduce((best, pair) => (pair.weight > best.weight ? pair : best), pairs[0]).cli_version
-    }
-    return settingsForm.codex_synced_cli_version || DEFAULT_CODEX_UA_CONFIG.client_version
-  })()
-  const codexUAAppVersionPlaceholder = (() => {
-    if (codexUAAppFollowsCLI) return t('settings.codexUAFollowsClient')
-    if (codexUAKind === 'codex-vscode') return syncedAppBuilds.vscode || t('settings.codexUAAutoPaired')
-    if (codexUAKind === 'codex-desktop') {
-      const synced = codexUAEffectivePlatform.os_name === 'Windows' ? syncedAppBuilds.desktop_windows
-        : codexUAEffectivePlatform.os_name === 'Mac OS' ? syncedAppBuilds.desktop_mac : ''
-      return synced || t('settings.codexUAAutoPaired')
-    }
-    return t('settings.codexUAAutoPaired')
-  })()
+  // 默认版本取后端预览，与出站使用相同的配对选择器。
+  const codexUAClientVersionPlaceholder = codexUAPreviewError
+    ? t('settings.codexClientVersions.unavailable')
+    : codexUAPreview?.persona?.version || t('settings.codexUAPreviewLoading')
+  const codexUAAppVersionPlaceholder = codexUAPreviewError
+    ? t('settings.codexClientVersions.unavailable')
+    : codexUAPreview?.persona?.app_version || t('settings.codexUAAutoPaired')
   const codexUAPoolMixValue = (kind: CodexUAKind) => {
     const weight = codexUserAgentConfig.pool_mix?.[kind]
     return weight === undefined ? '' : String(weight)
@@ -4538,6 +4549,9 @@ export default function Settings() {
                       </Button>
                     </div>
                   </div>
+                  <div className="rounded-lg border border-border/60 p-3">
+                    <CodexClientVersionsPanel targets={codexClientVersions} />
+                  </div>
                   <div className={SETTINGS_FIELD_GRID}>
                     <SettingField label={t('settings.clientCompatMode')} description={t('settings.clientCompatModeDesc')}>
                       <SegmentedPillGroup
@@ -4681,6 +4695,8 @@ export default function Settings() {
                         <dd className="break-all">{codexUAPreview.persona.originator}</dd>
                         <dt className="text-foreground/70">Version</dt>
                         <dd className="break-all">{codexUAPreview.persona.version}</dd>
+                        <dt className="text-foreground/70">{t('settings.codexClientVersions.source')}</dt>
+                        <dd>{t(`settings.codexClientVersions.sources.${codexUAPreview.persona.source ?? 'builtin_observed'}`, { defaultValue: codexUAPreview.persona.source ?? 'builtin_observed' })}</dd>
                       </dl>
                     ) : (
                       <ul className="space-y-1 font-mono text-[11px] leading-5 text-muted-foreground sm:text-xs">

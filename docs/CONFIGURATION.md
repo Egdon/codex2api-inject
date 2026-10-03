@@ -180,6 +180,12 @@ Codex2API 采用三层配置架构：
 
 `GET /api/admin/ops/overview` 的 `api_key_auth_cache` 提供开关、L1 条目/字节数、本地/远端命中、数据库配置加载次数、动态额度读取次数、修订号复核次数、失效、淘汰、超限旁路和错误计数。评估收益时应分开看配置回源与动态额度查询。
 
+#### Codex 客户端版本
+
+管理后台「系统设置 → Codex」可同步并展示 Desktop / VSCode 各架构的应用版本与内置 CLI 配对。macOS 使用官方 appcast，Windows 优先第三方映射、失败后局部读取官方 MSIX，VSCode 使用官方原生 VSIX。每个包最多读取 12 MiB，保留 alpha CLI、缓存和历史，不下载全包分析。
+
+CLI/应用版本留空使用自动配对；手填字段独立覆盖。`auto` 模式最低 CLI 版本只筛选已有配对，无可用配对时返回 `codex_client_version_unavailable`，不会凭空抬升版本。详见 [真实版本配对与 Windows fallback](CODEX_CLIENT_VERSIONS.md)。
+
 #### Codex 客户端遥测
 
 **实验性功能，默认关闭。** 开启后，Codex OAuth 的普通 Responses 请求会按所选 Codex Desktop/CLI 指纹异步发送客户端遥测。分析事件发送到 `chatgpt.com/backend-api/codex/analytics-events/events`，OTLP metrics 发送到 `ab.chatgpt.com/otlp/v1/metrics`；失败不会影响代理响应，沿用账号的代理地址，Resin 启用时与 `/responses` 一样经反代发出。注意：工具调用、文件修改、hook 等事件是随机模拟生成的，并非对真实请求的观测，与上游侧可见的请求流可能不一致；是否开启由部署者自行评估。

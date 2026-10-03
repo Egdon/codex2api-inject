@@ -534,6 +534,36 @@
     "hrefClickHint": "點擊開啟跳轉位址（未設定時開啟 api-base）；Alt/Option+點擊 設定自訂連結"
   },
   "settings": {
+    "codexClientVersions": {
+      "platform": "用戶端 / 平台",
+      "pair": "應用程式 / 內建 CLI",
+      "source": "來源",
+      "empty": "尚未同步，使用內建版本配對。",
+      "unavailable": "版本無法使用",
+      "status": "狀態",
+      "checkedAt": "檢查於",
+      "statuses": {
+        "verified": "已驗證",
+        "cached": "未變更",
+        "stale": "沿用舊配對",
+        "error": "同步失敗",
+        "builtin": "內建"
+      },
+      "sources": {
+        "official_appcast": "官方 appcast",
+        "official_msix": "官方 MSIX",
+        "official_msix_blockmap": "官方 MSIX 區塊對應",
+        "official_marketplace": "官方 Marketplace",
+        "third_party_windows_mapping": "第三方 Windows 對應",
+        "official_github_release": "官方 CLI 穩定版",
+        "builtin_observed": "內建版本配對",
+        "custom": "自訂覆寫"
+      }
+    },
+    "codexMinCliVersionDesc": "僅 auto 模式生效：選擇內建 CLI 達到門檻的真實應用程式配對；沒有可用配對時回傳 503。手填 CLI 和原始 UA 保持覆寫值。",
+    "codexCliVersionSyncDesc": "macOS 使用官方 appcast，Windows 使用第三方對應並保留官方 fallback，VSCode 按平台讀取官方擴充套件。同步完整應用程式與 CLI 配對，失敗保留舊值；預設每 12 小時同步。",
+    "codexUAClientVersionDesc": "留空時使用所選平台的真實配對 CLI；手填值直接覆寫，不受自動門檻改寫。",
+    "codexUAAppVersionDesc": "留空時使用同一真實配對的應用程式版本；手填值直接覆寫，不重新配對其他欄位。",
     "clientVersionSyncSuccess": "用戶端版本已同步",
     "clientVersionSyncPartial": "部分來源同步失敗，已保留原有版本",
     "codexClientTitle": "User-Agent 身分",

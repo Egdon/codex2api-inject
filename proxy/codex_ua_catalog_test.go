@@ -96,14 +96,14 @@ func TestResolveCodexVersionPairDesktop(t *testing.T) {
 		floor         string
 		wantCLI, want string
 	}{
-		{"auto default is heaviest pair", "", "", "", "0.153.4", "26.901.51231"},
-		{"auto exact hit", "0.153.3", "", "", "0.153.3", "26.901.41123"},
-		{"auto unknown newer stays on nearest real pair", "0.153.5", "", "", "0.153.4", "26.901.51231"},
-		{"auto old version raised to smallest pair meeting floor", "0.152.0", "", "0.153.0", "0.153.0", "26.901.22334"},
-		{"auto floor above catalog uses floor with newest build", "", "", "0.160.0", "0.160.0", "26.901.51231"},
+		{"auto default is latest build", "", "", "", "0.153.4", "26.901.51231"},
+		{"manual CLI overrides latest default", "0.153.3", "", "", "0.153.3", "26.901.51231"},
+		{"manual newer CLI retained", "0.153.5", "", "", "0.153.5", "26.901.51231"},
+		{"manual old CLI ignores floor", "0.152.0", "", "0.153.0", "0.152.0", "26.901.51231"},
+		{"unavailable floor produces no invented pair", "", "", "0.160.0", "", ""},
 		{"explicit build untouched", "0.153.4", "26.901.41600", "", "0.153.4", "26.901.41600"},
-		{"explicit build re-paired when floor raises cli", "0.152.0", "26.831.20005", "0.153.0", "0.153.0", "26.901.22334"},
-		{"explicit build kept when floor above catalog", "0.152.0", "26.831.20005", "0.160.0", "0.160.0", "26.831.20005"},
+		{"both overrides ignore floor", "0.152.0", "26.831.20005", "0.153.0", "0.152.0", "26.831.20005"},
+		{"both overrides ignore unavailable floor", "0.152.0", "26.831.20005", "0.160.0", "0.152.0", "26.831.20005"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,8 +120,8 @@ func TestResolveCodexVersionPairFollowsCLIForTUI(t *testing.T) {
 	if cli, app := resolveCodexVersionPair(spec, "", "", ""); cli != latestCodexCLIVersion || app != cli {
 		t.Fatalf("tui default = (%s, %s), want latest CLI twice", cli, app)
 	}
-	if cli, app := resolveCodexVersionPair(spec, "0.140.0", "", "0.150.0"); cli != "0.150.0" || app != "0.150.0" {
-		t.Fatalf("tui floor = (%s, %s), want 0.150.0 twice", cli, app)
+	if cli, app := resolveCodexVersionPair(spec, "0.140.0", "", "0.150.0"); cli != "0.140.0" || app != "0.140.0" {
+		t.Fatalf("tui floor = (%s, %s), want manual 0.140.0 twice", cli, app)
 	}
 	if cli, app := resolveCodexVersionPair(nil, "0.140.0", "9.9", ""); cli != "0.140.0" || app != "9.9" {
 		t.Fatalf("custom explicit = (%s, %s), want (0.140.0, 9.9)", cli, app)
@@ -138,7 +138,7 @@ func TestBuildCodexStructuredUserAgentByKind(t *testing.T) {
 		{"desktop preset", `{"client_kind":"codex-desktop"}`,
 			"Codex Desktop/0.153.4 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.901.51231)", "0.153.4"},
 		{"vscode preset with cursor host", `{"client_kind":"codex-vscode","app_name":"Cursor"}`,
-			"codex_vscode/0.153.0 (Ubuntu 22.4.0; x86_64) unknown (Cursor; 26.901.22334)", "0.153.0"},
+			"codex_vscode/0.153.4 (Ubuntu 22.4.0; x86_64) unknown (Cursor; 26.901.22334)", "0.153.4"},
 		{"exec preset follows cli", `{"client_kind":"codex-exec"}`,
 			"codex_exec/" + latestCodexCLIVersion + " (Windows 10.0.19045; x86_64) unknown (codex_exec; " + latestCodexCLIVersion + ")", latestCodexCLIVersion},
 		{"legacy tui config unchanged", `{"client_name":"codex-tui"}`,
@@ -146,7 +146,7 @@ func TestBuildCodexStructuredUserAgentByKind(t *testing.T) {
 		{"custom keeps free-form marker", `{"client_kind":"custom","client_name":"my-router","app_name":"My App","app_version":"9.9"}`,
 			"my-router/" + latestCodexCLIVersion + " (Mac OS 15.5.0; arm64) xterm-256color (My App; 9.9)", latestCodexCLIVersion},
 		{"desktop with mac platform and explicit cli", `{"client_kind":"codex-desktop","client_version":"0.153.3","os_name":"Mac OS","os_version":"26.5.2","arch":"arm64"}`,
-			"Codex Desktop/0.153.3 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.901.41123)", "0.153.3"},
+			"Codex Desktop/0.153.3 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.901.51231)", "0.153.3"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
