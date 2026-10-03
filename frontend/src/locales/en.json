@@ -6908,6 +6908,7 @@
     "testRawHint": "Upstream JSON or SSE read during this test. Credentials and other sensitive values are redacted.",
     "testBodyTruncated": "Long response: preview limited to 64 KiB",
     "testRetry": "Test again",
+    "testReady": "Choose a model, then start the test",
     "testCopy": "Copy diagnostics",
     "testCopied": "Copied",
     "testCopyFailed": "Copy failed. Check browser clipboard permissions.",

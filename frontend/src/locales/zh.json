@@ -6907,6 +6907,7 @@
     "testRawHint": "本次读取的上游 JSON 或 SSE，凭据等敏感内容已脱敏。",
     "testBodyTruncated": "响应较长，预览最多保留 64 KiB",
     "testRetry": "重新测试",
+    "testReady": "选择模型后，点击开始测试",
     "testCopy": "复制诊断",
     "testCopied": "已复制",
     "testCopyFailed": "复制失败，请检查浏览器剪贴板权限",
