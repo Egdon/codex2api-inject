@@ -1124,6 +1124,7 @@ interface AccountRowActions {
   // 直接打开用量弹窗的官方统计 tab（成本列的官方胶囊）。
   openOfficialUsage: (account: AccountRow) => void;
   openTesting: (account: AccountRow) => void;
+  openDetector: (account: AccountRow) => void;
   refresh: (account: AccountRow) => void;
   generateAuthJson: (account: AccountRow) => void;
   toggleEnabled: (account: AccountRow) => void;
@@ -1677,6 +1678,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                     includeTest={false}
                                     includeDelete={false}
                                     onTest={() => actions.openTesting(account)}
+                                    onDetect={() => actions.openDetector(account)}
                                     onChannelMonitor={() =>
                                       actions.openChannelMonitor(account)
                                     }
@@ -1771,6 +1773,7 @@ const AccountCardItem = memo(function AccountCardItem({
       onOpenOfficialUsage={() => actions.openOfficialUsage(account)}
       onChannelMonitor={() => actions.openChannelMonitor(account)}
       onTest={() => actions.openTesting(account)}
+      onDetect={() => actions.openDetector(account)}
       onRefresh={() => actions.refresh(account)}
       onGenerateAuthJson={() => actions.generateAuthJson(account)}
       onToggleEnabled={() => actions.toggleEnabled(account)}
@@ -1965,6 +1968,7 @@ export default function Accounts() {
   const [cleaningRateLimited, setCleaningRateLimited] = useState(false);
   const [cleaningError, setCleaningError] = useState(false);
   const [testingAccount, setTestingAccount] = useState<AccountRow | null>(null);
+  const [detectorAccount, setDetectorAccount] = useState<AccountRow | null>(null);
   const [quickConfigAccount, setQuickConfigAccount] = useState<AccountRow | null>(null);
   const [channelMonitorAccount, setChannelMonitorAccount] = useState<AccountRow | null>(null);
   const [usageAccount, setUsageAccount] = useState<AccountRow | null>(null);
@@ -5280,6 +5284,12 @@ export default function Accounts() {
       .catch((error) => showToast(getErrorMessage(error), "error"));
   };
 
+  const openDetectorAccount = (account: AccountRow) => {
+    void loadAccountDetail(account)
+      .then(setDetectorAccount)
+      .catch((error) => showToast(getErrorMessage(error), "error"));
+  };
+
   const closeModelsEditor = () => {
     if (modelsSaving || modelsSyncing || modelsProbing) return;
     setModelsAccount(null);
@@ -6174,6 +6184,7 @@ export default function Accounts() {
       setUsageAccount(account);
     },
     openTesting: openTestingAccount,
+    openDetector: openDetectorAccount,
     refresh: (account) => void handleRefresh(account),
     generateAuthJson: (account) => void handleGenerateAuthJSON(account),
     toggleEnabled: (account) => void handleToggleEnabled(account),
@@ -6198,6 +6209,7 @@ export default function Accounts() {
       openUsage: (a) => rowActionsImplRef.current?.openUsage(a),
       openOfficialUsage: (a) => rowActionsImplRef.current?.openOfficialUsage(a),
       openTesting: (a) => rowActionsImplRef.current?.openTesting(a),
+      openDetector: (a) => rowActionsImplRef.current?.openDetector(a),
       refresh: (a) => rowActionsImplRef.current?.refresh(a),
       generateAuthJson: (a) => rowActionsImplRef.current?.generateAuthJson(a),
       toggleEnabled: (a) => rowActionsImplRef.current?.toggleEnabled(a),
@@ -9166,6 +9178,20 @@ export default function Accounts() {
                 void reloadSilently();
               }}
               onClose={() => setTestingAccount(null)}
+            />
+          )}
+
+          {detectorAccount && (
+            <TestConnectionModal
+              mode="detector"
+              account={detectorAccount}
+              onSettled={() => undefined}
+              onClose={() => {
+                forceUsageReloadRef.current.add(detectorAccount.id);
+                usageReloadAttemptsRef.current.delete(detectorAccount.id);
+                setDetectorAccount(null);
+                void reloadSilently();
+              }}
             />
           )}
 
@@ -13489,6 +13515,7 @@ function AccountRowActionsMenu({
   includeTest = true,
   includeDelete = true,
   onTest,
+  onDetect,
   onChannelMonitor,
   onRefresh,
   onGenerateAuthJson,
@@ -13506,6 +13533,7 @@ function AccountRowActionsMenu({
   includeTest?: boolean;
   includeDelete?: boolean;
   onTest: () => void;
+  onDetect?: () => void;
   onChannelMonitor?: () => void;
   onRefresh: () => void;
   onGenerateAuthJson: () => void;
@@ -13534,6 +13562,17 @@ function AccountRowActionsMenu({
             label: t("accounts.testConnection"),
             icon: <Zap className="size-3.5" />,
             onSelect: onTest,
+          },
+        ]
+      : []),
+    // 与测连弹窗内的入口一致:Grok / Antigravity 不支持 ModelTrace 指纹检测。
+    ...(onDetect && !account.grok_api && !account.antigravity_api
+      ? [
+          {
+            key: "model-detector",
+            label: t("accounts.detectorOpen"),
+            icon: <ShieldCheck className="size-3.5" />,
+            onSelect: onDetect,
           },
         ]
       : []),
@@ -13833,6 +13872,7 @@ function AccountMobileCard({
   onEditProxy,
   onUsage,
   onTest,
+  onDetect,
   onRefresh,
   onGenerateAuthJson,
   onToggleEnabled,
@@ -13869,6 +13909,7 @@ function AccountMobileCard({
   onEditProxy: () => void;
   onUsage: () => void;
   onTest: () => void;
+  onDetect?: () => void;
   onRefresh: () => void;
   onGenerateAuthJson: () => void;
   onToggleEnabled: () => void;
@@ -14275,6 +14316,7 @@ function AccountMobileCard({
           refreshing={refreshing}
           authJsonExporting={authJsonExporting}
           onTest={onTest}
+          onDetect={onDetect}
           onChannelMonitor={onChannelMonitor}
           onRefresh={onRefresh}
           onGenerateAuthJson={onGenerateAuthJson}

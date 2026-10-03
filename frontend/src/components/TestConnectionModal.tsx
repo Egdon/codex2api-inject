@@ -88,12 +88,14 @@ export default function TestConnectionModal({
   onSettled,
   successHint,
   restoreOnSuccess,
+  mode = "test",
 }: {
   account: AccountRow;
   onClose: () => void;
   onSettled: () => void;
   successHint?: string;
   restoreOnSuccess?: boolean;
+  mode?: "test" | "detector";
 }) {
   const { t } = useTranslation();
   const { showToast } = useToast();
@@ -591,6 +593,17 @@ export default function TestConnectionModal({
       diagnostics?.response_body,
   );
   const monoStyle = { fontFamily: "var(--font-geist-mono)" } as const;
+
+  if (mode === "detector") {
+    return modelOptionsReady ? (
+      <ModelDetectorModal
+        account={account}
+        requestModels={modelSelectOptions.map((option) => option.value)}
+        defaultModel={selectedModel}
+        onClose={onClose}
+      />
+    ) : null;
+  }
 
   return (
     <>
