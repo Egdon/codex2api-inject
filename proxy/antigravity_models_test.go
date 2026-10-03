@@ -14,6 +14,8 @@ func TestAntigravityPublicModelCatalogIsExact(t *testing.T) {
 		"gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high",
 		"gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high",
 		"gemini-3.1-pro-low", "gemini-3.1-pro-high",
+		"claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
+		"claude-sonnet-5-5-low", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high",
 		"claude-opus-4-6-thinking",
 		"claude-sonnet-4-6",
 		"gpt-oss-120b-medium",
@@ -23,7 +25,7 @@ func TestAntigravityPublicModelCatalogIsExact(t *testing.T) {
 	}
 
 	for _, logical := range []string{
-		"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.1-pro",
+		"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.1-pro", "claude-opus-5-5", "claude-sonnet-5-5",
 	} {
 		if _, ok := antigravityPublicModel(logical); ok {
 			t.Fatalf("logical compatibility model %q leaked into the public catalog", logical)
@@ -78,6 +80,8 @@ func TestAntigravityPublishedModelsProjectCompleteRawCatalog(t *testing.T) {
 		"gemini-3.5-flash-extra-low", "gemini-3.5-flash-low", "gemini-3-flash-agent",
 		"gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high",
 		"gemini-3.7-flash-tiered", "gemini-3.8-flash-tiered", "gemini-3.1-pro-low", "gemini-pro-agent",
+		"claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
+		"claude-sonnet-5-5-low", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high",
 		"claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium",
 	}
 	want := antigravityPublicModelIDs()
@@ -142,5 +146,38 @@ func TestAntigravityTextBridgeRejectsImageModels(t *testing.T) {
 		if antigravityResponsesTextModel(model) {
 			t.Fatalf("image model %q was admitted", model)
 		}
+	}
+}
+
+func TestAntigravityClaude55LogicalModelsSelectTierByEffort(t *testing.T) {
+	for _, family := range []string{"claude-opus-5-5", "claude-sonnet-5-5"} {
+		for _, effort := range []string{"low", "medium", "high"} {
+			variant, ok := antigravityResolvedVariant(family, map[string]any{"effort": effort})
+			if !ok || variant.wireModel != family+"-"+effort || variant.thinkingBudget != 0 {
+				t.Fatalf("%s/%s variant = %#v", family, effort, variant)
+			}
+		}
+		if variant, _ := antigravityResolvedVariant(family, nil); variant.wireModel != family+"-high" {
+			t.Fatalf("%s default = %q, want high", family, variant.wireModel)
+		}
+		if budget, enabled := antigravityGeminiThinkingBudget(family, family+"-high", nil); enabled {
+			t.Fatalf("%s must not send a thinking budget, got %d", family, budget)
+		}
+	}
+
+	migrated := &auth.Account{UpstreamType: auth.UpstreamAntigravity, AccessToken: "token", Models: []string{
+		"claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
+	}}
+	if wire, ok := antigravityResolvePublicModelForAccount(migrated, "claude-opus-5-5"); !ok || wire != "claude-opus-5-5-high" {
+		t.Fatalf("migrated account resolve = %q, %v", wire, ok)
+	}
+	legacy := &auth.Account{UpstreamType: auth.UpstreamAntigravity, AccessToken: "token", Models: []string{"claude-opus-4-6-thinking", "claude-sonnet-4-6"}}
+	for _, model := range []string{"claude-opus-5-5", "claude-opus-5-5-high", "claude-sonnet-5-5"} {
+		if _, ok := antigravityResolvePublicModelForAccount(legacy, model); ok {
+			t.Fatalf("account still on 4.6 accepted %q", model)
+		}
+	}
+	if !antigravityAccountSupportsPublicModel(legacy, "claude-opus-4-6-thinking") {
+		t.Fatal("account still on 4.6 must keep serving 4.6")
 	}
 }

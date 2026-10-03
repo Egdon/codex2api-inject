@@ -55,6 +55,14 @@ var antigravityPublicModelCatalog = []antigravityPublicModelDefinition{
 	{id: "gemini-3.8-flash-high", wireModel: "gemini-3.8-flash-tiered", variants: []antigravityReasoningVariant{{level: "high", wireModel: "gemini-3.8-flash-tiered"}}},
 	{id: "gemini-3.1-pro-low", wireModel: "gemini-3.1-pro-low", variants: []antigravityReasoningVariant{{level: "low", wireModel: "gemini-3.1-pro-low", thinkingBudget: 1001}}},
 	{id: "gemini-3.1-pro-high", wireModel: "gemini-pro-agent", variants: []antigravityReasoningVariant{{level: "high", wireModel: "gemini-pro-agent", thinkingBudget: 10001}}},
+	// Claude 5.5 encodes effort in the model ID; each tier is its own backing and
+	// carries no thinking budget. Accounts still on 4.6 do not list them.
+	{id: "claude-opus-5-5-low", wireModel: "claude-opus-5-5-low", variants: []antigravityReasoningVariant{{level: "low", wireModel: "claude-opus-5-5-low"}}},
+	{id: "claude-opus-5-5-medium", wireModel: "claude-opus-5-5-medium", variants: []antigravityReasoningVariant{{level: "medium", wireModel: "claude-opus-5-5-medium"}}},
+	{id: "claude-opus-5-5-high", wireModel: "claude-opus-5-5-high", variants: []antigravityReasoningVariant{{level: "high", wireModel: "claude-opus-5-5-high"}}},
+	{id: "claude-sonnet-5-5-low", wireModel: "claude-sonnet-5-5-low", variants: []antigravityReasoningVariant{{level: "low", wireModel: "claude-sonnet-5-5-low"}}},
+	{id: "claude-sonnet-5-5-medium", wireModel: "claude-sonnet-5-5-medium", variants: []antigravityReasoningVariant{{level: "medium", wireModel: "claude-sonnet-5-5-medium"}}},
+	{id: "claude-sonnet-5-5-high", wireModel: "claude-sonnet-5-5-high", variants: []antigravityReasoningVariant{{level: "high", wireModel: "claude-sonnet-5-5-high"}}},
 	{id: "claude-opus-4-6-thinking", wireModel: "claude-opus-4-6-thinking"},
 	{id: "claude-sonnet-4-6", wireModel: "claude-sonnet-4-6"},
 	{id: "gpt-oss-120b-medium", wireModel: "gpt-oss-120b-medium"},
@@ -81,6 +89,16 @@ var antigravityLogicalCompatibilityCatalog = []antigravityPublicModelDefinition{
 	{id: "gemini-3.1-pro", defaultReasoningLevel: "high", variants: []antigravityReasoningVariant{
 		{level: "low", wireModel: "gemini-3.1-pro-low", thinkingBudget: 1001},
 		{level: "high", wireModel: "gemini-pro-agent", thinkingBudget: 10001},
+	}},
+	{id: "claude-opus-5-5", defaultReasoningLevel: "high", variants: []antigravityReasoningVariant{
+		{level: "low", wireModel: "claude-opus-5-5-low"},
+		{level: "medium", wireModel: "claude-opus-5-5-medium"},
+		{level: "high", wireModel: "claude-opus-5-5-high"},
+	}},
+	{id: "claude-sonnet-5-5", defaultReasoningLevel: "high", variants: []antigravityReasoningVariant{
+		{level: "low", wireModel: "claude-sonnet-5-5-low"},
+		{level: "medium", wireModel: "claude-sonnet-5-5-medium"},
+		{level: "high", wireModel: "claude-sonnet-5-5-high"},
 	}},
 }
 
@@ -452,8 +470,8 @@ func antigravityRedirectedModel(model string, reasoning map[string]any) (string,
 
 // antigravityFoldLogicalModel rewrites a bare logical model in a Responses
 // body into the fixed tier it will actually run as: the configured redirect
-// first, otherwise the request's reasoning.effort (bare requests default to
-// low). It returns the rewritten body and the tier ID, or an API error for an
+// first, otherwise the request's reasoning.effort (bare requests use the
+// model's default tier, the same one the settings page shows). It returns the rewritten body and the tier ID, or an API error for an
 // effort the model does not offer.
 func antigravityFoldLogicalModel(rawBody []byte, requestModel string) ([]byte, string, *api.APIError) {
 	logical, known := antigravityLogicalCompatibilityModel(requestModel)
@@ -470,7 +488,7 @@ func antigravityFoldLogicalModel(rawBody []byte, requestModel string) ([]byte, s
 		return rawBody, target, nil
 	}
 	if effort == "" {
-		effort = "low"
+		effort = logical.defaultReasoningLevel
 	}
 	allowedEfforts := make([]string, 0, len(logical.variants))
 	validEffort := false

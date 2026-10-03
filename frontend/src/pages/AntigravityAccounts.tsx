@@ -63,6 +63,7 @@ import {
 } from "../lib/accountProxyBinding";
 import ChannelLogo from "../components/ChannelLogo";
 import ColumnSettingsMenu from "../components/ColumnSettingsMenu";
+import ModelLogo from "../components/ModelLogo";
 import { CompactStat } from "../components/CompactStat";
 import Modal from "../components/Modal";
 import TestConnectionModal from "../components/TestConnectionModal";
@@ -750,6 +751,7 @@ function QuotaDetail({ account }: { account: AccountRow }) {
                 >
                   <div className="min-w-0">
                     <div className="flex min-w-0 items-center gap-2">
+                      <ModelLogo model={model} size={18} variant="plain" />
                       <span className="truncate text-sm font-semibold text-foreground">
                         {quotaDisplayName(model, info)}
                       </span>
