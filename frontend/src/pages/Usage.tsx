@@ -81,6 +81,19 @@ function getReasoningEffortBadgeClassName(effort: string): string {
   }
 }
 
+function usageRequestedModelTitle(
+  log: UsageLog,
+  ultraHint: string,
+  filterHint: string,
+): string {
+  const actual = log.effective_model?.trim()
+  const parts: string[] = []
+  if (log.ultra) parts.push(ultraHint)
+  if (actual && actual !== log.model) parts.push(actual)
+  parts.push(filterHint)
+  return parts.join('\n')
+}
+
 function ReasoningEffortBadge({ effort }: { effort: string }) {
   const label = effort.trim()
   if (!label) return null
@@ -2684,7 +2697,11 @@ export default function Usage() {
                               className={`${usageTableBadgeClass} ${usageClickableFilterClass} ${log.ultra ? 'usage-ultra-model' : ''} ${filterModel === log.model ? 'border-primary/50 text-primary' : ''}`}
                               role="button"
                               tabIndex={0}
-                              title={`${log.ultra ? `${t('usage.ultraModeHint')} · ` : ''}${t('usage.filterByModelHint', { model: log.model || '-' })}`}
+                              title={usageRequestedModelTitle(
+                                log,
+                                t('usage.ultraModeHint'),
+                                t('usage.filterByModelHint', { model: log.model || '-' }),
+                              )}
                               onClick={() => toggleModelFilter(log.model)}
                               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleModelFilter(log.model) } }}
                             >
@@ -2917,7 +2934,11 @@ export default function Usage() {
                               className={`${usageTableBadgeClass} ${usageClickableFilterClass} ${log.ultra ? 'usage-ultra-model' : ''} ${filterModel === log.model ? 'border-primary/50 text-primary' : ''}`}
                               role="button"
                               tabIndex={0}
-                              title={`${log.ultra ? `${t('usage.ultraModeHint')} · ` : ''}${t('usage.filterByModelHint', { model: log.model || '-' })}`}
+                              title={usageRequestedModelTitle(
+                                log,
+                                t('usage.ultraModeHint'),
+                                t('usage.filterByModelHint', { model: log.model || '-' }),
+                              )}
                               onClick={() => toggleModelFilter(log.model)}
                               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleModelFilter(log.model) } }}
                             >
@@ -2931,11 +2952,6 @@ export default function Usage() {
                               )}
                               {log.model || '-'}
                             </Badge>
-                            {log.effective_model && log.effective_model !== log.model && (
-                              <Badge variant="outline" className="text-[11px] font-medium border-transparent bg-blue-500/10 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400">
-                                → {log.effective_model}
-                              </Badge>
-                            )}
                             {log.reasoning_effort ? (
                               <ReasoningEffortBadge effort={log.reasoning_effort} />
                             ) : null}

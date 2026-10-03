@@ -39,7 +39,8 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import {
-  DEFAULT_GROK_TEST_MODELS,
+  filterGrokModelsForAuthKind,
+  grokPresetModels,
   grokDisplayModels,
   grokModelSummaryTitle,
 } from "../lib/grokModelDisplay";
@@ -1257,7 +1258,8 @@ function GrokAccounts({
   useEffect(() => () => stopDevicePoll(), [stopDevicePoll]);
 
   const addModels = (raw: string) => {
-    const tokens = parseModelTokens(raw);
+    const authKind = addMethod === "api_key" ? "api_key" : "oauth";
+    const tokens = filterGrokModelsForAuthKind(parseModelTokens(raw), authKind);
     if (tokens.length === 0) return;
     setForm((f) => {
       const seen = new Set((f.models ?? []).map((m) => m.toLowerCase()));
@@ -1288,8 +1290,10 @@ function GrokAccounts({
         auth_kind: addMethod === "api_key" ? "api_key" : "oauth",
       };
       const res = await api.fetchGrokModels(payload);
-      setForm((f) => ({ ...f, models: res.models ?? [] }));
-      showToast(t("grok.modelsFetched", { count: (res.models ?? []).length }));
+      const authKind = addMethod === "api_key" ? "api_key" : "oauth";
+      const models = filterGrokModelsForAuthKind(res.models ?? [], authKind);
+      setForm((f) => ({ ...f, models }));
+      showToast(t("grok.modelsFetched", { count: models.length }));
     } catch (err) {
       showToast(getErrorMessage(err), "error");
     } finally {
@@ -1314,7 +1318,10 @@ function GrokAccounts({
   const populateEdit = (account: AccountRow) => {
     setEditAccount(account);
     setEditForm({
-      models: account.models ?? [],
+      models: filterGrokModelsForAuthKind(
+        account.models ?? [],
+        account.grok_auth_kind,
+      ),
       base_url: account.base_url ?? "",
       proxy_url: account.proxy_url ?? "",
     });
@@ -1344,7 +1351,10 @@ function GrokAccounts({
   };
 
   const editAddModels = (raw: string) => {
-    const tokens = parseModelTokens(raw);
+    const tokens = filterGrokModelsForAuthKind(
+      parseModelTokens(raw),
+      editAccount?.grok_auth_kind,
+    );
     if (tokens.length === 0) return;
     setEditForm((f) => ({ ...f, models: mergeModels(f.models, tokens) }));
     setEditModelDraft("");
@@ -1373,7 +1383,7 @@ function GrokAccounts({
   const editFillCommonModels = () =>
     setEditForm((f) => ({
       ...f,
-      models: mergeModels(f.models, DEFAULT_GROK_TEST_MODELS),
+      models: mergeModels(f.models, grokPresetModels(editAccount?.grok_auth_kind)),
     }));
 
   const handleSaveEdit = async () => {
@@ -1842,6 +1852,16 @@ function GrokAccounts({
   };
 
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
+  const batchPresetAuthKind = useMemo(() => {
+    const picked = accounts.filter((account) => selected.has(account.id));
+    if (
+      picked.length > 0 &&
+      picked.every((account) => account.grok_auth_kind === "api_key")
+    ) {
+      return "api_key";
+    }
+    return "oauth";
+  }, [accounts, selected]);
 
   const handleBatchRefresh = async () => {
     // Selected IDs are retained across pages; the server validates stale IDs.
@@ -3687,7 +3707,7 @@ function GrokAccounts({
               {t("grok.batchSetModelsPresetHint")}
             </p>
             <div className="mb-3 flex flex-wrap gap-1.5">
-              {DEFAULT_GROK_TEST_MODELS.map((model) => {
+              {grokPresetModels(batchPresetAuthKind).map((model) => {
                 const isPicked = batchModelsDraft.some(
                   (item) => item.toLowerCase() === model.toLowerCase(),
                 );

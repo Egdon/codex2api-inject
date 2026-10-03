@@ -448,6 +448,8 @@ func TestGrokPricingUsesXAIRates(t *testing.T) {
 		wantCache  float64
 	}{
 		{model: "grok-4.7", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
+		{model: "grok-4.7-fast", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
+		{model: "grok-4.7-build-fast", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
 		{model: "grok-4.7-beta", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
 		{model: "grok-4.6", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
 		{model: "grok-4.6-beta", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},

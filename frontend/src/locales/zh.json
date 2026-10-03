@@ -519,7 +519,7 @@
     "baseUrlPlaceholder": "留空则使用默认端点",
     "baseUrlHint": "OAuth 默认 cli-chat-proxy.grok.com；API Key 默认 api.x.ai。",
     "models": "模型（可选）",
-    "modelsPlaceholder": "grok-4.7, grok-4.6…",
+    "modelsPlaceholder": "grok-4.7-fast, grok-4.7…",
     "modelsEmpty": "暂无模型 —— 可从上游获取或手动添加",
     "modelsFetch": "获取",
     "modelsFetching": "获取中…",

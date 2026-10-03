@@ -350,6 +350,9 @@ func (a *Account) GrokChannelSupportsModel(model string) bool {
 		return false
 	}
 	model = strings.TrimSpace(model)
+	if !GrokModelAllowedForAuthKind(a.GrokAuthKindLocked(), model) {
+		return false
+	}
 	// 不复用 a.Models 的底层数组做 append:len==0 但 cap>0 时,两个并发请求会
 	// 在共享 RLock 下向同一空闲容量写入,构成写-写竞态。目录分支从 nil 开始。
 	var candidates []string
@@ -374,6 +377,28 @@ func (a *Account) GrokChannelSupportsModel(model string) bool {
 	}
 	for _, candidate := range candidates {
 		if strings.EqualFold(strings.TrimSpace(candidate), model) {
+			return true
+		}
+	}
+	// 公开别名不在上游目录里。没有白名单、且目录里至少还有一个可见文本模型时
+	// 仍然放行；空目录保持关闭，白名单未写这个名字时也不补。
+	if IsGrokFastPublicModel(model) && len(a.Models) == 0 && a.grokCatalogHasVisibleTextModelLocked() {
+		return true
+	}
+	return false
+}
+
+// grokCatalogHasVisibleTextModelLocked 判断已同步目录里是否还有可调度的文本模型。
+// 调用方必须已持有 a.mu。
+func (a *Account) grokCatalogHasVisibleTextModelLocked() bool {
+	if a == nil || a.grokRouting == nil || !a.grokRouting.CatalogKnown {
+		return false
+	}
+	for _, route := range a.grokRouting.Models {
+		if route.Hidden || (a.GrokAuthKindLocked() == GrokAuthKindAPIKey && route.SupportedInAPI != nil && !*route.SupportedInAPI) {
+			continue
+		}
+		if strings.TrimSpace(route.ModelID) != "" {
 			return true
 		}
 	}

@@ -251,7 +251,13 @@ func ExecuteGrokRequest(ctx context.Context, account *auth.Account, requestBody 
 	// 投递前一次性归一化：namespace 分组工具展平成子 function 并记录别名（响应流里再
 	// 反解回 {name, namespace}）、web_search 降级为最小形态、历史项按 Grok 原生契约重建、
 	// Codex 专属字段剥离、思考强度钳制，顺带算出轮次序号与模型名。
+	// 连通性测试走这条旧入口，对外名 grok-4.7-fast 必须先换成 grok-4.7-build-fast。
 	conversationBody := requestBody
+	if wire := auth.GrokWireModelID(gjson.GetBytes(requestBody, "model").String()); wire != "" {
+		if updated, err := rewriteGrokProtocolModel(requestBody, wire); err == nil {
+			requestBody = updated
+		}
+	}
 	preflight := prepareGrokUpstreamBodyWithCompaction(requestBody, nil, account.GrokReasoningMenu(gjson.GetBytes(requestBody, "model").String()))
 	requestBody = preflight.Body
 	nsAliases := preflight.Aliases

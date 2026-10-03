@@ -519,7 +519,7 @@
     "baseUrlPlaceholder": "Leave blank for the default endpoint",
     "baseUrlHint": "OAuth defaults to cli-chat-proxy.grok.com; API Key defaults to api.x.ai.",
     "models": "Models (optional)",
-    "modelsPlaceholder": "grok-4.7, grok-4.6…",
+    "modelsPlaceholder": "grok-4.7-fast, grok-4.7…",
     "modelsEmpty": "No models — fetch from upstream or add manually",
     "modelsFetch": "Fetch",
     "modelsFetching": "Fetching…",
