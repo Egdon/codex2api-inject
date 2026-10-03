@@ -4239,6 +4239,15 @@
       "source": "Source",
       "empty": "Not synced yet; using built-in observed pairs.",
       "unavailable": "Version unavailable",
+      "status": "Status",
+      "checkedAt": "Checked",
+      "statuses": {
+        "verified": "Verified",
+        "cached": "Unchanged",
+        "stale": "Using previous pair",
+        "error": "Sync failed",
+        "builtin": "Built-in"
+      },
       "sources": {
         "official_appcast": "Official appcast",
         "official_msix": "Official MSIX",

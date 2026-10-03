@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/codex2api/database"
 )
@@ -60,13 +61,23 @@ func SyncCodexClientVersions(ctx context.Context, db *database.DB, proxyURL stri
 	call := &codexClientSyncCall{done: make(chan struct{})}
 	codexClientSyncCalls[key] = call
 	codexClientSyncMu.Unlock()
-	call.result, call.err = runCodexClientVersionSync(ctx, key)
+	// 合并后的同步由所有等待者共享，不能随第一个调用者取消而中断；各调用者只按自己的 ctx 停止等待。
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexClientSyncTimeout)
+	call.result, call.err = codexClientVersionSyncRun(runCtx, key)
+	cancel()
 	codexClientSyncMu.Lock()
 	delete(codexClientSyncCalls, key)
 	close(call.done)
 	codexClientSyncMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return call.result, call.err
 }
+
+const codexClientSyncTimeout = 15 * time.Minute
+
+var codexClientVersionSyncRun = runCodexClientVersionSync
 
 func runCodexClientVersionSync(ctx context.Context, key codexClientSyncKey) (*CodexClientVersionsSyncResult, error) {
 	if err := LoadCodexClientVersionCache(ctx, key.db); err != nil {

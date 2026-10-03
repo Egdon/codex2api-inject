@@ -489,6 +489,15 @@
       "source": "來源",
       "empty": "尚未同步，使用內建版本配對。",
       "unavailable": "版本無法使用",
+      "status": "狀態",
+      "checkedAt": "檢查於",
+      "statuses": {
+        "verified": "已驗證",
+        "cached": "未變更",
+        "stale": "沿用舊配對",
+        "error": "同步失敗",
+        "builtin": "內建"
+      },
       "sources": {
         "official_appcast": "官方 appcast",
         "official_msix": "官方 MSIX",

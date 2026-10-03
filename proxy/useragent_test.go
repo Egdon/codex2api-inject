@@ -350,3 +350,9 @@ func TestCodexOriginatorForGeneratedUserAgent(t *testing.T) {
 		}
 	}
 }
+
+// codexUserAgentFromConfig 是测试辅助：忽略版本不可用错误，只断言生成结果。
+func codexUserAgentFromConfig(raw string, accountID int64, versionFloor string) (string, string, bool) {
+	ua, version, ok, _ := codexUserAgentFromConfigChecked(raw, accountID, versionFloor)
+	return ua, version, ok
+}

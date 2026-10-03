@@ -375,13 +375,8 @@ func validCodexClientVersionString(value string) bool {
 	return ok
 }
 
-// codexUserAgentFromConfig 按全局 UA 配置生成出站身份。accountID 只在号池模式下参与
+// codexUserAgentFromConfigChecked 按全局 UA 配置生成出站身份。accountID 只在号池模式下参与
 // 画像抽取(同一账号恒得同一画像)。
-func codexUserAgentFromConfig(raw string, accountID int64, versionFloor string) (string, string, bool) {
-	ua, version, ok, _ := codexUserAgentFromConfigChecked(raw, accountID, versionFloor)
-	return ua, version, ok
-}
-
 func codexUserAgentFromConfigChecked(raw string, accountID int64, versionFloor string) (string, string, bool, error) {
 	cfg := codexUserAgentConfigFromJSON(raw)
 	if isEmptyCodexUserAgentConfig(cfg) {

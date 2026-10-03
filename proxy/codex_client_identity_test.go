@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/config"
 	"github.com/codex2api/database"
+	"github.com/gin-gonic/gin"
 )
 
 func codexTestIdentityCache(t *testing.T) {
@@ -122,5 +125,71 @@ func TestCodexClientIdentityUnavailablePropagatesThroughResponsesRelay(t *testin
 	_, err = openAIResponsesWebsocketHeadersChecked(openAIResponsesWSHeaderInput{ctx: context.Background(), account: &auth.Account{DBID: 1}, apiKey: "api-key", endpoint: "http://example.test/v1/responses"})
 	if !errors.As(err, &apiErr) || apiErr.Code != ErrorCodeCodexClientVersionUnavailable {
 		t.Fatalf("WS relay hid error: %v", err)
+	}
+}
+
+func TestCodexClientIdentityUnavailableStopsLiveSideband(t *testing.T) {
+	codexTestIdentityCache(t)
+	ApplyRuntimeSettings(RuntimeSettings{ClientCompatMode: ClientCompatModeAuto, CodexMinCLIVersion: "0.999.0", CodexUserAgentConfig: `{"client_kind":"codex-desktop"}`})
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 1})
+	account := &auth.Account{DBID: 11, AccessToken: "at"}
+	store.AddAccount(account)
+	handler := NewHandler(store, nil, &config.Config{AdminSecret: "secret"}, nil)
+	cipher, err := encryptLiveAttestation(`{"v":1}`, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &liveCallRecord{CallID: "rtc_identity", CallHash: hashLiveCallID("rtc_identity"), AccountID: account.ID(), AttestationCiphertext: cipher}
+	headers, err := handler.liveSidebandHeaders(context.Background(), record)
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Code != ErrorCodeCodexClientVersionUnavailable || headers != nil {
+		t.Fatalf("sideband built partial headers: %v / %v", headers, err)
+	}
+}
+
+func TestCodexAlphaSearchKeepsVersionUnavailableStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	codexTestIdentityCache(t)
+	ApplyRuntimeSettings(RuntimeSettings{ClientCompatMode: ClientCompatModeAuto, CodexMinCLIVersion: "0.999.0", CodexUserAgentConfig: `{"client_kind":"codex-desktop"}`})
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	defer upstream.Close()
+	codexAlphaSearchURLForTest = upstream.URL
+	defer func() { codexAlphaSearchURLForTest = "" }()
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2})
+	store.AddAccount(&auth.Account{DBID: 1, AccessToken: "at-search", AccountID: "acc-s", PlanType: "plus"})
+	handler := NewHandler(store, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"commands":{"search_query":[{"q":"go"}]}}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	handler.CodexAlphaSearchHandler(ctx)
+	if rec.Code != http.StatusServiceUnavailable || calls.Load() != 0 {
+		t.Fatalf("status=%d upstream calls=%d body=%s", rec.Code, calls.Load(), rec.Body.String())
+	}
+}
+
+func TestSyncCodexClientVersionsSharedRunSurvivesFirstCallerCancel(t *testing.T) {
+	previous := codexClientVersionSyncRun
+	t.Cleanup(func() { codexClientVersionSyncRun = previous })
+	started, release := make(chan struct{}), make(chan struct{})
+	var runErr atomic.Value
+	codexClientVersionSyncRun = func(ctx context.Context, _ codexClientSyncKey) (*CodexClientVersionsSyncResult, error) {
+		close(started)
+		<-release
+		runErr.Store(fmt.Sprint(ctx.Err()))
+		return &CodexClientVersionsSyncResult{}, nil
+	}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { _, err := SyncCodexClientVersions(firstCtx, new(database.DB), ""); firstDone <- err }()
+	<-started
+	cancelFirst()
+	close(release)
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first caller err = %v, want canceled", err)
+	}
+	if got := runErr.Load(); got != "<nil>" {
+		t.Fatalf("shared run ctx err = %v", got)
 	}
 }

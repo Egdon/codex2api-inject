@@ -69,11 +69,6 @@ func prepareOpenAIResponsesWebsocketBody(body []byte) []byte {
 	return wsBody
 }
 
-func openAIResponsesWebsocketHeaders(ctx context.Context, account *auth.Account, apiKey, endpoint string, downstream http.Header) http.Header {
-	headers, _ := openAIResponsesWebsocketHeadersChecked(openAIResponsesWSHeaderInput{ctx: ctx, account: account, apiKey: apiKey, endpoint: endpoint, downstream: downstream})
-	return headers
-}
-
 type openAIResponsesWSHeaderInput struct {
 	ctx        context.Context
 	account    *auth.Account

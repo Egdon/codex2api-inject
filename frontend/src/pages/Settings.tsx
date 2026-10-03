@@ -9,7 +9,7 @@ import CodexClientVersionsPanel from '../components/CodexClientVersionsPanel'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
 import { useToast } from '../hooks/useToast'
-import type { AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexClientVersionTarget, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
+import type { AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexClientVersionSyncResult, CodexClientVersionTarget, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
 import { ANTIGRAVITY_DEFAULT_MODELS } from '../lib/antigravityModels'
 import { countPayloadRules, PAYLOAD_RULE_GROUPS } from './PayloadRules'
 import { getErrorMessage } from '../utils/error'
@@ -160,6 +160,20 @@ const CODEX_CLIENT_SYNC_SOURCES = [
   { key: 'vscode', label: 'VS Code' },
 ] as const
 type CodexClientSyncSource = (typeof CODEX_CLIENT_SYNC_SOURCES)[number]['key']
+
+// 设置接口只返回最后一次成功的配对；本次同步失败的目标把状态与错误叠加上去，面板才能显示失败原因。
+function overlayCodexClientSyncFailures(targets: CodexClientVersionTarget[], result: Record<CodexClientSyncSource, CodexClientVersionSyncResult>): CodexClientVersionTarget[] {
+  const failures = new Map<string, CodexClientVersionTarget>()
+  for (const source of CODEX_CLIENT_SYNC_SOURCES) {
+    for (const target of result[source.key].targets ?? []) {
+      if (target.error) failures.set(`${target.client_kind}/${target.target_platform}`, target)
+    }
+  }
+  return targets.map((target) => {
+    const failure = failures.get(`${target.client_kind}/${target.target_platform}`)
+    return failure ? { ...target, status: failure.status, error: failure.error } : target
+  })
+}
 const CODEX_UA_FALLBACK_POOL_MIX: Record<string, number> = { 'codex-desktop': 50, 'codex-vscode': 30, 'codex-tui': 20 }
 const CODEX_UA_STRING_KEYS = ['raw_user_agent', 'client_name', 'client_version', 'os_name', 'os_version', 'arch', 'terminal', 'client_kind', 'app_name', 'app_version', 'mode'] as const
 // 与后端 inferCodexClientKind 同规则:未指定形态的旧配置按客户端名推断。
@@ -3188,9 +3202,13 @@ export default function Settings() {
         const error = result[source.key].error
         if (error) errors[source.key] = error
       }
-      const settings = await api.getSettings()
-      setCodexClientVersions(settings.codex_client_versions ?? [])
       setClientSyncErrors(errors)
+      try {
+        const settings = await api.getSettings()
+        setCodexClientVersions(overlayCodexClientSyncFailures(settings.codex_client_versions ?? [], result))
+      } catch {
+        // 同步本身已成功；面板沿用旧数据，下次加载设置时刷新。
+      }
       const failed = Object.keys(errors).length > 0
       showToast(failed ? t('settings.clientVersionSyncPartial') : t('settings.clientVersionSyncSuccess'), failed ? 'error' : 'success')
     } catch (error) {
@@ -4678,7 +4696,7 @@ export default function Settings() {
                         <dt className="text-foreground/70">Version</dt>
                         <dd className="break-all">{codexUAPreview.persona.version}</dd>
                         <dt className="text-foreground/70">{t('settings.codexClientVersions.source')}</dt>
-                        <dd>{t(`settings.codexClientVersions.sources.${codexUAPreview.persona.source ?? 'builtin_observed'}`)}</dd>
+                        <dd>{t(`settings.codexClientVersions.sources.${codexUAPreview.persona.source ?? 'builtin_observed'}`, { defaultValue: codexUAPreview.persona.source ?? 'builtin_observed' })}</dd>
                       </dl>
                     ) : (
                       <ul className="space-y-1 font-mono text-[11px] leading-5 text-muted-foreground sm:text-xs">

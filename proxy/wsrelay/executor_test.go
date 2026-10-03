@@ -712,3 +712,9 @@ func TestSingleMachineFingerprintWebsocketBodyAndHeaders(t *testing.T) {
 		t.Fatal("WS cache partition changed")
 	}
 }
+
+// prepareWebsocketHeaders 是测试辅助：忽略身份解析错误，只断言组装出的握手头。
+func (e *Executor) prepareWebsocketHeaders(ctx context.Context, accessToken string, account *auth.Account, accountID, sessionID, apiKey string, deviceCfg *proxy.DeviceProfileConfig, ginHeaders http.Header, wsBody []byte, affinityKey string) http.Header {
+	headers, _ := e.prepareWebsocketHeadersChecked(ctx, accessToken, account, accountID, sessionID, apiKey, deviceCfg, ginHeaders, wsBody, affinityKey)
+	return headers
+}

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -96,6 +97,14 @@ func (h *Handler) CodexAlphaSearchHandler(c *gin.Context) {
 		apiKey,
 	)
 	if err != nil {
+		// 版本不可用在出站前就已拦下，是本地配置问题，不能报成上游 502。
+		var identityErr *Error
+		if errors.As(err, &identityErr) && identityErr.Code == ErrorCodeCodexClientVersionUnavailable {
+			api.SendErrorWithStatus(c,
+				api.NewAPIError(api.ErrCodeServiceUnavailable, identityErr.Message, api.ErrorTypeServer),
+				identityErr.HTTPStatus)
+			return
+		}
 		api.SendErrorWithStatus(c,
 			api.NewAPIError(api.ErrCodeUpstreamError, fmt.Sprintf("codex alpha search: %v", err), api.ErrorTypeUpstream),
 			http.StatusBadGateway)

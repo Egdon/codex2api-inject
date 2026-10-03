@@ -1171,11 +1171,6 @@ func codexVersionFromUserAgent(userAgent, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-func generatedCodexClientHeaders(account *auth.Account, settings RuntimeSettings) (string, string) {
-	ua, version, _ := generatedCodexClientHeadersChecked(account, settings)
-	return ua, version
-}
-
 func shouldGenerateCodexClientHeaders(settings RuntimeSettings, userAgent, originator string) bool {
 	switch settings.ClientCompatMode {
 	case ClientCompatModeForce:
@@ -1191,20 +1186,6 @@ func shouldGenerateCodexClientHeaders(settings RuntimeSettings, userAgent, origi
 	default:
 		return false
 	}
-}
-
-func resolveCodexOutboundClientHeaders(account *auth.Account, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) (string, string, bool) {
-	identity, _ := ResolveCodexOutboundClientIdentity(CodexClientIdentityInput{Account: account, APIKey: apiKey, DeviceConfig: deviceCfg, Headers: downstreamHeaders})
-	return identity.UserAgent, identity.Version, identity.Generated
-}
-
-func ResolveCodexOutboundClientHeaders(account *auth.Account, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) (userAgent, version string) {
-	userAgent, version, _ = ResolveCodexOutboundClientHeadersWithDecision(account, apiKey, deviceCfg, downstreamHeaders)
-	return userAgent, version
-}
-
-func ResolveCodexOutboundClientHeadersWithDecision(account *auth.Account, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) (userAgent, version string, usedGenerated bool) {
-	return resolveCodexOutboundClientHeaders(account, apiKey, deviceCfg, downstreamHeaders)
 }
 
 func applyCodexAllowedForwardHeaders(req *http.Request, downstreamHeaders http.Header) {

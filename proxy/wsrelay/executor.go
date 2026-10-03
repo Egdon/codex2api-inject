@@ -348,13 +348,8 @@ func reusablePoolBaseKeyWithModel(baseKey, model string) string {
 	return baseKey + "|m:" + model
 }
 
-// prepareWebsocketHeaders 准备 WebSocket 请求头。
+// prepareWebsocketHeadersChecked 准备 WebSocket 请求头；客户端身份解析失败时返回错误，不组装残缺握手头。
 // affinityKey 用于 turn-state 跨账号回声守卫；空串时守卫为空操作。
-func (e *Executor) prepareWebsocketHeaders(ctx context.Context, accessToken string, account *auth.Account, accountID, sessionID, apiKey string, deviceCfg *proxy.DeviceProfileConfig, ginHeaders http.Header, wsBody []byte, affinityKey string) http.Header {
-	headers, _ := e.prepareWebsocketHeadersChecked(ctx, accessToken, account, accountID, sessionID, apiKey, deviceCfg, ginHeaders, wsBody, affinityKey)
-	return headers
-}
-
 func (e *Executor) prepareWebsocketHeadersChecked(ctx context.Context, accessToken string, account *auth.Account, accountID, sessionID, apiKey string, deviceCfg *proxy.DeviceProfileConfig, ginHeaders http.Header, wsBody []byte, affinityKey string) (http.Header, error) {
 	headers := http.Header{}
 
