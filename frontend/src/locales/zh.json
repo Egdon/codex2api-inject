@@ -1483,6 +1483,8 @@
     "schedulerConcurrencyRange": "请输入 ≥1 的整数。",
     "schedulerSkipWarmLabel": "跳过预热层级",
     "schedulerSkipWarmHint": "开启后该账号只会将预热层级提升为健康，不覆盖风险、封禁或额度限制。",
+    "schedulerKeepConcurrencyLabel": "降级不降并发",
+    "schedulerKeepConcurrencyHint": "开启后预热/风险层级仍按配置的基础并发调度(层级与排序照常计算),封禁仍为 0,5h 限流等额度保护不受影响。适合已确认上游并发能力的 API/中转账号;若上游 429 本身就是并发限制,请勿开启。",
     "dispatchCountLimitTitle": "请求次数限流",
     "dispatchCountLimitHint": "达到次数后账号进入 rate_limited 倒计时，到当前 reset 时间后恢复。",
     "dispatchCountLimitLabel": "本轮请求次数上限",

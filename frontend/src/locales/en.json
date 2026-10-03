@@ -1485,6 +1485,8 @@
     "schedulerConcurrencyRange": "Enter an integer ≥ 1.",
     "schedulerSkipWarmLabel": "Skip Warm Tier",
     "schedulerSkipWarmHint": "When enabled, this account only promotes warm to healthy. Risky, banned, and quota limits still apply.",
+    "schedulerKeepConcurrencyLabel": "Keep Concurrency When Degraded",
+    "schedulerKeepConcurrencyHint": "When enabled, warm and risky tiers keep the configured base concurrency (tier and ordering are still computed). Banned stays at 0 and 5h quota guards still apply. Intended for API/relay upstreams with known capacity; leave it off if the upstream returns 429 for concurrency limits.",
     "dispatchCountLimitTitle": "Request Count Limit",
     "dispatchCountLimitHint": "When the count is reached, the account enters rate_limited cooldown until the current reset time.",
     "dispatchCountLimitLabel": "Request Limit This Window",

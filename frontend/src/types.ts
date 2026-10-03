@@ -441,6 +441,7 @@ export interface AccountRow {
   base_concurrency_override?: number | null
   base_concurrency_effective?: number
   skip_warm_tier?: boolean
+  keep_concurrency_on_degrade?: boolean
   dynamic_concurrency_limit?: number
   allowed_api_key_ids?: number[]
   tags?: string[]
@@ -1547,6 +1548,7 @@ export interface UpdateAccountSchedulerRequest {
   score_bias_override?: number | null
   base_concurrency_override?: number | null
   skip_warm_tier?: boolean
+  keep_concurrency_on_degrade?: boolean
   allowed_api_key_ids?: number[] | null
   proxy_url?: string | null
   tags?: string[] | null
