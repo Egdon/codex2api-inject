@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -174,20 +175,28 @@ func TestSyncCodexClientVersionsSharedRunSurvivesFirstCallerCancel(t *testing.T)
 	t.Cleanup(func() { codexClientVersionSyncRun = previous })
 	started, release := make(chan struct{}), make(chan struct{})
 	var runErr atomic.Value
+	var startOnce sync.Once
 	codexClientVersionSyncRun = func(ctx context.Context, _ codexClientSyncKey) (*CodexClientVersionsSyncResult, error) {
-		close(started)
+		startOnce.Do(func() { close(started) })
 		<-release
 		runErr.Store(fmt.Sprint(ctx.Err()))
 		return &CodexClientVersionsSyncResult{}, nil
 	}
+	db := new(database.DB)
 	firstCtx, cancelFirst := context.WithCancel(context.Background())
 	firstDone := make(chan error, 1)
-	go func() { _, err := SyncCodexClientVersions(firstCtx, new(database.DB), ""); firstDone <- err }()
+	go func() { _, err := SyncCodexClientVersions(firstCtx, db, ""); firstDone <- err }()
 	<-started
 	cancelFirst()
-	close(release)
+	// 发起者取消后应立即返回，不必等共享同步跑完。
 	if err := <-firstDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("first caller err = %v, want canceled", err)
+	}
+	waiterDone := make(chan error, 1)
+	go func() { _, err := SyncCodexClientVersions(context.Background(), db, ""); waiterDone <- err }()
+	close(release)
+	if err := <-waiterDone; err != nil {
+		t.Fatalf("waiting caller err = %v", err)
 	}
 	if got := runErr.Load(); got != "<nil>" {
 		t.Fatalf("shared run ctx err = %v", got)

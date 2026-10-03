@@ -49,30 +49,29 @@ func SyncCodexClientVersions(ctx context.Context, db *database.DB, proxyURL stri
 	}
 	key := codexClientSyncKey{db: db, proxyURL: proxyURL}
 	codexClientSyncMu.Lock()
-	if call := codexClientSyncCalls[key]; call != nil {
-		codexClientSyncMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-call.done:
-			return call.result, call.err
-		}
+	call := codexClientSyncCalls[key]
+	if call == nil {
+		call = &codexClientSyncCall{done: make(chan struct{})}
+		codexClientSyncCalls[key] = call
+		// 合并后的同步由所有调用者共享，不能随发起者取消而中断，因此脱离调用者 ctx 在后台执行。
+		runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexClientSyncTimeout)
+		go func() {
+			defer cancel()
+			call.result, call.err = codexClientVersionSyncRun(runCtx, key)
+			codexClientSyncMu.Lock()
+			delete(codexClientSyncCalls, key)
+			close(call.done)
+			codexClientSyncMu.Unlock()
+		}()
 	}
-	call := &codexClientSyncCall{done: make(chan struct{})}
-	codexClientSyncCalls[key] = call
 	codexClientSyncMu.Unlock()
-	// 合并后的同步由所有等待者共享，不能随第一个调用者取消而中断；各调用者只按自己的 ctx 停止等待。
-	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexClientSyncTimeout)
-	call.result, call.err = codexClientVersionSyncRun(runCtx, key)
-	cancel()
-	codexClientSyncMu.Lock()
-	delete(codexClientSyncCalls, key)
-	close(call.done)
-	codexClientSyncMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	// 发起者与等待者一视同仁：各自按自己的 ctx 停止等待。
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-call.done:
+		return call.result, call.err
 	}
-	return call.result, call.err
 }
 
 const codexClientSyncTimeout = 15 * time.Minute
