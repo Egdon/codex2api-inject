@@ -293,7 +293,7 @@ func (h *Handler) buildAccountResponse(
 		Codex5HUsageUpdatedAt:        row.GetCredential("codex_5h_usage_updated_at"),
 		ClaudeUsageProbeAt:           row.GetCredential(auth.ClaudeUsageProbeAtCredentialKey),
 		ClaudeUsageProbeError:        row.GetCredential(auth.ClaudeUsageProbeErrorCredentialKey),
-		ClaudeUsageWindows:           parseClaudeUsageWindows(row.GetCredential(auth.ClaudeUsageWindowsCredentialKey)),
+		ClaudeUsageWindows:           claudeAccountUsageWindows(row),
 		UsageLimitOverride:           ignoreUsageLimitStatusOverride,
 		UsageLimitEffective:          ignoreUsageLimitStatusEffective,
 	}
@@ -502,6 +502,33 @@ func (h *Handler) buildAccountResponse(
 		stripAccountDetailFields(&resp)
 	}
 	return resp
+}
+
+// Keep header-only windows when an OAuth probe has no equivalent bucket;
+// when both sources observed the same bucket, display the newer observation.
+func claudeAccountUsageWindows(row *database.AccountRow) []auth.ClaudeUsageWindow {
+	windows := parseClaudeUsageWindows(row.GetCredential(auth.ClaudeUsageWindowsCredentialKey))
+	var header auth.ClaudeHeaderUsageSnapshot
+	if json.Unmarshal([]byte(row.GetCredential(auth.ClaudeHeaderUsageCredentialKey)), &header) != nil {
+		return windows
+	}
+	probedAt, _ := time.Parse(time.RFC3339Nano, row.GetCredential(auth.ClaudeUsageProbeAtCredentialKey))
+	for _, observed := range header.Windows {
+		found := false
+		for i := range windows {
+			if windows[i].Name == observed.Name {
+				found = true
+				if !header.ObservedAt.Before(probedAt) {
+					windows[i] = observed
+				}
+				break
+			}
+		}
+		if !found {
+			windows = append(windows, observed)
+		}
+	}
+	return windows
 }
 
 func parseClaudeUsageWindows(raw string) []auth.ClaudeUsageWindow {

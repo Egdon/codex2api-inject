@@ -6324,9 +6324,9 @@ func (h *Handler) RefreshAccountUsage(c *gin.Context) {
 			}
 			if value := row.GetCredential(auth.ClaudeUsageWindowsCredentialKey); value != "" {
 				resp["claude_usage_windows_probed"] = true
-				if windows := parseClaudeUsageWindows(value); len(windows) > 0 {
-					resp["claude_usage_windows"] = windows
-				}
+			}
+			if windows := claudeAccountUsageWindows(row); len(windows) > 0 {
+				resp["claude_usage_windows"] = windows
 			}
 		}
 	}

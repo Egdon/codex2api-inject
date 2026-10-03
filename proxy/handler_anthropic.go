@@ -53,6 +53,8 @@ var claudeDownstreamResponseHeaders = map[string]struct{}{
 	"anthropic-ratelimit-unified-5h-reset":             {},
 	"anthropic-ratelimit-unified-7d-utilization":       {},
 	"anthropic-ratelimit-unified-7d-reset":             {},
+	"anthropic-ratelimit-unified-7d_oi-utilization":    {},
+	"anthropic-ratelimit-unified-7d_oi-reset":          {},
 	"anthropic-ratelimit-unified-reset":                {},
 	"anthropic-ratelimit-unified-status":               {},
 	"anthropic-ratelimit-unified-representative-claim": {},
