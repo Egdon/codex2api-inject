@@ -1051,7 +1051,7 @@ export const api = {
       body: JSON.stringify({ channels }),
     }),
   getAntigravitySettings: () => request<AntigravitySettingsResponse>('/settings/antigravity'),
-  updateAntigravitySettings: (patch: { model_redirects?: Record<string, string>; redirect_overrides_effort?: boolean }) =>
+  updateAntigravitySettings: (patch: { model_redirects?: Record<string, string>; redirect_overrides_effort?: boolean; expose_thoughts?: boolean }) =>
     request<AntigravitySettingsResponse>('/settings/antigravity', {
       method: 'PUT',
       body: JSON.stringify(patch),

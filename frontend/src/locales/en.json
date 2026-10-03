@@ -4585,6 +4585,13 @@
       "overrideHint": "By default the redirect only applies when the request has no reasoning.effort; enable this to apply it even when an effort is present (e.g. Codex CLI's default medium).",
       "saved": "Model redirects saved"
     },
+    "antigravityThinking": {
+      "title": "Thinking output",
+      "description": "Controls whether Gemini models' thinking is forwarded to clients. Applies only to Gemini models on OAuth accounts; API-key accounts are unaffected.",
+      "label": "Forward thinking content",
+      "hint": "When enabled, thought summaries are requested from upstream (includeThoughts) and returned as reasoning output: a reasoning item on /v1/responses, reasoning_content on /v1/chat/completions, and a thinking block on /v1/messages. Requests that set reasoning.summary to none get no thinking content.",
+      "saved": "Thinking output setting saved"
+    },
     "channelTest": {
       "antigravityDesc": "Probe model and prompt used by default for Test Connection and batch tests on the Antigravity accounts page. Leave the model empty to pick automatically from the account catalog (newest flash low tier first).",
       "claudeDesc": "Probe model and prompt used by default for Test Connection and batch tests on the Claude accounts page. Leave the model empty to pick automatically from the account catalog (haiku first).",

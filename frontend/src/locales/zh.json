@@ -4582,6 +4582,13 @@
       "overrideHint": "默认只在请求没有指定 reasoning.effort 时生效；开启后即使请求带了 effort（如 Codex CLI 的默认 medium）也按重定向档位处理。",
       "saved": "模型重定向已保存"
     },
+    "antigravityThinking": {
+      "title": "思考内容",
+      "description": "控制是否把 Gemini 模型的思考过程下发给客户端。只对 OAuth 账号的 Gemini 模型生效，API Key 账号不受影响。",
+      "label": "下发思考内容",
+      "hint": "开启后向上游请求思考摘要（includeThoughts），并以 reasoning 输出下发：/v1/responses 为 reasoning 项，/v1/chat/completions 为 reasoning_content，/v1/messages 为 thinking 块。请求显式设置 reasoning.summary 为 none 时不下发。",
+      "saved": "思考内容设置已保存"
+    },
     "channelTest": {
       "antigravityDesc": "Antigravity 账号页“测试连接”与批量测试默认使用的探测模型和测活内容。模型留空时按账号目录自动选择（优先版本最新的 flash 低档）。",
       "claudeDesc": "Claude 账号页“测试连接”与批量测试默认使用的探测模型和测活内容。模型留空时按账号目录自动选择（优先 haiku）。",

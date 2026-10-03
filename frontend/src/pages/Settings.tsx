@@ -1000,6 +1000,59 @@ function AntigravityModelRedirectCard() {
   )
 }
 
+// Antigravity 思考内容下发:开启后 OAuth 账号的 Gemini thought 片段作为 reasoning 输出下发。
+function AntigravityThinkingCard() {
+  const { t } = useTranslation()
+  const { showToast } = useToast()
+  const [exposeThoughts, setExposeThoughts] = useState<boolean | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void api.getAntigravitySettings().then((response) => {
+      if (active) setExposeThoughts(response.expose_thoughts)
+    }).catch((error) => {
+      if (active) showToast(getErrorMessage(error), 'error')
+    })
+    return () => {
+      active = false
+    }
+  }, [showToast])
+
+  const save = useCallback(async (checked: boolean) => {
+    setSaving(true)
+    try {
+      const response = await api.updateAntigravitySettings({ expose_thoughts: checked })
+      setExposeThoughts(response.expose_thoughts)
+      showToast(t('settings.antigravityThinking.saved'), 'success')
+    } catch (error) {
+      showToast(getErrorMessage(error), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }, [showToast, t])
+
+  return (
+    <SettingsCard
+      title={t('settings.antigravityThinking.title')}
+      description={t('settings.antigravityThinking.description')}
+      icon={<Brain className="size-4" />}
+    >
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">{t('settings.antigravityThinking.label')}</div>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t('settings.antigravityThinking.hint')}</p>
+        </div>
+        <Switch
+          checked={exposeThoughts ?? false}
+          disabled={exposeThoughts === null || saving}
+          onCheckedChange={(checked) => void save(checked)}
+        />
+      </div>
+    </SettingsCard>
+  )
+}
+
 function ClaudeCodeSettingsCard() {
   const { t } = useTranslation()
   const { showToast } = useToast()
@@ -5039,6 +5092,7 @@ export default function Settings() {
               <SettingsSection id="settings-antigravity" title={t('settings.nav.antigravity')} description={t('settings.nav.antigravityDesc')} icon={<ChannelLogo channel="antigravity" size={16} />}>
               <ChannelConnectivityTestCard channel="antigravity" />
               <AntigravityModelRedirectCard />
+              <AntigravityThinkingCard />
               <SettingsCard
                 title={t('settings.antigravityOAuth.title')}
                 description={t('settings.antigravityOAuth.description')}
