@@ -338,8 +338,8 @@ func (a *Account) GetGrokFreeQuotaSnapshot() (GrokFreeQuotaSnapshot, bool) {
 }
 
 // GrokChannelSupportsModel 判断 Grok 账号能否服务指定模型（grok 渠道 Key 专用）。
-// 显式 Models 白名单优先；没有白名单时使用富目录的可见模型，尚未同步目录才使用
-// 按凭据类型区分的保守默认集。空列表绝不再表示任意模型透传。
+// 账号写了模型列表时，列表就是可调度集合；列表为空时使用富目录的可见模型，
+// 尚未同步目录才使用按凭据类型区分的保守默认集。空列表绝不再表示任意模型透传。
 func (a *Account) GrokChannelSupportsModel(model string) bool {
 	if a == nil {
 		return false
@@ -380,8 +380,8 @@ func (a *Account) GrokChannelSupportsModel(model string) bool {
 			return true
 		}
 	}
-	// 公开别名不在上游目录里。没有白名单、且目录里至少还有一个可见文本模型时
-	// 仍然放行；空目录保持关闭，白名单未写这个名字时也不补。
+	// 公开别名不在上游目录里。没有模型列表、且目录里至少还有一个可见文本模型时
+	// 仍然放行；空目录保持关闭，模型列表没写这个名字时也不补。
 	if IsGrokFastPublicModel(model) && len(a.Models) == 0 && a.grokCatalogHasVisibleTextModelLocked() {
 		return true
 	}
@@ -405,7 +405,7 @@ func (a *Account) grokCatalogHasVisibleTextModelLocked() bool {
 	return false
 }
 
-// GrokModels 返回 Grok 账号显式声明的模型白名单；空表示交由富目录/保守默认，
+// GrokModels 返回 Grok 账号保存的模型列表；空表示交由富目录/保守默认，
 // 不表示任意模型透传。
 func (a *Account) GrokModels() []string {
 	if a == nil {

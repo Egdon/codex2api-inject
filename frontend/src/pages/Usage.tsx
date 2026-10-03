@@ -1768,6 +1768,8 @@ export default function Usage() {
   const [filterFast, setFilterFast] = useState('')
   const [filterUltra, setFilterUltra] = useState('')
   const [filterModelMismatch, setFilterModelMismatch] = useState(false)
+  // 关闭「显示上游模型不一致」后，筛选参数不再带上这项；ref 让筛选回调不用等设置加载完再重建。
+  const showUpstreamModelMismatchRef = useRef(true)
   const [filterType, setFilterType] = useState<UsageTypeFilter>('')
   const [filterErrorKind, setFilterErrorKind] = useState('')
   const [filterRetry, setFilterRetry] = useState<UsageRetryFilter>('')
@@ -1829,7 +1831,7 @@ export default function Usage() {
       accountId: filterAccountId || undefined,
       fast: filterFast || undefined,
       ultra: filterUltra || undefined,
-      upstreamModelMismatch: filterModelMismatch ? 'true' : undefined,
+      upstreamModelMismatch: showUpstreamModelMismatchRef.current && filterModelMismatch ? 'true' : undefined,
       stream: filterType === 'stream' ? 'true' : filterType === 'sync' ? 'false' : undefined,
       compact: filterType === 'compact' ? 'true' : undefined,
       hasCompactionHistory: filterType === 'history' ? 'true' : undefined,
@@ -1971,6 +1973,15 @@ export default function Usage() {
 
   const { stats, settings } = data
   const showFullUsageNumbers = settings?.show_full_usage_numbers ?? false
+  const showUpstreamModelMismatch = settings?.show_upstream_model_mismatch !== false
+  showUpstreamModelMismatchRef.current = showUpstreamModelMismatch
+
+  useEffect(() => {
+    if (!showUpstreamModelMismatch && filterModelMismatch) {
+      setFilterModelMismatch(false)
+      setPage(1)
+    }
+  }, [showUpstreamModelMismatch, filterModelMismatch])
   const totalPages = Math.max(1, Math.ceil(logsTotal / pageSize))
   const currentPage = Math.min(page, totalPages)
 
@@ -2041,7 +2052,7 @@ export default function Usage() {
     filterType,
     filterFast,
     filterUltra,
-    filterModelMismatch ? 'true' : '',
+    showUpstreamModelMismatch && filterModelMismatch ? 'true' : '',
     filterErrorKind,
     filterRetry,
     filterTransport,
@@ -2056,7 +2067,7 @@ export default function Usage() {
     || filterType
     || filterFast
     || filterUltra
-    || filterModelMismatch
+    || (showUpstreamModelMismatch && filterModelMismatch)
     || filterErrorKind
     || filterRetry
     || filterTransport,
@@ -2633,20 +2644,22 @@ export default function Usage() {
                     <Sparkles className="size-3.5" />
                     Ultra
                   </button>
-                  <button
-                    type="button"
-                    title={t('usage.filterModelMismatchHint')}
-                    onClick={() => { setFilterModelMismatch(!filterModelMismatch); setPage(1) }}
-                    className={cn(
-                      'inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-lg border px-2.5 text-[13px] font-medium transition-colors',
-                      filterModelMismatch
-                        ? 'border-orange-500/40 bg-orange-500/12 text-orange-600 dark:bg-orange-500/20 dark:text-orange-300'
-                        : 'border-border bg-background text-muted-foreground hover:bg-muted/50 hover:text-foreground',
-                    )}
-                  >
-                    <AlertTriangle className="size-3.5" />
-                    {t('usage.filterModelMismatch')}
-                  </button>
+                  {showUpstreamModelMismatch ? (
+                    <button
+                      type="button"
+                      title={t('usage.filterModelMismatchHint')}
+                      onClick={() => { setFilterModelMismatch(!filterModelMismatch); setPage(1) }}
+                      className={cn(
+                        'inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-lg border px-2.5 text-[13px] font-medium transition-colors',
+                        filterModelMismatch
+                          ? 'border-orange-500/40 bg-orange-500/12 text-orange-600 dark:bg-orange-500/20 dark:text-orange-300'
+                          : 'border-border bg-background text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                      )}
+                    >
+                      <AlertTriangle className="size-3.5" />
+                      {t('usage.filterModelMismatch')}
+                    </button>
+                  ) : null}
                   </div>
                 </div>
               ) : null}
@@ -2735,7 +2748,7 @@ export default function Usage() {
                             hasCompactionHistory={log.has_compaction_history}
                           />
                           <InternalRequestBadge log={log} />
-                          {log.upstream_model_mismatch === true && log.upstream_response_model && (
+                          {showUpstreamModelMismatch && log.upstream_model_mismatch === true && log.upstream_response_model && (
                             <UpstreamResponseModelBadge log={log} sentModel={log.effective_model || log.model} />
                           )}
                         </div>
@@ -2968,7 +2981,7 @@ export default function Usage() {
                                 {formatServiceTierLabel(t, log.billing_service_tier || log.service_tier)}
                               </Badge>
                             )}
-                            {log.upstream_model_mismatch === true && log.upstream_response_model && (
+                            {showUpstreamModelMismatch && log.upstream_model_mismatch === true && log.upstream_response_model && (
                               <UpstreamResponseModelBadge log={log} sentModel={log.effective_model || log.model} />
                             )}
                           </div>

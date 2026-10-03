@@ -144,13 +144,47 @@ func GrokVisibleModelIDsForAccount(account *auth.Account) []string {
 	if account == nil || !account.IsGrokAPI() {
 		return nil
 	}
-	models := account.GrokCatalogModels()
+	if declared := account.GrokModels(); len(declared) > 0 {
+		return grokDeclaredModelList(account, declared)
+	}
 	if !account.HasGrokModelCatalog() {
 		return DefaultGrokModelIDsForAccount(account)
 	}
-	result := make([]string, 0, len(models)+1)
+	result := grokVisibleCatalogModelIDs(account)
+	if len(result) > 0 {
+		// 没有模型列表时，目录本身就是模型列表。公开名 grok-4.7-fast 通常不在
+		// CLI 目录里，只要目录里还有文本模型就补上。
+		result = append(result, auth.GrokFastPublicModelID)
+	}
+	return auth.NormalizeAccountModels(result)
+}
+
+// grokDeclaredModelList 把账号保存的模型列表当作可调度集合。
+// 列表里的预设名，在目录更窄但仍有文本模型、或还没同步目录时仍然保留。
+// 列表里没有的名字不会因为目录里有 grok-4.7 而被补进来。权威空目录不提供文本模型。
+func grokDeclaredModelList(account *auth.Account, declared []string) []string {
+	if account.HasGrokModelCatalog() && !grokCatalogHasSchedulableModel(account) {
+		return nil
+	}
 	authKind := account.GrokAuthKind()
-	for _, model := range models {
+	preset := DefaultGrokModelIDsForAccount(account)
+	catalogIDs := grokVisibleCatalogModelIDs(account)
+	result := make([]string, 0, len(declared))
+	for _, model := range declared {
+		if !auth.GrokModelAllowedForAuthKind(authKind, model) {
+			continue
+		}
+		if modelIDInList(model, preset) || modelIDInList(model, catalogIDs) {
+			result = append(result, model)
+		}
+	}
+	return auth.NormalizeAccountModels(result)
+}
+
+func grokVisibleCatalogModelIDs(account *auth.Account) []string {
+	authKind := account.GrokAuthKind()
+	var result []string
+	for _, model := range account.GrokCatalogModels() {
 		if model.Hidden || (authKind == auth.GrokAuthKindAPIKey && model.SupportedInAPI != nil && !*model.SupportedInAPI) {
 			continue
 		}
@@ -159,18 +193,7 @@ func GrokVisibleModelIDsForAccount(account *auth.Account) []string {
 		}
 		result = append(result, model.ModelID)
 	}
-	if len(result) > 0 {
-		result = append(result, auth.GrokFastPublicModelID)
-		// The synced CLI catalog is often only grok-4.7. Preset names the
-		// operator put in the whitelist stay visible and routable.
-		preset := DefaultGrokModelIDsForAccount(account)
-		for _, model := range account.GrokModels() {
-			if modelIDInList(model, preset) && auth.GrokModelAllowedForAuthKind(authKind, model) {
-				result = append(result, model)
-			}
-		}
-	}
-	return auth.NormalizeAccountModels(result)
+	return result
 }
 
 func grokCatalogHasSchedulableModel(account *auth.Account) bool {
@@ -200,8 +223,8 @@ func GrokModelRoutable(account *auth.Account, model string, inbound GrokProtocol
 	// A non-empty catalog is authoritative for model presence. Falling back to
 	// built-ins here would resurrect a model explicitly absent (or hidden) in a
 	// successfully fetched account catalog. A built-in preset name is the
-	// exception when the operator whitelisted it and the catalog still exposes
-	// at least one text model.
+	// exception when the operator put it on the model list and the catalog
+	// still exposes at least one text model.
 	if account.HasGrokModelCatalog() {
 		if account.GrokChannelSupportsModel(model) &&
 			modelIDInList(model, DefaultGrokModelIDsForAccount(account)) &&

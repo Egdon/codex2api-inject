@@ -2718,6 +2718,7 @@ export default function Settings() {
     billing_tier_policy: 'actual',
     models_list_read_max_bytes: DEFAULT_MODELS_LIST_READ_MAX_BYTES,
     show_full_usage_numbers: false,
+    show_upstream_model_mismatch: true,
     public_key_usage_page_enabled: true,
     public_image_studio_page_enabled: true,
     public_account_portal_page_enabled: false,
@@ -5463,6 +5464,12 @@ export default function Settings() {
                         <Switch
                           checked={settingsForm.show_full_usage_numbers}
                           onCheckedChange={(checked) => autoSaveBooleanField('show_full_usage_numbers', checked)}
+                        />
+                      </SettingField>
+                      <SettingField label={t('settings.showUpstreamModelMismatch')} description={t('settings.showUpstreamModelMismatchDesc')} layout="switch">
+                        <Switch
+                          checked={settingsForm.show_upstream_model_mismatch}
+                          onCheckedChange={(checked) => autoSaveBooleanField('show_upstream_model_mismatch', checked)}
                         />
                       </SettingField>
                     </div>

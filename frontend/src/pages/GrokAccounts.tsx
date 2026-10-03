@@ -1301,7 +1301,7 @@ function GrokAccounts({
     }
   };
 
-  // 编辑已存在的 Grok 账号：声明模型白名单 / base_url / 代理 / 映射。
+  // 编辑已存在的 Grok 账号：模型列表 / base_url / 代理 / 映射。
   // 后端 UpdateGrokAccount 会整体重写这几项，所以表单需回填当前值再整体提交，避免清空。
   const [editAccount, setEditAccount] = useState<AccountRow | null>(null);
   const [editForm, setEditForm] = useState<{
@@ -4276,7 +4276,7 @@ function GrokAccountCard({
             <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
               {t("grok.colModels")}
             </span>
-            <span className="text-[10px] text-muted-foreground" title={grokModelSummaryTitle(account)}>{account.models?.length ? "白名单" : "自动"}{account.grok_models?.status === "stale" ? " · 过期" : ""}{!account.grok_models || account.grok_models.status === "unknown" ? " · 未同步" : ""}</span>
+            <span className="text-[10px] text-muted-foreground" title={grokModelSummaryTitle(account)}>{account.models?.length ? t("grok.modelSourceList") : t("grok.modelSourceAuto")}{account.grok_models?.status === "stale" ? " · 过期" : ""}{!account.grok_models || account.grok_models.status === "unknown" ? " · 未同步" : ""}</span>
             {models.length === 0 ? (
               <span className="text-[11px] text-muted-foreground/70">
                 {t("grok.noModels")}
@@ -4631,7 +4631,7 @@ function GrokAccountTableRow({
       ) : null}
       {visibleColumns.models ? (
         <TableCell title={grokModelSummaryTitle(account)}>
-          <span className="text-[10px] text-muted-foreground">{account.models?.length ? "白名单" : "自动"}{account.grok_models?.status === "stale" ? " · 过期" : ""}{!account.grok_models || account.grok_models.status === "unknown" ? " · 未同步" : ""}</span>
+          <span className="text-[10px] text-muted-foreground">{account.models?.length ? t("grok.modelSourceList") : t("grok.modelSourceAuto")}{account.grok_models?.status === "stale" ? " · 过期" : ""}{!account.grok_models || account.grok_models.status === "unknown" ? " · 未同步" : ""}</span>
           {models.length === 0 ? (
             <span className="text-[12px] text-muted-foreground/70">
               {t("grok.noModels")}

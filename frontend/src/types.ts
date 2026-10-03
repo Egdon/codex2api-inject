@@ -2303,6 +2303,7 @@ export interface SystemSettings {
   billing_tier_policy: 'actual' | 'requested' | string
   models_list_read_max_bytes: number
   show_full_usage_numbers: boolean
+  show_upstream_model_mismatch: boolean
   public_key_usage_page_enabled: boolean
   public_image_studio_page_enabled: boolean
   public_account_portal_page_enabled: boolean

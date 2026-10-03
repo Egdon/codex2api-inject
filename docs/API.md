@@ -534,7 +534,7 @@ curl 'https://your-host/v1/images/jobs/42/result' \
 }
 ```
 
-池内存在 Grok 账号时会一并列出其文本模型（如 `grok-4.7`、`grok-4.7-fast`）与媒体模型（`grok-imagine-*`）。`grok-4.7-fast` 是对外名字，转发到上游时改成 `grok-4.7-build-fast`。媒体模型与账号的文本模型白名单相互独立：白名单只声明文本模型不会关闭媒体能力；白名单里显式写了 `grok-imagine` 条目时以声明为准收窄。文本白名单如果写了，也要包含 `grok-4.7-fast` 才会暴露这个名字。
+池内存在 Grok 账号时会一并列出其文本模型（如 `grok-4.7`、`grok-4.7-fast`）与媒体模型（`grok-imagine-*`）。`grok-4.7-fast` 是对外名字，转发到上游时改成 `grok-4.7-build-fast`。媒体模型与账号的文本模型列表相互独立：模型列表只写了文本模型不会关闭媒体能力；模型列表里写了 `grok-imagine` 条目时，只开放列表里的媒体模型。文本模型列表如果写了，也要包含 `grok-4.7-fast` 才会暴露这个名字。目录里有 `grok-4.7` 不会把 `grok-4.7-fast` 加进已保存的模型列表。
 
 #### Grok 的 GPT 兼容别名
 
@@ -865,7 +865,7 @@ Codex 的流式 remote compact v2（`POST /v1/responses`，`stream:true`，`inpu
 
 #### POST /api/admin/accounts/grok/batch-models
 
-批量替换 Grok 账号的模型白名单。`ids` 会自动去重；非 Grok 或不存在的账号计入 `failed`，不中断整批。空数组表示清空显式白名单，之后按账号可见目录或首次同步前的保守默认模型集准入。
+批量替换 Grok 账号的模型列表。`ids` 会自动去重；非 Grok 或不存在的账号计入 `failed`，不中断整批。空数组表示清空模型列表，之后按账号可见目录或首次同步前的默认模型列表准入。
 
 **请求:**
 
@@ -879,7 +879,7 @@ Codex 的流式 remote compact v2（`POST /v1/responses`，`stream:true`，`inpu
 | 参数 | 类型 | 必填 | 说明 |
 | ---- | ---- | ---- | ---- |
 | ids | integer[] | 是 | 要更新的 Grok 账号 ID |
-| models | string[] | 否 | 替换后的模型白名单；省略或空数组表示清空显式白名单并恢复目录/默认集准入 |
+| models | string[] | 否 | 替换后的模型列表；省略或空数组表示清空模型列表并恢复目录/默认集准入 |
 
 **响应:**
 

@@ -436,7 +436,8 @@ func excludeClaudeAccountsFilter(filter auth.AccountFilter) auth.AccountFilter {
 }
 
 // grokChannelAccountFilter 是 grok 渠道 Key 的账号过滤器：仅 Grok 账号；
-// mapping 先行，再按账号可见目录准入；显式 Models 白名单只会进一步收窄。
+// mapping 先行。账号写了模型列表时，只调度列表里的模型；列表为空时用可见目录，
+// 还没同步目录时用默认模型列表。
 func grokChannelAccountFilter(model string) auth.AccountFilter {
 	model = strings.TrimSpace(model)
 	return func(account *auth.Account) bool {
@@ -547,10 +548,10 @@ func accountFilterForResponsesModelResolver(effectiveModel string, allowCodexAcc
 }
 
 // relayAccountSupportsModel 判断 relay 风格账号能否服务指定模型。
-// 普通 relay 中转必须显式声明 models 白名单；Grok 账号未声明白名单时按默认
+// 普通 relay 中转必须显式声明 models 列表；Grok 账号没有模型列表时按默认
 // Grok 模型集放行——与 /v1/models 的默认集注册（supportedModelIDs）保持一致，
 // 否则通用 Key 在模型列表里看得到 grok-4.5 却永远调度不到（恒 503）。
-// 声明了白名单的 Grok 账号仍以白名单为准。
+// 写了模型列表的 Grok 账号只调度列表里的模型。
 func relayAccountSupportsModel(account *auth.Account, model string) bool {
 	if account == nil {
 		return false
@@ -577,9 +578,10 @@ func relayAccountSupportsModel(account *auth.Account, model string) bool {
 }
 
 // grokAccountSupportsVisibleModel keeps request admission aligned with the
-// account-scoped catalog exposed by /v1/models. An explicit Models setting is
-// a narrowing whitelist, never authority to invent or unhide a model absent
-// from the account catalog (or conservative no-catalog defaults).
+// account-scoped model list exposed by /v1/models. A saved model list is the
+// set of text models that account can serve. It does not inherit sibling
+// names from the catalog. An empty list still uses the visible catalog, or
+// conservative defaults before the first catalog sync.
 func grokAccountSupportsVisibleModel(account *auth.Account, model string) bool {
 	if account == nil || !account.IsGrokAPI() || !account.GrokChannelSupportsModel(model) {
 		return false
