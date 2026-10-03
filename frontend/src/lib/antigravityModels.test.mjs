@@ -6,7 +6,9 @@ import { ANTIGRAVITY_DEFAULT_MODELS, orderAntigravityTestModels } from './antigr
 test('frontend fallbacks match public backend IDs including Flash 3.8', () => {
   const source = readFileSync(new URL('../../../proxy/antigravity_models.go', import.meta.url), 'utf8')
   const catalog = source.split('var antigravityPublicModelCatalog =')[1].split('var antigravityLogicalCompatibilityCatalog')[0]
-  const ids = Array.from(catalog.matchAll(/id: "([^"]+)"/g), match => match[1])
+  // Claude stays routable in the backend catalog, but the fallback omits it:
+  // accounts migrate between Claude generations, so only a synced catalog knows.
+  const ids = Array.from(catalog.matchAll(/id: "([^"]+)"/g), match => match[1]).filter(id => !id.startsWith('claude-'))
   assert.deepEqual([...ANTIGRAVITY_DEFAULT_MODELS].sort(), ids.sort())
   assert.equal(ANTIGRAVITY_DEFAULT_MODELS[0], 'gemini-3.8-flash-low')
 })
