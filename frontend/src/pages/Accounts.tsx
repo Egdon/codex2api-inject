@@ -873,6 +873,16 @@ function isOAuthAccount(account: AccountRow | null): boolean {
   return account?.account_type === "oauth";
 }
 
+// 跳转链接图标只给 API Key 类账号（有 api-base 可回退）；OAuth 账号不显示，
+// 除非已配置过自定义链接（否则失去打开/清除入口）。
+function showsAccountHrefLink(account: AccountRow): boolean {
+  return Boolean(
+    account.openai_responses_api ||
+      account.grok_api ||
+      account.account_href?.trim(),
+  );
+}
+
 function parseOAuthCallbackParams(rawUrl: string): { code: string; state: string } {
   const raw = rawUrl.trim();
   try {
@@ -1308,23 +1318,25 @@ const AccountTableRow = memo(function AccountTableRow({
                                         ? formatAccountName(account)
                                         : formatAccountListEmail(account)}
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
-                                      title={t("accounts.hrefClickHint")}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        // 点击 = 跳转（account_href → base_url
-                                        // 回退）；Alt/Option+点击 = 打开配置弹窗。
-                                        if (event.altKey) {
-                                          actions.openHrefEditor(account);
-                                        } else {
-                                          actions.openHref(account);
-                                        }
-                                      }}
-                                    >
-                                      <Link2 className="size-3" />
-                                    </button>
+                                    {showsAccountHrefLink(account) && (
+                                      <button
+                                        type="button"
+                                        className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
+                                        title={t("accounts.hrefClickHint")}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          // 点击 = 跳转（account_href → base_url
+                                          // 回退）；Alt/Option+点击 = 打开配置弹窗。
+                                          if (event.altKey) {
+                                            actions.openHrefEditor(account);
+                                          } else {
+                                            actions.openHref(account);
+                                          }
+                                        }}
+                                      >
+                                        <Link2 className="size-3" />
+                                      </button>
+                                    )}
                                   </div>
                                   {account.effective_workspace_id && (
                                     <span
@@ -14070,22 +14082,24 @@ function AccountMobileCard({
               >
                 {displayName}
               </button>
-              <button
-                type="button"
-                className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
-                title={t("accounts.hrefClickHint")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  // 与表格行同口径：点击跳转，Alt/Option+点击配置。
-                  if (event.altKey) {
-                    onOpenHrefEditor();
-                  } else {
-                    onOpenHref();
-                  }
-                }}
-              >
-                <Link2 className="size-3" />
-              </button>
+              {showsAccountHrefLink(account) && (
+                <button
+                  type="button"
+                  className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
+                  title={t("accounts.hrefClickHint")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    // 与表格行同口径：点击跳转，Alt/Option+点击配置。
+                    if (event.altKey) {
+                      onOpenHrefEditor();
+                    } else {
+                      onOpenHref();
+                    }
+                  }}
+                >
+                  <Link2 className="size-3" />
+                </button>
+              )}
             </div>
             {chatgptAccountId && (
               <div
