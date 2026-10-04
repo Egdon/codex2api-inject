@@ -220,9 +220,6 @@ func filterHarvestAccounts(accounts []*auth.Account, cfg Config) []*auth.Account
 		accountID := strings.TrimSpace(acc.AccountID)
 		refresh := strings.TrimSpace(acc.RefreshToken)
 		acc.Mu().RUnlock()
-		if acc.IsExcelBPSConfigured() {
-			continue
-		}
 		if strings.EqualFold(upstream, auth.UpstreamGrok) ||
 			strings.EqualFold(upstream, auth.UpstreamClaude) ||
 			strings.EqualFold(upstream, auth.UpstreamAntigravity) ||
@@ -321,9 +318,6 @@ func randomSID() string {
 }
 
 func (h *Harvester) probe(ctx context.Context, cfg Config, acc *auth.Account, model, inject string) (string, http.Header, error) {
-	if savedBPSFlag(acc) {
-		return "", nil, errors.New("BPS account excluded from legacy harvest")
-	}
 	if h.probeFn != nil {
 		return h.probeFn(ctx, cfg, acc, model, inject)
 	}

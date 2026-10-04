@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	// Retained for historical usage logs, never selected by current routing.
 	UpstreamSourceBPS   = "bps"
 	UpstreamSourceCodex = "codex"
 	UpstreamSourceOther = "other"
@@ -149,6 +150,13 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 	return beginUpstreamTraceWithSource(ctx, account, proxyURL, ws, source)
 }
 
+// RecordWebsocketUpstreamDispatch is called at native WS dial/write boundaries.
+// Preparation and pool-wait failures must leave the last actual source intact.
+// Handshake headers are not per-turn response metadata and are never recorded.
+func RecordWebsocketUpstreamDispatch(ctx context.Context, account *auth.Account, proxyURL string) {
+	beginUpstreamTrace(ctx, account, proxyURL, true)
+}
+
 func beginUpstreamTraceWithSource(ctx context.Context, account *auth.Account, proxyURL string, ws bool, source string) func(*http.Response) {
 	a := upstreamTraceFromContext(ctx)
 	if a == nil || account == nil {
@@ -158,7 +166,7 @@ func beginUpstreamTraceWithSource(ctx context.Context, account *auth.Account, pr
 	if ws && proxyURL == "" {
 		label = auth.ProxyAuditLabel{Name: "unknown"}
 	}
-	if source != UpstreamSourceBPS && resinCarriesEgress(account) {
+	if resinCarriesEgress(account) {
 		label = auth.ProxyAuditLabel{Name: "resin"}
 	}
 	label.Name = security.MaskSensitiveData(label.Name)

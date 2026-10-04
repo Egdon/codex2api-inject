@@ -34,6 +34,11 @@ type ModelPricing struct {
 	// 留空用全局 longContextThreshold（OpenAI 的 272K）；xAI Grok 的分档线是 200K，
 	// 需在规则里单独声明，否则 200K~272K 区间会按短档少算。
 	LongContextThresholdTokens int
+
+	// UltrafastMultiplier 是模型自有的 Ultrafast 档倍率(相对 standard 价)。
+	// 大于 0 时 ultrafast 请求按 standard 价乘此倍率计费,不走 Fast 的 2× 与
+	// priority 价;为 0 的模型 ultrafast 继续跟随 Fast 策略。不参与价格覆盖。
+	UltrafastMultiplier float64
 }
 
 type modelPricingRule struct {
@@ -75,6 +80,18 @@ var (
 			LongOutputPricePerMToken:    15.0,
 			LongCacheReadPricePerMToken: 0.4,
 		}},
+		// gpt-6.1-sol 是独立型号：缓存读取 $0.10、缓存写入 $2.50，
+		// 超过 272K 按输入/缓存 2×、输出 1.5×。不能落入未知 gpt-6 变体的 Astra 兜底。
+		{model: "gpt-6.1-sol", pricing: ModelPricing{
+			InputPricePerMToken:         2.0,
+			OutputPricePerMToken:        10.0,
+			CacheReadPricePerMToken:     0.1,
+			CacheWrite5mPricePerMToken:  2.5,
+			CacheWrite1hPricePerMToken:  2.5,
+			LongInputPricePerMToken:     4.0,
+			LongOutputPricePerMToken:    15.0,
+			LongCacheReadPricePerMToken: 0.2,
+		}},
 		{model: "gpt-6-luna", pricing: ModelPricing{
 			InputPricePerMToken:         0.1,
 			OutputPricePerMToken:        0.5,
@@ -83,12 +100,17 @@ var (
 			LongOutputPricePerMToken:    0.75,
 			LongCacheReadPricePerMToken: 0.02,
 		}},
-		// gpt-6-astra：Codex 长上下文例外，超过 272K 仍按 $10/$50、缓存 $1。
-		// 保留现有 fast（priority）2× 倍率，由 serviceTierCostMultiplier 兜底。
+		// gpt-6-astra：超过 272K 按长上下文价计费（输入/缓存 2×、输出 1.5×），
+		// 即 $20/$75、缓存 $2。fast（priority）2× 倍率由 serviceTierCostMultiplier 兜底；
+		// Ultrafast 档按所处档位 standard 价的 6× 计费。
 		{model: "gpt-6-astra", pricing: ModelPricing{
-			InputPricePerMToken:     10.0,
-			OutputPricePerMToken:    50.0,
-			CacheReadPricePerMToken: 1.0,
+			InputPricePerMToken:         10.0,
+			OutputPricePerMToken:        50.0,
+			CacheReadPricePerMToken:     1.0,
+			LongInputPricePerMToken:     20.0,
+			LongOutputPricePerMToken:    75.0,
+			LongCacheReadPricePerMToken: 2.0,
+			UltrafastMultiplier:         6.0,
 		}},
 		{model: "gpt-5.5", pricing: ModelPricing{
 			InputPricePerMToken:                 5.0,
@@ -418,7 +440,9 @@ func CalculateCostBreakdownWithCacheWrites(inputTokens, outputTokens, cachedToke
 	}
 
 	tierMultiplier := serviceTierCostMultiplier(serviceTier)
-	if usePriorityPricing(serviceTier, pricing) {
+	if normalizeServiceTier(serviceTier) == "ultrafast" && pricing.UltrafastMultiplier > 0 {
+		tierMultiplier = pricing.UltrafastMultiplier
+	} else if usePriorityPricing(serviceTier, pricing) {
 		tierMultiplier = 1
 		if isLong && pricing.LongInputPricePerMTokenPriority > 0 {
 			inputPrice = pricing.LongInputPricePerMTokenPriority
@@ -514,6 +538,8 @@ func normalizeCodexBillingModel(model string) (string, bool) {
 	switch {
 	case strings.HasPrefix(compact, "gpt-6-sol") || strings.HasPrefix(compact, "gpt6-sol"):
 		return "gpt-6-sol", true
+	case strings.HasPrefix(compact, "gpt-6.1-sol") || strings.HasPrefix(compact, "gpt6.1-sol"):
+		return "gpt-6.1-sol", true
 	case strings.HasPrefix(compact, "gpt-6-luna") || strings.HasPrefix(compact, "gpt6-luna"):
 		return "gpt-6-luna", true
 	// 未知 gpt-6 变体按 astra 兜底，避免掉进 $1/$2 的默认价严重低估。
@@ -673,7 +699,8 @@ func usePriorityPricing(serviceTier string, pricing *ModelPricing) bool {
 func serviceTierCostMultiplier(serviceTier string) float64 {
 	switch normalizeServiceTier(serviceTier) {
 	// Ultrafast follows this gateway's Fast pricing policy, including custom
-	// priority prices. This is a billing default, not an official tariff claim.
+	// priority prices, unless the model declares its own UltrafastMultiplier.
+	// This is a billing default, not an official tariff claim.
 	case "priority", "fast", "ultrafast":
 		return 2.0
 	case "flex":

@@ -188,10 +188,12 @@ type Account struct {
 	AntigravityHardBlocked     bool
 	AntigravityHardBlockReason string
 	// antigravityQuota* 是 antigravity_quota 凭据投影出的调度排序键（已用百分比），
-	// 见 scheduling_usage_key.go；随控制面同步快照更新。
+	// 见 scheduling_usage_key.go；随控制面同步快照更新。antigravityModelMaxOutput
+	// 是同一快照里各上游模型自报的最大输出 token(键为小写模型 ID)。
 	antigravityQuotaUsedPercent float64
 	antigravityQuotaObservedAt  time.Time
 	antigravityQuotaValid       bool
+	antigravityModelMaxOutput   map[string]int
 	BaseURL                     string
 	APIKey                      string
 	Models                      []string
@@ -207,10 +209,6 @@ type Account struct {
 	// CodexFingerprintMode 见 codex_fingerprint_mode.go：Codex 官方出站请求的
 	// 设备指纹收敛档位（off / device / session / full），默认 off。
 	CodexFingerprintMode string
-	// ExcelBPSEnabled is the durable opt-in for the Basispoints Responses adapter.
-	ExcelBPSEnabled bool
-	// ExcelBPSOptOut excludes the account from the global Basispoints default.
-	ExcelBPSOptOut bool
 	// Timezone 是账号绑定的 IANA 时区（credentials.timezone）。Codex 官方出站路径据此
 	// 改写请求体 environment_context 里的时区与日期（见 proxy/codex_environment_context.go）；
 	// 空 = 不绑定、透传下游值。Claude 账号沿用同一凭据键做身份标签。
@@ -5594,8 +5592,6 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		CodexPassthroughMode:         codexPassthroughMode,
 		ResponsesUpstreamTransport:   responsesUpstreamTransport,
 		CodexFingerprintMode:         codexFingerprintMode,
-		ExcelBPSEnabled:              row.GetCredentialBool(ExcelBPSCredentialKey),
-		ExcelBPSOptOut:               row.GetCredentialBool(ExcelBPSOptOutCredentialKey),
 		Timezone:                     accountTimezone,
 		ClaudeFingerprintMode:        claudeFingerprintMode,
 		ClaudeAuthKind:               claudeAuthKind,
@@ -9672,7 +9668,7 @@ func stringSliceEqual(a, b []string) bool {
 	return true
 }
 
-// lowerTrimPlan 归一单个套餐名用于匹配:小写去空白。刻意不折叠 prolite→pro,
+// lowerTrimPlan 归一单个套餐名用于匹配:小写去空白。刻意不折叠 prolite/promax→pro,
 // 使 API Key 的套餐过滤与账号列表(Accounts 页)按原始 plan_type 精确匹配的语义一致。
 func lowerTrimPlan(plan string) string {
 	return strings.ToLower(strings.TrimSpace(plan))

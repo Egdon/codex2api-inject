@@ -2,6 +2,7 @@ package turnstate
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -10,230 +11,99 @@ import (
 	"github.com/codex2api/database"
 )
 
-func TestHarvestSavedBPSFlagExcludesEveryAdmission(t *testing.T) {
-	global := auth.ExcelBPSGlobalEnabled()
-	defer auth.SetExcelBPSGlobalEnabled(global)
-	auth.SetExcelBPSGlobalEnabled(false)
-	old := GetConfig()
-	defer SetConfig(old)
-	cfg := DefaultConfig()
-	cfg.ZooUserPrefix, cfg.ZooPassword = "fixture", "fixture"
-	cfg.AutoHarvest = true
-	SetConfig(cfg)
-	acc := testAccount(7)
-	acc.SetExcelBPSEnabled(true)
-	h := NewHarvester(nil, stubStore{accounts: []*auth.Account{acc}}, NewCache())
-	calls := 0
-	h.probeFn = func(context.Context, Config, *auth.Account, string, string) (string, http.Header, error) {
-		calls++
-		return "", nil, nil
-	}
-	// A saved flag remains excluded even when temporarily ineligible for BPS.
-	acc.Mu().Lock()
-	acc.APIKey = "temporarily-ineligible"
-	acc.Mu().Unlock()
-	if acc.IsExcelBPSEnabled() {
-		t.Fatal("fixture should be route-ineligible")
-	}
-	if got := filterHarvestAccounts([]*auth.Account{acc}, cfg); len(got) != 0 {
-		t.Fatal("saved BPS flag ignored")
-	}
-	for _, force := range []bool{false, true} {
-		_, s, err := h.submit(context.Background(), acc.ID(), nil, "", force, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if s != nil {
-			<-s.done
-		}
-		if job := h.CurrentJob(); job != nil && job.Total != 0 {
-			t.Fatalf("manual force=%t admitted BPS: %+v", force, job)
-		}
-		_, s, err = h.submit(context.Background(), 0, []int64{acc.ID()}, "", force, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if s != nil {
-			<-s.done
-		}
-		if job := h.CurrentJob(); job != nil && job.Total != 0 {
-			t.Fatal("selected admission included BPS")
-		}
-	}
-	h.scanAuto(context.Background())
-	h.harvestCell(context.Background(), cfg, acc, cfg.Models[0])
-	if calls != 0 {
-		t.Fatalf("excluded account probed %d times", calls)
-	}
-}
-
-func TestHarvestInheritedBPSIntentExclusion(t *testing.T) {
-	global := auth.ExcelBPSGlobalEnabled()
-	defer auth.SetExcelBPSGlobalEnabled(global)
-	old := GetConfig()
-	defer SetConfig(old)
-	cfg := DefaultConfig()
-	cfg.ZooUserPrefix, cfg.ZooPassword = "fixture", "fixture"
-	cfg.AutoHarvest = true
-	SetConfig(cfg)
-	acc := testAccount(7)
-	h := NewHarvester(nil, stubStore{accounts: []*auth.Account{acc}}, NewCache())
-	calls := 0
-	h.probeFn = func(context.Context, Config, *auth.Account, string, string) (string, http.Header, error) {
-		calls++
-		return "", nil, nil
-	}
-	for _, tc := range []struct {
-		name                         string
-		global, on, optOut, excluded bool
-	}{
-		{"inherit_global_off", false, false, false, false},
-		{"inherit_global_on", true, false, false, true},
-		{"explicit_off_global_on", true, false, true, false},
-		{"explicit_on_global_off", false, true, false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			auth.SetExcelBPSGlobalEnabled(tc.global)
-			acc.SetExcelBPSEnabled(tc.on)
-			acc.SetExcelBPSOptOut(tc.optOut)
-			if got := len(filterHarvestAccounts([]*auth.Account{acc}, cfg)) == 0; got != tc.excluded {
-				t.Fatalf("admission exclusion=%t want %t", got, tc.excluded)
-			}
-			if !tc.excluded {
-				return
-			}
-			// Routing eligibility may vanish temporarily; configured intent must not.
-			acc.Mu().Lock()
-			acc.APIKey = "temporarily-ineligible"
-			acc.Mu().Unlock()
-			defer func() { acc.Mu().Lock(); acc.APIKey = ""; acc.Mu().Unlock() }()
-			if acc.IsExcelBPSEnabled() || !acc.IsExcelBPSConfigured() {
-				t.Fatal("fixture intent/route distinction")
-			}
-			for _, force := range []bool{false, true} {
-				for _, selected := range []bool{false, true} {
-					id := acc.ID()
-					var ids []int64
-					if selected {
-						id = 0
-						ids = []int64{acc.ID()}
-					}
-					_, s, err := h.submit(context.Background(), id, ids, "", force, true)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if s != nil {
-						<-s.done
-					}
-					if job := h.CurrentJob(); job != nil && job.Total != 0 {
-						t.Fatal("configured account admitted")
-					}
-				}
-			}
-			h.scanAuto(context.Background())
-			h.harvestCell(context.Background(), cfg, acc, cfg.Models[0])
-		})
-	}
-	if calls != 0 {
-		t.Fatalf("configured intent allowed %d legacy probes", calls)
-	}
-}
-
-func TestHarvestBPSInflightAndPublicationFence(t *testing.T) {
-	global := auth.ExcelBPSGlobalEnabled()
-	defer auth.SetExcelBPSGlobalEnabled(global)
-	auth.SetExcelBPSGlobalEnabled(false)
-	db, err := database.New("sqlite", filepath.Join(t.TempDir(), "harvest-bps.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	ctx := context.Background()
-	id, err := db.InsertAccountWithCredentials(ctx, "bps-fence", map[string]any{"access_token": "fixture"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	acc := testAccount(id)
-	h := NewHarvester(db, stubStore{accounts: []*auth.Account{acc}}, NewCache())
-	cfg := DefaultConfig()
-	// No Astra policy/model restriction: ticket publication for every model is fenced.
-	model := "gpt-5.6-sol"
-	generation, version := h.retainGeneration(id, model)
-	defer h.releaseGeneration(ticketKey(id, model), generation)
-	task := scheduledCell{key: ticketKey(id, model), accountID: id, model: model, generation: generation, version: version, max: 1, attempt: 1}
-	h.preparePolicyBatch(ctx, &task, cfg)
-	if !task.bpsCaptured || task.policyEpoch != 0 {
-		t.Fatal("disabled-policy batch must still capture BPS revision")
-	}
-	original := CachedTicket{AccountID: id, Model: model, Token: "original"}
-	if !h.publishAttempt(ctx, task, original) {
-		t.Fatal("initial publish failed")
-	}
-	for _, flag := range []bool{true, false} {
-		if err := db.UpdateCredentials(ctx, id, map[string]any{"openai_excel_bps": flag}); err != nil {
-			t.Fatal(err)
-		}
-		// Simulate an outdated runtime store: persistence must be authoritative.
-		if h.harvestBPSCurrent(ctx, acc, task) {
-			t.Fatal("stale generation still probe-eligible")
-		}
-		if h.publishAttempt(ctx, task, CachedTicket{AccountID: id, Model: model, Token: "stale"}) {
-			t.Fatal("stale publication accepted")
-		}
-		if got, _ := h.cache.Get(id, model); got.Token != "original" {
-			t.Fatal("failed publish changed cache")
-		}
-	}
-	h.preparePolicyBatch(ctx, &task, cfg)
-	if !h.harvestBPSCurrent(ctx, acc, task) {
-		t.Fatal("disabling did not enable future harvest")
-	}
-	calls := 0
-	h.probeFn = func(context.Context, Config, *auth.Account, string, string) (string, http.Header, error) {
-		calls++
-		if err := db.UpdateCredentials(ctx, id, map[string]any{"openai_excel_bps": true}); err != nil {
-			t.Fatal(err)
-		}
-		if err := db.UpdateCredentials(ctx, id, map[string]any{"openai_excel_bps": false}); err != nil {
-			t.Fatal(err)
-		}
-		return "old-result", nil, nil
-	}
-	if result := h.attempt(ctx, cfg, acc, task, func() {}); result.phase != "skipped" {
-		t.Fatalf("inflight result survived toggle: %+v", result)
-	}
-	if calls != 1 {
-		t.Fatalf("unexpected probes %d", calls)
-	}
-	if got, _ := h.cache.Get(id, model); got.Token != "original" {
-		t.Fatal("inflight task overwrote cache")
-	}
-	for _, transition := range []string{"global", "opt_out"} {
-		h.preparePolicyBatch(ctx, &task, cfg)
-		for _, value := range []bool{true, false} {
-			if transition == "global" {
-				if err := db.UpdateSystemSettings(ctx, &database.SystemSettings{CodexBasispointsEnabled: value}); err != nil {
-					t.Fatal(err)
-				}
-			} else if err := db.UpdateCredentials(ctx, id, map[string]any{"openai_excel_bps_opt_out": value}); err != nil {
+func TestNativeHarvestPublicationRetainsGenerationFence(t *testing.T) {
+	for _, action := range []string{"paste", "clear", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			db, err := database.New("sqlite", filepath.Join(t.TempDir(), "native-publication.db"))
+			if err != nil {
 				t.Fatal(err)
 			}
-			if h.harvestBPSCurrent(ctx, acc, task) || h.publishAttempt(ctx, task, CachedTicket{AccountID: id, Model: model, Token: "stale-" + transition}) {
-				t.Fatalf("%s ABA allowed stale work", transition)
+			t.Cleanup(func() { _ = db.Close() })
+			ctx := context.Background()
+			id, err := db.InsertAccountWithCredentials(ctx, "native-fixture", map[string]any{"access_token": "fixture"}, "")
+			if err != nil {
+				t.Fatal(err)
 			}
-			if got, _ := h.cache.Get(id, model); got.Token != "original" {
-				t.Fatal("rejected global/optout publication changed cache")
+			acc := testAccount(id)
+			h := NewHarvester(db, stubStore{accounts: []*auth.Account{acc}}, NewCache())
+			model := "gpt-5.4"
+			generation, version := h.retainGeneration(id, model)
+			defer h.releaseGeneration(ticketKey(id, model), generation)
+			task := scheduledCell{key: ticketKey(id, model), accountID: id, model: model, generation: generation, version: version, max: 1, attempt: 1}
+			h.preparePolicyBatch(ctx, &task, DefaultConfig())
+			if !task.expectationCaptured || task.policyEpoch != 0 {
+				t.Fatal("native batch failed to capture its disabled-policy expectation")
 			}
-		}
+			if !h.publishAttempt(ctx, task, CachedTicket{AccountID: id, Model: model, Token: "original"}) {
+				t.Fatal("initial native publication failed")
+			}
+			workCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			want := "original"
+			switch action {
+			case "paste":
+				want = "manual"
+				if _, err := h.ManualPaste(ctx, id, model, want); err != nil {
+					t.Fatal(err)
+				}
+			case "clear":
+				want = ""
+				if err := h.Clear(ctx, id, model); err != nil {
+					t.Fatal(err)
+				}
+			case "cancel":
+				cancel()
+			}
+			if h.publishAttempt(workCtx, task, CachedTicket{AccountID: id, Model: model, Token: "stale"}) {
+				t.Fatal("stale worker publication accepted")
+			}
+			calls := 0
+			h.probeFn = func(context.Context, Config, *auth.Account, string, string) (string, http.Header, error) {
+				calls++
+				return "unexpected", nil, nil
+			}
+			if _, _, err := h.observedProbe(workCtx, DefaultConfig(), acc, task, ""); !errors.Is(err, context.Canceled) || calls != 0 {
+				t.Fatalf("stale work probed: calls=%d err=%v", calls, err)
+			}
+			ticket, exists := h.cache.Get(id, model)
+			rows, err := db.ListTurnStateTickets(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want == "" {
+				if exists || len(rows) != 0 {
+					t.Fatal("stale work resurrected a cleared ticket")
+				}
+			} else if !exists || ticket.Token != want || len(rows) != 1 || rows[0].Token != want {
+				t.Fatal("stale work overwrote cache or persisted ticket")
+			}
+		})
 	}
-	h.preparePolicyBatch(ctx, &task, cfg)
-	if err := db.SaveOpenAIExcelBPSEnabled(ctx, false); err != nil {
+}
+
+func TestNativeHarvestMissingExpectationFailsClosed(t *testing.T) {
+	db, err := database.New("sqlite", filepath.Join(t.TempDir(), "native-expectation.db"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpdateCredentials(ctx, id, map[string]any{"openai_excel_bps": true}); err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { _ = db.Close() })
+	acc := testAccount(1)
+	h := NewHarvester(db, stubStore{accounts: []*auth.Account{acc}}, NewCache())
+	generation, version := h.retainGeneration(acc.ID(), "gpt-5.4")
+	defer h.releaseGeneration(ticketKey(acc.ID(), "gpt-5.4"), generation)
+	task := scheduledCell{key: ticketKey(acc.ID(), "gpt-5.4"), accountID: acc.ID(), model: "gpt-5.4", generation: generation, version: version, max: 1, attempt: 1}
+	calls := 0
+	h.probeFn = func(context.Context, Config, *auth.Account, string, string) (string, http.Header, error) {
+		calls++
+		return "unexpected", nil, nil
 	}
-	if h.harvestBPSCurrent(ctx, acc, task) {
-		t.Fatal("master-off bypassed saved-flag exclusion")
+	if result := h.attempt(context.Background(), DefaultConfig(), acc, task, func() {}); result.phase != "skipped" || calls != 0 {
+		t.Fatalf("uncaptured expectation allowed work: calls=%d result=%+v", calls, result)
+	}
+	if h.publishAttempt(context.Background(), task, CachedTicket{AccountID: acc.ID(), Model: task.model, Token: "unexpected"}) {
+		t.Fatal("uncaptured expectation allowed publication")
+	}
+	if _, exists := h.cache.Get(acc.ID(), task.model); exists {
+		t.Fatal("failed publication changed cache")
 	}
 }

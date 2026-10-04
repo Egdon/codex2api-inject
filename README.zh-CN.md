@@ -590,6 +590,7 @@ codex2api/
 - `docker-compose.yml` 拉取 GHCR 镜像用于部署；`docker-compose.local.yml` 用 `build: .` 做本地构建
 - 前端基路径固定为 `/admin/`，本地开发和生产部署一致
 - 本地手动构建 Go 二进制前需先执行 `frontend/` 的 `npm run build`
+- 手动构建时，用 `VITE_APP_VERSION` 和 Go 的 `-ldflags '-X github.com/codex2api/internal/version.Version=...'` 传入同一版本号，并先构建前端。管理台对正式版本优先显示运行中的后端版本；前后端版本不一致时，版本弹窗会显示前端构建版本并提示重新构建。该提示不会替换已嵌入的旧前端资源，需重新构建前端再编译 Go 才能更新它们。
 - `.env` 只负责端口、数据库、Redis 等物理层配置；业务参数在管理台数据库里维护
 - API Key 以数据库为准，在管理台中配置
 

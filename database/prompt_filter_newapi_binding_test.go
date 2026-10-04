@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
-	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,8 +27,6 @@ type promptFilterBindingDDLDriver struct{}
 type promptFilterBindingDDLConn struct{}
 type legacySecretMigrationCaptureDriver struct{}
 type legacySecretMigrationCaptureConn struct{}
-type legacySecretMigrationCaptureTx struct{}
-type legacySecretMigrationCaptureColumns struct{}
 
 func (promptFilterBindingDDLDriver) Open(string) (driver.Conn, error) {
 	return promptFilterBindingDDLConn{}, nil
@@ -54,20 +51,7 @@ func (legacySecretMigrationCaptureConn) Prepare(string) (driver.Stmt, error) {
 }
 func (legacySecretMigrationCaptureConn) Close() error { return nil }
 func (legacySecretMigrationCaptureConn) Begin() (driver.Tx, error) {
-	return legacySecretMigrationCaptureTx{}, nil
-}
-func (legacySecretMigrationCaptureTx) Commit() error                  { return nil }
-func (legacySecretMigrationCaptureTx) Rollback() error                { return nil }
-func (legacySecretMigrationCaptureColumns) Columns() []string         { return []string{"column_name"} }
-func (legacySecretMigrationCaptureColumns) Close() error              { return nil }
-func (legacySecretMigrationCaptureColumns) Next([]driver.Value) error { return io.EOF }
-func (legacySecretMigrationCaptureConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if strings.Contains(query, "information_schema.columns") && strings.Contains(query, "table_name='system_settings'") {
-		// A fresh PostgreSQL schema has no legacy BPS columns. Let the real
-		// pre-DDL transaction inspect provenance and commit its no-op marker.
-		return legacySecretMigrationCaptureColumns{}, nil
-	}
-	return nil, errors.New("unexpected migration capture query: " + query)
+	return nil, errors.New("unexpected pre-DDL transaction")
 }
 func (legacySecretMigrationCaptureConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
 	legacySecretMigrationQueryMu.Lock()
@@ -75,9 +59,6 @@ func (legacySecretMigrationCaptureConn) ExecContext(_ context.Context, query str
 	legacySecretMigrationQueryMu.Unlock()
 	if strings.Contains(query, "CREATE TABLE IF NOT EXISTS accounts") {
 		return nil, errStopLegacySecretMigrationCapture
-	}
-	if strings.Contains(query, "INSERT INTO data_migrations") {
-		return driver.RowsAffected(1), nil
 	}
 	return driver.RowsAffected(0), nil
 }

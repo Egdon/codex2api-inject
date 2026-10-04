@@ -31,9 +31,9 @@ type grokPreflightResult struct {
 }
 
 // grokDroppedTopLevelFields 是 Codex 管道注入、Grok 上游不接受的顶层字段。
+// prompt_cache_key 不在这里：官方 CLI 每次 /v1/responses 都带，上游用它钉住前缀缓存。
 var grokDroppedTopLevelFields = map[string]struct{}{
 	"client_metadata":   {},
-	"prompt_cache_key":  {},
 	"service_tier":      {},
 	"safety_identifier": {},
 }

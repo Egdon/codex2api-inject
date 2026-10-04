@@ -82,20 +82,62 @@ func routeHeaders(raw map[string]string) http.Header {
 // backend. Missing catalogs use Responses for the conservative built-in model
 // set so existing OAuth/API-key accounts stay usable until sync.
 func ResolveGrokUpstreamRoute(account *auth.Account, model string, inbound GrokProtocol, now time.Time) GrokUpstreamRoute {
+	public := strings.TrimSpace(model)
+	wire := auth.GrokWireModelID(public)
 	baseURL, _ := account.GrokCredentials()
 	resolved := GrokUpstreamRoute{
-		Model: strings.TrimSpace(model), Protocol: GrokProtocolResponses,
+		Model: wire, Protocol: GrokProtocolResponses,
 		BaseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 	}
-	if route, ok := account.GetGrokModelRoute(model, inbound, now); ok {
+	if route, ok := grokAliasRoute(account, public, wire, inbound, now); ok {
 		resolved.Protocol = route.Protocol
 		resolved.BaseURL = route.BaseURL
 		resolved.ExtraHeaders = routeHeaders(route.ExtraHeaders)
 		resolved.Native = route.Native
 	}
-	resolved.ReasoningMenu = account.GrokReasoningMenu(resolved.Model)
+	resolved.Model = wire
+	resolved.ReasoningMenu = account.GrokReasoningMenu(public)
+	if len(resolved.ReasoningMenu) == 0 && wire != public {
+		resolved.ReasoningMenu = grokReasoningMenuFor(account, wire, "grok-4.7")
+	}
 	resolved.Endpoint = auth.OpenAIResponsesEndpoint(resolved.BaseURL, grokProtocolSuffix(resolved.Protocol))
 	return resolved
+}
+
+// grokAliasRoute 先按请求名找目录，再按上游名找。公开别名还可以借用 grok-4.7
+// 的协议和地址，请求体里的模型名仍由调用方写成上游名。
+func grokAliasRoute(account *auth.Account, public, wire string, inbound GrokProtocol, now time.Time) (auth.GrokResolvedRoute, bool) {
+	if route, ok := account.GetGrokModelRoute(public, inbound, now); ok {
+		return route, true
+	}
+	if wire != public {
+		if route, ok := account.GetGrokModelRoute(wire, inbound, now); ok {
+			return route, true
+		}
+		if route, ok := account.GetGrokModelRoute("grok-4.7", inbound, now); ok {
+			return route, true
+		}
+	}
+	return auth.GrokResolvedRoute{}, false
+}
+
+func grokReasoningMenuFor(account *auth.Account, names ...string) []string {
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if menu := account.GrokReasoningMenu(name); len(menu) > 0 {
+			return menu
+		}
+	}
+	return nil
 }
 
 func GrokVisibleModelIDsForAccount(account *auth.Account) []string {
@@ -106,27 +148,66 @@ func GrokVisibleModelIDsForAccount(account *auth.Account) []string {
 	if !account.HasGrokModelCatalog() {
 		return DefaultGrokModelIDsForAccount(account)
 	}
-	result := make([]string, 0, len(models))
+	result := make([]string, 0, len(models)+1)
+	authKind := account.GrokAuthKind()
 	for _, model := range models {
-		if model.Hidden || (account.GrokAuthKind() == auth.GrokAuthKindAPIKey && model.SupportedInAPI != nil && !*model.SupportedInAPI) {
+		if model.Hidden || (authKind == auth.GrokAuthKindAPIKey && model.SupportedInAPI != nil && !*model.SupportedInAPI) {
+			continue
+		}
+		if !auth.GrokModelAllowedForAuthKind(authKind, model.ModelID) {
 			continue
 		}
 		result = append(result, model.ModelID)
 	}
+	if len(result) > 0 {
+		result = append(result, auth.GrokFastPublicModelID)
+		// The synced CLI catalog is often only grok-4.7. Preset names the
+		// operator put in the whitelist stay visible and routable.
+		preset := DefaultGrokModelIDsForAccount(account)
+		for _, model := range account.GrokModels() {
+			if modelIDInList(model, preset) && auth.GrokModelAllowedForAuthKind(authKind, model) {
+				result = append(result, model)
+			}
+		}
+	}
 	return auth.NormalizeAccountModels(result)
+}
+
+func grokCatalogHasSchedulableModel(account *auth.Account) bool {
+	authKind := account.GrokAuthKind()
+	for _, model := range account.GrokCatalogModels() {
+		if model.Hidden || (authKind == auth.GrokAuthKindAPIKey && model.SupportedInAPI != nil && !*model.SupportedInAPI) {
+			continue
+		}
+		if strings.TrimSpace(model.ModelID) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func GrokModelRoutable(account *auth.Account, model string, inbound GrokProtocol, now time.Time) bool {
 	if account == nil || !account.IsGrokAPI() {
 		return false
 	}
+	// 公开别名不要求目录里有同名条目；准入仍由 GrokChannelSupportsModel 把关。
+	if auth.IsGrokFastPublicModel(model) && account.GrokChannelSupportsModel(model) {
+		return true
+	}
 	if _, ok := account.GetGrokModelRoute(model, inbound, now); ok {
 		return true
 	}
 	// A non-empty catalog is authoritative for model presence. Falling back to
 	// built-ins here would resurrect a model explicitly absent (or hidden) in a
-	// successfully fetched account catalog.
+	// successfully fetched account catalog. A built-in preset name is the
+	// exception when the operator whitelisted it and the catalog still exposes
+	// at least one text model.
 	if account.HasGrokModelCatalog() {
+		if account.GrokChannelSupportsModel(model) &&
+			modelIDInList(model, DefaultGrokModelIDsForAccount(account)) &&
+			grokCatalogHasSchedulableModel(account) {
+			return true
+		}
 		return false
 	}
 	return modelIDInList(model, DefaultGrokModelIDsForAccount(account))
@@ -1810,9 +1891,9 @@ func prepareRoutedGrokProtocolRequestWithCompaction(route GrokUpstreamRoute, inb
 			// 实测 preflight 成本 0.06~1.9ms(6KB~544KB 请求体),相对 Grok
 			// 秒级首字可忽略。
 			if route.Protocol == GrokProtocolResponses {
-				return prepareResponses(body), nil
+				return finishGrokRoutedPreflight(route, prepareResponses(body)), nil
 			}
-			return grokPreflightResult{Body: body, TurnIndex: 1, Model: gjson.GetBytes(body, "model").String()}, nil
+			return finishGrokRoutedPreflight(route, grokPreflightResult{Body: body, TurnIndex: 1, Model: gjson.GetBytes(body, "model").String()}), nil
 		}
 		// 非 native 的同协议路由不会直通:响应必须经 adaptGrokProtocolResponse
 		// 投影成规范 Responses SSE 再交给下游翻译器,而该投影只处理 SSE。
@@ -1832,9 +1913,9 @@ func prepareRoutedGrokProtocolRequestWithCompaction(route GrokUpstreamRoute, inb
 			body = forced
 		}
 		if route.Protocol == GrokProtocolResponses {
-			return prepareResponses(body), nil
+			return finishGrokRoutedPreflight(route, prepareResponses(body)), nil
 		}
-		return grokPreflightResult{Body: clampGrokReasoningEffortWithMenu(body, route.ReasoningMenu), TurnIndex: 1, Model: gjson.GetBytes(body, "model").String()}, nil
+		return finishGrokRoutedPreflight(route, grokPreflightResult{Body: clampGrokReasoningEffortWithMenu(body, route.ReasoningMenu), TurnIndex: 1, Model: gjson.GetBytes(body, "model").String()}), nil
 	}
 
 	canonical, err := canonicalGrokResponsesBody(inbound, inboundBody, responsesBody)
@@ -1853,7 +1934,24 @@ func prepareRoutedGrokProtocolRequestWithCompaction(route GrokUpstreamRoute, inb
 		converted = clampGrokReasoningEffortWithMenu(converted, route.ReasoningMenu)
 	}
 	preflight.Body = converted
-	return preflight, nil
+	return finishGrokRoutedPreflight(route, preflight), nil
+}
+
+// finishGrokRoutedPreflight 保证每条 Grok 上游路径都把对外模型名换成线协议名。
+// 跨协议转换会从原始 Responses 体重新带上 grok-4.7-fast，不在这里收口的话
+// 上游会按不存在的公开名返回 404。
+func finishGrokRoutedPreflight(route GrokUpstreamRoute, result grokPreflightResult) grokPreflightResult {
+	model := strings.TrimSpace(route.Model)
+	if model == "" || len(result.Body) == 0 {
+		return result
+	}
+	updated, err := rewriteGrokProtocolModel(result.Body, model)
+	if err != nil {
+		return result
+	}
+	result.Body = updated
+	result.Model = model
+	return result
 }
 
 func prepareRoutedGrokProtocolBody(route GrokUpstreamRoute, inbound GrokProtocol, inboundBody, responsesBody []byte) ([]byte, error) {
@@ -1930,15 +2028,22 @@ func ExecuteGrokProtocolRequest(ctx context.Context, account *auth.Account, inbo
 	if proxyOverride != "" {
 		proxyURL = proxyOverride
 	}
+	conversationBody := inboundBody
+	if len(conversationBody) == 0 {
+		conversationBody = responsesBody
+	}
+	if route.Protocol == GrokProtocolResponses {
+		preflight.Body = ensureGrokPromptCacheKey(preflight.Body, headers, conversationBody)
+	}
 	logGrokPrefixFingerprint(preflight.Body, preflight.TurnIndex, preflight.Model)
 	send := func(payload []byte, clientVersion string) (*http.Response, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, route.Endpoint, bytes.NewReader(payload))
+		if route.Protocol == GrokProtocolResponses {
+			payload = ensureGrokPromptCacheKey(payload, headers, conversationBody)
+		}
+		outbound, encoding := compressGrokRequestBody(account, payload)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, route.Endpoint, bytes.NewReader(outbound))
 		if reqErr != nil {
 			return nil, ErrInternalError("创建请求失败", reqErr)
-		}
-		conversationBody := inboundBody
-		if len(conversationBody) == 0 {
-			conversationBody = responsesBody
 		}
 		applyGrokRequestHeaders(req, account, bearer, headers, conversationBody)
 		if clientVersion != "" {
@@ -1954,6 +2059,9 @@ func ExecuteGrokProtocolRequest(ctx context.Context, account *auth.Account, inbo
 		if clientVersion != "" {
 			req.Header.Set("x-grok-client-version", clientVersion)
 		}
+		if encoding != "" {
+			req.Header.Set("Content-Encoding", encoding)
+		}
 		turnIndex := preflight.TurnIndex
 		if !bytes.Equal(payload, preflight.Body) {
 			turnIndex = grokTurnIndex(payload)
@@ -1966,7 +2074,13 @@ func ExecuteGrokProtocolRequest(ctx context.Context, account *auth.Account, inbo
 		if route.Protocol == GrokProtocolMessages && req.Header.Get("anthropic-version") == "" {
 			req.Header.Set("anthropic-version", "2023-06-01")
 		}
-		if err := ConsumeAPIKeyModelRequestQuota(ctx, preflight.Model); err != nil {
+		// 额度按下游请求的模型名计。grok-4.7-fast 发到上游时会改成
+		// grok-4.7-build-fast，限额仍应命中列表里的那个名字。
+		quotaModel := model
+		if quotaModel == "" {
+			quotaModel = preflight.Model
+		}
+		if err := ConsumeAPIKeyModelRequestQuota(ctx, quotaModel); err != nil {
 			return nil, err
 		}
 		resp, doErr := doTracedUpstreamRequest(getPooledClient(account, proxyURL), req, account, proxyURL)

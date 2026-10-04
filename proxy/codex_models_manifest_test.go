@@ -126,7 +126,7 @@ func TestScopedAntigravityManifestKeepsOnlyAvailableEfforts(t *testing.T) {
 	body, err := buildScopedCodexManifest([]api.Model{
 		{ID: "gemini-3.7-flash-high", OwnedBy: "google"},
 		{ID: "gemini-3.6-flash-medium", OwnedBy: "google"},
-		{ID: "gemini-3.5-flash-low", OwnedBy: "google"},
+		{ID: "gemini-3.8-flash-low", OwnedBy: "google"},
 		{ID: "gemini-3.1-pro-high", OwnedBy: "google"},
 		{ID: "claude-sonnet-4-6", OwnedBy: "google"},
 	})

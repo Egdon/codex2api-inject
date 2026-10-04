@@ -303,8 +303,8 @@ export default function AccountDetailSheet({
         (isGrok && account.grok_auth_kind !== "oauth")),
   );
   // 凭据导出由各 provider 自己决定格式；Claude 使用专用安全导出端点，
-  // Grok 仍由其专用页面处理。旧的 Codex auth.json 行为保持不变。
-  const showAuthJson = Boolean(account && !isGrok);
+  // Grok OAuth 由其页面生成 Grok CLI 格式（API Key 账号没有 CLI 登录态）。
+  const showAuthJson = Boolean(account && (!isGrok || account.grok_auth_kind === "oauth"));
   const showResetCredits = Boolean(account && !isGrok && !isClaude);
   const authJsonDisabled = Boolean(
     account &&

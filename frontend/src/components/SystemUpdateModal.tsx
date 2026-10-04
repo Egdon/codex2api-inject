@@ -13,7 +13,9 @@ const eligible = (info: SystemUpdateInfo | null) => Boolean(info && info.support
   (info.status === 'available' || info.status === 'migration') && info.target_tag && info.plan_token &&
   Date.parse(info.plan_expires_at) > Date.now())
 
-export default function SystemUpdateModal({ show, onClose }: { show: boolean; onClose: () => void }) {
+export default function SystemUpdateModal({ show, onClose, frontendVersion, versionMismatch = false }: {
+  show: boolean; onClose: () => void; frontendVersion?: string; versionMismatch?: boolean
+}) {
   const { t } = useTranslation()
   const { showToast } = useToast()
   const patched = useVersionCheck(undefined, 'patched', show)
@@ -120,6 +122,10 @@ export default function SystemUpdateModal({ show, onClose }: { show: boolean; on
   return <>
     <Modal show={show} title={t('updates.title')} onClose={() => { if (!busy && !waiting) onClose() }} contentClassName="sm:max-w-[760px]">
       <p className="mb-3 text-sm text-muted-foreground">{t('updates.localBuild', { version: build?.version || '—', source: build?.source || '—' })}</p>
+      {versionMismatch && frontendVersion && <div role="status" className="mb-3 rounded-md border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+        <p>{t('common.frontendBuildVersion', { version: frontendVersion })}</p>
+        <p>{t('common.versionMismatch')}</p>
+      </div>}
       <p className="mb-3 break-all text-sm text-muted-foreground">{t('updates.buildMetadata', { base: build?.upstream_base || '—', revision: build?.revision || '—' })}</p>
       <div className="grid gap-3 sm:grid-cols-2">
         {(['patched', 'official'] as const).map(source => {

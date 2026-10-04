@@ -1298,7 +1298,6 @@ func (h *Handler) SetRuntimeCache(tc cache.TokenCache) {
 	if h.cfg != nil && h.cfg.APIKeyAuthCacheEnabled && h.db != nil {
 		h.authCache = newAPIKeyAuthCache(h.db, tc)
 	}
-	excelBPSHealth.configure(h.store, tc)
 }
 
 // NewHandlerWithDeviceProfile 创建处理器（带设备指纹配置）
@@ -4153,9 +4152,6 @@ func (h *Handler) Responses(c *gin.Context) {
 		attemptLogEffectiveModel := logEffectiveModel
 		// relay/Grok 账号默认走 HTTP，这里排除全局强制 WS，避免日志把它们错标成 via_websocket。
 		// 打开了上游 WebSocket 的 OpenAI Responses 中转账号在体积判断之后单独改回 WS。
-		// Excel Basispoints is HTTP/SSE only. Keep the native transport decision so
-		// a pre-output fallback to native Codex retains its normal WS behavior.
-		excelBPSRoute := excelBPSRouteAvailable(account, effectiveModel)
 		useWebsocket := h.shouldUseWebsocketForHTTP() && !wsHTTPFallback.ForceHTTP() && !account.IsRelayStyle()
 		// 生图请求强制走 HTTP：WebSocket 传输大体积图片数据会卡死（issue #220）；
 		// 自然语言生图意图也需保留 image_generation 工具（issue #288）。
@@ -4189,30 +4185,6 @@ func (h *Handler) Responses(c *gin.Context) {
 
 		// 透传下游请求头用于指纹学习
 		downstreamHeaders := c.Request.Header.Clone()
-
-		if excelBPSRoute {
-			bpsBody := codexBody
-			if mappedBody, mappedModel, ok := h.applyAccountModelMappingToBodyForModels(bpsBody, account, logModel, effectiveModel); ok {
-				bpsBody = mappedBody
-				attemptEffectiveModel = mappedModel
-				attemptLogEffectiveModel = usageEffectiveModelForMapping(logModel, attemptEffectiveModel, true)
-			}
-			threadKey := sessionIdentity.affinityID
-			if threadKey == "" {
-				threadKey = affinityKey
-			}
-			scope := fmt.Sprintf("account:%d:key:%d:thread:%s", account.ID(), apiKeyID, affinityKey)
-			// A later previous_response_id must expand a Basispoints turn exactly
-			// like a native one, from the same caller-owned response cache.
-			cacheCompleted := func(completed []byte) {
-				cacheCompletedResponseWithOutputItems(respCacheOwner, []byte(expandedInputRaw), completed, nil)
-			}
-			if reason := excelBPSLiveWebSearchReason(rawBody); reason != "" && c.GetString(excelBPSNativeFallbackKey) == "" {
-				markExcelBPSNativeFallback(c, account, reason)
-			} else if h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, false, isStream, excelBPSConversationScoped(c.Request.Header, sessionIdentity), "/v1/responses", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start, cacheCompleted) {
-				return
-			}
-		}
 
 		if account.IsRelayStyle() {
 			relayContinuationAttempted = true
@@ -6131,23 +6103,6 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		}
 		downstreamHeaders := c.Request.Header.Clone()
 
-		if excelBPSRouteAvailable(account, effectiveModel) {
-			bpsBody := codexBody
-			if mappedBody, mappedModel, ok := h.applyAccountCompactModelMappingToBody(bpsBody, account, routingModel, effectiveModel); ok {
-				bpsBody = mappedBody
-				attemptEffectiveModel = mappedModel
-				attemptLogEffectiveModel = usageEffectiveModelForMapping(logModel, attemptEffectiveModel, true)
-			}
-			threadKey := sessionIdentity.affinityID
-			if threadKey == "" {
-				threadKey = affinityKey
-			}
-			scope := fmt.Sprintf("account:%d:key:%d:thread:%s", account.ID(), apiKeyID, affinityKey)
-			if h.handleExcelBPS(c, account, bpsBody, scope, threadKey, proxyURL, true, false, excelBPSConversationScoped(c.Request.Header, sessionIdentity), "/v1/responses/compact", logModel, attemptEffectiveModel, reasoningEffort, affinityKey, affinityGuard, start, nil) {
-				return
-			}
-		}
-
 		if account.IsOpenAIResponsesAPI() {
 			relayContinuationAttempted = true
 			baseURL, _ := account.OpenAIResponsesCredentials()
@@ -6883,8 +6838,6 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	accountFilter = applyAffinityGroupRouting(c, sessionIdentity, accountFilter)
 	apiKeyID := requestAPIKeyID(c)
 	affinityKey := sessionAffinityKey(sessionIdentity.affinityID, apiKeyID)
-	// A pre-output Basispoints fallback keeps later attempts of this request native.
-	excelBPSFallback := ""
 
 	// 3. 带重试的上游请求
 	maxRetries := h.getMaxRetries()
@@ -7034,16 +6987,26 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		upstreamCtx = context.WithValue(upstreamCtx, encryptedContentSessionKey{}, sessionIdentity.affinityID)
 		upstreamCtx = WithPayloadRuleIdentity(upstreamCtx, attemptIdentity)
 		lastUpstreamCancel = upstreamCancel
-		ttftGuard := newFirstTokenTimeoutGuard(currentFirstTokenTimeout(), upstreamCancel)
+		// 非流式且要下发 Antigravity 思考时上游改取非流式(见下),首个 token 要等整段
+		// 生成完才到,首字超时守卫不适用。
+		bufferAntigravity := account.IsAntigravityAPI() && AntigravityBuffersUpstream(account, isStream, codexBody)
+		var ttftGuard *firstTokenTimeoutGuard
+		if !bufferAntigravity {
+			ttftGuard = newFirstTokenTimeoutGuard(currentFirstTokenTimeout(), upstreamCancel)
+		}
 		var resp *http.Response
 		var reqErr error
 		if account.IsAntigravityAPI() {
 			// Chat 入站已在上面翻译成 Responses 形态，正是 Antigravity 适配器的入参；
 			// 回程走下面的 Responses→Chat 翻译（issue #595）。该翻译只吃 SSE——
 			// TranslateRequest 恒置 stream:true，非流式客户端也是在网关侧聚合的，
-			// 所以上游一律取流，不跟随下游 stream 标志。
+			// 所以上游默认取流，不跟随下游 stream 标志。例外是非流式客户端要思考内容:
+			// 上游流式几乎不下发 thought 摘要,改取非流式再回放成 SSE（issue #752）。
 			// Antigravity 只认原生公共模型 ID，账号级 OpenAI 别名不参与映射。
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(upstreamCtx, func() (*http.Response, error) {
+				if bufferAntigravity {
+					return ExecuteAntigravityResponsesRequestBuffered(upstreamCtx, account, attemptEffectiveModel, codexBody, proxyURL)
+				}
 				return ExecuteAntigravityResponsesRequest(upstreamCtx, account, attemptEffectiveModel, codexBody, true, proxyURL)
 			})
 		} else if isRelayAccount {
@@ -7065,20 +7028,6 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			upstreamCtx = WithCodexTurnStateAffinityKey(upstreamCtx, affinityKey)
 			guardCodexTurnStateEcho(affinityKey, account, downstreamHeaders)
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(upstreamCtx, func() (*http.Response, error) {
-				if excelBPSRouteAvailable(account, effectiveModel) {
-					bpsResp, served, bpsErr := h.openExcelBPSStream(upstreamCtx, c, account, codexBody, excelBPSIngress{
-						Endpoint: "/v1/chat/completions", LogModel: logModel, EffectiveModel: effectiveModel,
-						ReasoningEffort: reasoningEffort, Scope: excelBPSIngressScope(account, apiKeyID, affinityKey),
-						ThreadKey: firstNonEmptyString(sessionIdentity.affinityID, affinityKey), ProxyURL: proxyURL,
-						PersistReplay: excelBPSConversationScoped(c.Request.Header, sessionIdentity), Fallback: &excelBPSFallback,
-					})
-					if served {
-						if bpsErr == nil {
-							useWebsocket, upstreamEndpoint, serviceTier = false, excelBPSUpstreamURL, ""
-						}
-						return bpsResp, bpsErr
-					}
-				}
 				return ExecuteRequest(upstreamCtx, account, upstreamBody, upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
 			})
 		}

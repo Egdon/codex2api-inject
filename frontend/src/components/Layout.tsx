@@ -53,7 +53,7 @@ const mobileMoreNav = navDefs.filter((item) => !mobilePrimaryPathSet.has(item.to
 export default function Layout({ children }: PropsWithChildren) {
   const location = useLocation()
   const { t, i18n } = useTranslation()
-  const { hasUpdate, latestVersion } = useVersionCheck(location.pathname)
+  const { currentVersion, frontendVersion, versionMismatch, hasUpdate, latestVersion } = useVersionCheck(location.pathname)
   const { siteName, siteLogo, backgroundImage, backgroundOpacity, backgroundBlur, backgroundGlassOpacity, backgroundGlassBlur } = useBranding()
   const { theme, toggle } = useTheme()
   const [spinning, setSpinning] = useState(false)
@@ -264,17 +264,18 @@ export default function Layout({ children }: PropsWithChildren) {
                     <div className="relative w-fit">
                       <button
                         type="button"
+                        aria-expanded={showVersionPopover}
+                        aria-haspopup="dialog"
                         className="relative inline-flex cursor-pointer items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary ring-1 ring-primary/10 transition-colors hover:bg-primary/15"
-                        title={hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
+                        title={versionMismatch ? t('common.versionMismatch') : hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
                         tabIndex={sidebarCollapsed ? -1 : 0}
                         onClick={() => setShowVersionPopover((current) => !current)}
                       >
-                        {buildVersionLabel(__APP_VERSION__)}
-                        {hasUpdate && (
-                          <span className="absolute -top-1.5 left-1/2 size-2.5 -translate-x-1/2 rounded-full bg-red-500 shadow-sm ring-2 ring-[hsl(var(--sidebar-background))] animate-pulse" />
+                        {buildVersionLabel(currentVersion)}
+                        {(hasUpdate || versionMismatch) && (
+                          <span aria-hidden="true" className={cn('absolute -top-1.5 left-1/2 size-2.5 -translate-x-1/2 rounded-full shadow-sm ring-2 ring-[hsl(var(--sidebar-background))]', hasUpdate ? 'bg-red-500 animate-pulse' : 'bg-amber-500')} />
                         )}
                       </button>
-
                     </div>
                   </div>
                 </div>
@@ -453,13 +454,15 @@ export default function Layout({ children }: PropsWithChildren) {
               </strong>
               <button
                 type="button"
+                aria-expanded={showVersionPopover}
+                aria-haspopup="dialog"
                 className="relative inline-flex shrink-0 items-center rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary ring-1 ring-primary/10 transition-colors hover:bg-primary/15"
-                title={hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
+                title={versionMismatch ? t('common.versionMismatch') : hasUpdate && latestVersion ? t('common.newVersionAvailable', { version: latestVersion }) : undefined}
                 onClick={() => setShowVersionPopover((current) => !current)}
               >
-                {buildVersionLabel(__APP_VERSION__)}
-                {hasUpdate && (
-                  <span className="absolute -top-1 -right-1 size-2 rounded-full bg-red-500 shadow-sm ring-2 ring-card animate-pulse" />
+                {buildVersionLabel(currentVersion)}
+                {(hasUpdate || versionMismatch) && (
+                  <span aria-hidden="true" className={cn('absolute -top-1 -right-1 size-2 rounded-full shadow-sm ring-2 ring-card', hasUpdate ? 'bg-red-500 animate-pulse' : 'bg-amber-500')} />
                 )}
               </button>
             </div>
@@ -547,7 +550,7 @@ export default function Layout({ children }: PropsWithChildren) {
         </nav>
 
         {/* Mobile more sheet */}
-        <SystemUpdateModal show={showVersionPopover} onClose={() => setShowVersionPopover(false)} />
+        <SystemUpdateModal show={showVersionPopover} onClose={() => setShowVersionPopover(false)} frontendVersion={frontendVersion} versionMismatch={versionMismatch} />
         {mobileMoreOpen && createPortal(
           <div className="fixed inset-0 z-[60] max-lg:block lg:hidden" role="dialog" aria-modal="true" aria-label={t('common.moreMenu')}>
             <button
@@ -616,7 +619,7 @@ export default function Layout({ children }: PropsWithChildren) {
                     {t('common.online')}
                   </span>
                   <span className="font-mono text-[11px] font-semibold">
-                    {buildVersionLabel(__APP_VERSION__)}
+                    {buildVersionLabel(currentVersion)}
                   </span>
                 </div>
               </div>

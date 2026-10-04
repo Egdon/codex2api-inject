@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codex2api/proxy/basispoints"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -1586,9 +1585,8 @@ func dropBareReasoningInputValue(value any) (any, bool, bool) {
 			// 自家输出也从不携带；跨渠道会话中客户端可能裸回灌带 status 的
 			// 外渠道 reasoning 输出（issue #565）。
 			changed := false
-			// BPS adds display-only reasoning content for clients. Native
-			// Responses accepts the encrypted reasoning and summary, but its
-			// input reasoning.content array must be empty.
+			// Responses accepts encrypted reasoning and summary; display-only
+			// content is not accepted when replayed as input.
 			for _, field := range []string{"status", "content"} {
 				if _, has := v[field]; has {
 					delete(v, field)
@@ -2510,13 +2508,6 @@ func prepareResponsesBodyWithOptions(rawBody []byte, opts responsesBodyPrepareOp
 	sanitizeMalformedResponsesFunctionCalls(body)
 	normalizeResponsesInputItemIDs(body)
 	stripResponsesInputInternalMetadata(body)
-	if input, ok := body["input"].([]any); ok {
-		for _, raw := range input {
-			if item, ok := raw.(map[string]any); ok {
-				basispoints.NormalizeAgentMessage(item)
-			}
-		}
-	}
 	dropBareReasoningInputItems(body)
 	// 6c. 修复工具调用/输出的 call_id 配对（issue #414）。
 	// previous_response_id 保留给上游的原生续链场景跳过：历史存于上游服务端，
@@ -3155,8 +3146,10 @@ func billingServiceTierCostRank(tier string) (int, bool) {
 		return 0, true
 	case "", "default", "standard", "auto", "scale":
 		return 1, true
-	case "priority", "ultrafast":
+	case "priority":
 		return 2, true
+	case "ultrafast":
+		return 3, true
 	default:
 		return 1, false
 	}

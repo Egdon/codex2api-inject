@@ -69,34 +69,21 @@ test('single, batch and HTML quality test badges use response fields, not prefer
   assert.doesNotMatch(source('../components/UpstreamSourceBadge.tsx'), /account|openai_excel_bps/)
 })
 
-test('BPS batch hydration uses one lite list, not current-page inference or credential state', () => {
+test('account batch edits no longer hydrate or submit retired BPS preferences', () => {
   const accounts = source('../pages/Accounts.tsx')
-  assert.match(accounts, /api\.getAccounts\(\{ channel: 'codex', view: 'lite' \}\)/)
-  assert.match(accounts, /selectBPSBatchAccounts\(ids, response\.accounts \?\? \[\], batchBPSMode\)/)
-  assert.match(accounts, /delete sharedMetadata\.openai_excel_bps;/)
-  assert.match(accounts, /delete sharedMetadata\.openai_excel_bps_opt_out;/)
-  assert.match(accounts, /ids: \[\.\.\.classified\.unsupportedIDs, \.\.\.classified\.unknownIDs\]/)
-  assert.match(accounts, /result\.unconfirmed \+= payload\.ids\.length/)
-  assert.match(accounts, /unconfirmed: result\.unconfirmed, unsupported, unknown/)
-  assert.doesNotMatch(accounts, /BPSMasterContext|openai_excel_bps_enabled/)
+  assert.doesNotMatch(accounts, /selectBPSBatchAccounts|batchBPSMode|openai_excel_bps|excelBpsBatchDone|BPSMasterContext/)
+  assert.match(accounts, /buildBatchMetadataUpdate\(/)
+  assert.match(accounts, /api\.batchUpdateAccounts\(metadata\)/)
 })
 
-test('all core BPS and upstream source strings exist across supported locales', () => {
+test('historical upstream source strings survive across locales without runtime BPS controls', () => {
   const locales = ['en', 'zh', 'zh-TW'].map((locale) => JSON.parse(source(`../locales/${locale}.json`)))
-  for (const locale of locales) assert.equal('bps' in locale, false)
-  for (const namespace of ['upstreamSource']) {
-    const keys = Object.keys(locales[0][namespace]).sort()
-    for (const locale of locales) {
-      assert.deepEqual(Object.keys(locale[namespace]).sort(), keys)
-      for (const value of Object.values(locale[namespace])) assert.equal(typeof value, 'string')
-    }
-  }
-  const bpsKeys = Object.keys(locales[0].accounts).filter((key) => key.startsWith('excelBps')).sort()
+  const keys = Object.keys(locales[0].upstreamSource).sort()
   for (const locale of locales) {
-    assert.deepEqual(Object.keys(locale.accounts).filter((key) => key.startsWith('excelBps')).sort(), bpsKeys)
-    for (const key of bpsKeys) assert.equal(typeof locale.accounts[key], 'string')
-    for (const count of ['success', 'fail', 'unconfirmed', 'unsupported', 'unknown']) {
-      assert.ok(locale.accounts.excelBpsBatchDone.includes(`{{${count}}}`), count)
-    }
+    assert.equal('bps' in locale, false)
+    assert.deepEqual(Object.keys(locale.upstreamSource).sort(), keys)
+    assert.equal(locale.upstreamSource.bps, 'BPS')
+    for (const value of Object.values(locale.upstreamSource)) assert.equal(typeof value, 'string')
+    assert.deepEqual(Object.keys(locale.accounts).filter(key => key.startsWith('excelBps')), [])
   }
 })

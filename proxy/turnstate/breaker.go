@@ -170,7 +170,7 @@ func networkOutcome(ctx context.Context, hdr http.Header, err error) (observe, f
 }
 
 func (h *Harvester) observedProbe(ctx context.Context, cfg Config, acc *auth.Account, task scheduledCell, inject string) (string, http.Header, error) {
-	if !h.harvestBPSCurrent(ctx, acc, task) {
+	if ctx.Err() != nil || acc == nil || (h.db != nil && !task.expectationCaptured) || !h.generationCurrent(task.key, task.generation, task.version) {
 		return "", nil, context.Canceled
 	}
 	if inject == "" {

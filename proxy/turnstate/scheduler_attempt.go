@@ -59,20 +59,13 @@ func (h *Harvester) publishAttempt(ctx context.Context, task scheduledCell, tick
 	if ctx.Err() != nil || h.generations[task.key] != task.generation || task.generation.version != task.version {
 		return false
 	}
-	if savedBPSFlag(h.store.FindByID(task.accountID)) {
-		return false
-	}
 	if h.db != nil {
-		if !task.bpsCaptured {
+		if !task.expectationCaptured {
 			return false
 		}
-		applied, err := h.db.UpsertHarvestedTurnStateTicket(ctx, ticketRow(ticket), task.expectedGroups.BPSRevision, task.expectedGroups.GlobalBPSRevision)
-		if err != nil || !applied {
+		if err := h.db.UpsertTurnStateTicket(ctx, ticketRow(ticket)); err != nil {
 			return false
 		}
-	}
-	if savedBPSFlag(h.store.FindByID(task.accountID)) {
-		return false
 	}
 	h.cache.Put(ticket)
 	return true
@@ -141,7 +134,7 @@ func (h *Harvester) attempt(ctx context.Context, cfg Config, acc *auth.Account, 
 	if ctx.Err() != nil {
 		return cancelledResult()
 	}
-	if !h.generationCurrent(task.key, task.generation, task.version) || !h.harvestBPSCurrent(ctx, acc, task) {
+	if acc == nil || (h.db != nil && !task.expectationCaptured) || !h.generationCurrent(task.key, task.generation, task.version) {
 		return staleResult()
 	}
 	// Snapshot the provider, region and Litport session for the entire pair.
@@ -162,7 +155,7 @@ func (h *Harvester) attempt(ctx context.Context, cfg Config, acc *auth.Account, 
 	if ctx.Err() != nil {
 		return cancelledResult()
 	}
-	if !h.generationCurrent(task.key, task.generation, task.version) || !h.harvestBPSCurrent(ctx, acc, task) {
+	if acc == nil || (h.db != nil && !task.expectationCaptured) || !h.generationCurrent(task.key, task.generation, task.version) {
 		return staleResult()
 	}
 	detail := ""
@@ -246,23 +239,4 @@ func (h *Harvester) harvestCell(ctx context.Context, cfg Config, acc *auth.Accou
 			return
 		}
 	}
-}
-
-// Configured intent stays excluded despite temporary health/model pauses.
-func savedBPSFlag(acc *auth.Account) bool {
-	return acc != nil && acc.IsExcelBPSConfigured()
-}
-
-func (h *Harvester) harvestBPSCurrent(ctx context.Context, acc *auth.Account, task scheduledCell) bool {
-	if acc == nil || savedBPSFlag(acc) {
-		return false
-	}
-	if h.db == nil {
-		return true
-	}
-	if !task.bpsCaptured || task.expectedGroups.BPSEnabled {
-		return false
-	}
-	current, err := h.db.HarvestBPSCurrent(ctx, task.accountID, task.expectedGroups.BPSRevision, task.expectedGroups.GlobalBPSRevision)
-	return err == nil && current
 }

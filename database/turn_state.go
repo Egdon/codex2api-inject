@@ -154,35 +154,6 @@ func (db *DB) UpsertTurnStateTicket(ctx context.Context, t TurnStateTicket) erro
 	return db.withSQLiteWriteLock(ctx, func() error { return db.upsertTurnStateTicket(ctx, db.conn, t) })
 }
 
-// UpsertHarvestedTurnStateTicket atomically fences workers against saved BPS
-// transitions. The account lock is shared with credential writers; policy rows
-// are always accessed after that lock. Only a committed true result may enter
-// the in-memory cache. Manual ticket operations retain their existing API.
-func (db *DB) UpsertHarvestedTurnStateTicket(ctx context.Context, t TurnStateTicket, expectedRevision, expectedGlobalRevision int64) (applied bool, err error) {
-	err = db.withWriteTx(ctx, func(tx *sql.Tx) error {
-		applied = false
-		if err := db.lockHarvestSettings(ctx, tx); err != nil {
-			return err
-		}
-		if err := db.lockPolicyAccount(ctx, tx, t.AccountID); err != nil {
-			return err
-		}
-		revision, globalRevision, enabled, err := harvestBPSState(ctx, tx, t.AccountID)
-		if err != nil {
-			return err
-		}
-		if enabled || revision != expectedRevision || globalRevision != expectedGlobalRevision {
-			return nil
-		}
-		if err := db.upsertTurnStateTicket(ctx, tx, t); err != nil {
-			return err
-		}
-		applied = true
-		return nil
-	})
-	return applied && err == nil, err
-}
-
 func (db *DB) upsertTurnStateTicket(ctx context.Context, execer sqlExecer, t TurnStateTicket) error {
 	t.Model = strings.TrimSpace(t.Model)
 	if t.AccountID <= 0 || t.Model == "" {

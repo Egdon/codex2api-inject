@@ -91,13 +91,17 @@ jobs:
         working-directory: frontend
         run: npm run typecheck
 
-      - name: Install Chromium for SVG export regression tests
+      - name: Install Chromium for browser regression tests
         working-directory: frontend
         run: npx playwright install --with-deps chromium
 
       - name: Test SVG export in the browser
         working-directory: frontend
         run: npm run test:svg
+
+      - name: Test runtime version diagnostics and patched update plans
+        working-directory: frontend
+        run: npm run test:version
 
       - name: Build frontend
         working-directory: frontend
@@ -173,10 +177,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Test PostgreSQL trace, policies and BPS settings/source isolation
+      - name: Test PostgreSQL trace, policies and retired BPS history compatibility
         env:
           CODEX2API_TEST_POSTGRES_DSN: postgres://codex2api_test:test-only@localhost:5432/codex2api_test?sslmode=disable
-        run: go test -race -count=1 ./database -run '^(TestPostgresTraceAndCapabilities|TestPostgresAstraPolicyPriority|TestPostgresExcelBPSDatabase)$'
+        run: go test -race -count=1 ./database -run '^(TestPostgresTraceAndCapabilities|TestPostgresAstraPolicyPriority|TestPostgresBPSRetirementDatabase)$'
 
   test-race:
     name: test-race (${{ matrix.name }})

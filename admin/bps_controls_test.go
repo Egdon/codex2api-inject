@@ -12,52 +12,54 @@ import (
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
-	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
 
-// Persistence and failure publication now use the upstream
-// codex_basispoints_settings_test.go coverage, not the retired master switch.
-func TestBPSSettingsExposeOnlyUpstreamGlobal(t *testing.T) {
+// Runtime controls are retired; stored flags remain inert historical data.
+// Source filters and response fields still interpret pre-retirement records.
+func TestRetiredBPSSettingsAbsentFromAPI(t *testing.T) {
 	h, _, _ := newImagesSettingsHandler(t)
-	t.Cleanup(func() { proxy.ApplyRuntimeSettings(proxy.DefaultRuntimeSettings()) })
-	response := invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil)
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil || response.Code != http.StatusOK {
-		t.Fatalf("GET settings=%d err=%v", response.Code, err)
+	assertNoControls := func(response *httptest.ResponseRecorder) {
+		t.Helper()
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil || response.Code != http.StatusOK {
+			t.Fatalf("settings status=%d err=%v", response.Code, err)
+		}
+		for _, field := range []string{"openai_excel_bps_enabled", "codex_basispoints_enabled", "codex_basispoints_models", "codex_basispoints_model_whitelist"} {
+			if _, exists := fields[field]; exists {
+				t.Fatalf("retired setting %q remains exposed", field)
+			}
+		}
 	}
-	if _, exists := fields["openai_excel_bps_enabled"]; exists {
-		t.Fatal("retired master setting remains in API")
+	assertNoControls(invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil))
+	update := invokeResponseCacheSettingsAdmin(t, h, http.MethodPut, map[string]any{
+		"site_name": "BPS retirement regression", "codex_basispoints_enabled": true,
+		"openai_excel_bps_enabled": true,
+	})
+	if update.Code != http.StatusOK {
+		t.Fatalf("ordinary settings update status=%d", update.Code)
 	}
-	var global bool
-	if err := json.Unmarshal(fields["codex_basispoints_enabled"], &global); err != nil || global {
-		t.Fatalf("upstream global default=%t err=%v", global, err)
-	}
+	assertNoControls(invokeResponseCacheSettingsAdmin(t, h, http.MethodGet, nil))
 }
 
-func TestBPSAccountEnableEligibilityAndBulkPartialResults(t *testing.T) {
-	oldGlobal := auth.ExcelBPSGlobalEnabled()
-	auth.SetExcelBPSGlobalEnabled(false)
-	t.Cleanup(func() { auth.SetExcelBPSGlobalEnabled(oldGlobal) })
+func TestRetiredBPSAccountFlagsCannotBePatched(t *testing.T) {
 	db := newTestAdminDB(t)
 	ctx := context.Background()
-	oauth, err := db.InsertAccount(ctx, "ordinary", "synthetic-refresh", "")
+	id, err := db.InsertAccount(ctx, "ordinary", "synthetic-refresh", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := db.InsertAccount(ctx, "foreign", "foreign-refresh", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.UpdateCredentials(ctx, foreign, map[string]interface{}{"upstream_type": auth.UpstreamAntigravity, "access_token": "synthetic", auth.ExcelBPSCredentialKey: true}); err != nil {
+	if err := db.UpdateCredentials(ctx, id, map[string]interface{}{
+		"access_token": "synthetic", "openai_excel_bps": true,
+		"openai_excel_bps_opt_out": false,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	store := auth.NewStore(nil, nil, nil)
 	t.Cleanup(store.Stop)
-	account := &auth.Account{DBID: oauth, AccessToken: "synthetic"}
-	store.AddAccount(account)
+	store.AddAccount(&auth.Account{DBID: id, AccessToken: "synthetic"})
 	h := &Handler{db: db, store: store}
-	put := func(id int64, body string) *httptest.ResponseRecorder {
+	put := func(body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
 		c.Params = gin.Params{{Key: "id", Value: fmt.Sprint(id)}}
@@ -65,40 +67,28 @@ func TestBPSAccountEnableEligibilityAndBulkPartialResults(t *testing.T) {
 		h.UpdateAccountScheduler(c)
 		return w
 	}
-	if w := put(foreign, `{"openai_excel_bps":true}`); w.Code != http.StatusBadRequest {
-		t.Fatalf("foreign enable=%d %s", w.Code, w.Body.String())
+	if w := put(`{"openai_excel_bps":false,"openai_excel_bps_opt_out":true}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("retired-only patch status=%d", w.Code)
 	}
-	if w := put(foreign, `{"openai_excel_bps":false,"openai_excel_bps_opt_out":true}`); w.Code != http.StatusOK {
-		t.Fatalf("foreign disable=%d %s", w.Code, w.Body.String())
+	if w := put(`{"score_bias_override":7,"openai_excel_bps":false,"openai_excel_bps_opt_out":true}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("mixed retired scheduler patch status=%d", w.Code)
 	}
-	auth.SetExcelBPSGlobalEnabled(true)
-	if w := put(foreign, `{"openai_excel_bps":false,"openai_excel_bps_opt_out":false}`); w.Code != http.StatusBadRequest {
-		t.Fatalf("foreign inherit with global on=%d %s", w.Code, w.Body.String())
+	if w := put(`{"score_bias_override":7}`); w.Code != http.StatusOK {
+		t.Fatalf("ordinary scheduler update status=%d", w.Code)
 	}
-	if w := put(foreign, `{"openai_excel_bps":false,"openai_excel_bps_opt_out":true}`); w.Code != http.StatusOK {
-		t.Fatalf("foreign explicit off with global on=%d %s", w.Code, w.Body.String())
-	}
-	if w := put(oauth, `{"openai_excel_bps":false,"openai_excel_bps_opt_out":false}`); w.Code != http.StatusOK || !account.IsExcelBPSEnabled() {
-		t.Fatalf("ordinary inherit with global on=%d %s", w.Code, w.Body.String())
-	}
-	auth.SetExcelBPSGlobalEnabled(false)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/batch", strings.NewReader(fmt.Sprintf(`{"ids":[%d,%d,%d],"openai_excel_bps":true}`, oauth, foreign, foreign+1000)))
+	c.Request = httptest.NewRequest(http.MethodPost, "/batch", strings.NewReader(fmt.Sprintf(`{"ids":[%d],"openai_excel_bps":false}`, id)))
 	h.BatchUpdateAccounts(c)
-	var result struct {
-		Success int `json:"success"`
-		Failed  int `json:"failed"`
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("retired-only batch status=%d", w.Code)
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != http.StatusOK || result.Success != 1 || result.Failed != 2 {
-		t.Fatalf("partial response=%s err=%v", w.Body.String(), err)
+	row, err := db.GetAccountByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !account.IsExcelBPSEnabled() {
-		t.Fatal("successful opt-in not published")
-	}
-	row, err := db.GetAccountByID(ctx, foreign)
-	if err != nil || row.GetCredentialBool(auth.ExcelBPSCredentialKey) {
-		t.Fatal("ineligible account changed")
+	if !row.GetCredentialBool("openai_excel_bps") || row.GetCredentialBool("openai_excel_bps_opt_out") {
+		t.Fatal("unknown retired fields altered persisted historical flags")
 	}
 }
 

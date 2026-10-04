@@ -539,6 +539,7 @@ codex2api/
 - `docker-compose.yml` pulls the GHCR image for deployment. `docker-compose.local.yml` uses `build: .` for local source builds.
 - The frontend base path is fixed at `/admin/` for both local development and production.
 - Before manually building the Go binary, run `npm run build` in `frontend/`.
+- For manual builds, pass the same version through `VITE_APP_VERSION` and Go's `-ldflags '-X github.com/codex2api/internal/version.Version=...'`, building the frontend first. For release builds, the dashboard uses the running backend version and shows the frontend build version with a rebuild hint when they differ. This hint does not replace embedded frontend assets; rebuild the frontend and then compile Go to update them.
 - `.env` controls physical runtime settings such as port, database, and Redis. Business settings are stored in the database and managed from the admin dashboard.
 - API keys are stored in the database and configured through the admin dashboard.
 

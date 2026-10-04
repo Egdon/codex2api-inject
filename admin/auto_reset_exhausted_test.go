@@ -358,3 +358,58 @@ func TestExhaustedResetUsage401RefreshAndUnavailableCredits(t *testing.T) {
 		t.Fatal("consumed when upstream reported no applicable credits")
 	}
 }
+
+func TestAutoResetCreditsSkipsDisabledAccounts(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		flag          func(*auth.Account) *int32
+		disableMidRun bool
+		wantQueried   bool
+	}{
+		{"dispatch_paused", func(a *auth.Account) *int32 { return &a.DispatchPaused }, false, false},
+		{"unauthorized_disabled", func(a *auth.Account) *int32 { return &a.Disabled }, false, false},
+		{"paused_during_scan", func(a *auth.Account) *int32 { return &a.DispatchPaused }, true, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			previous := proxy.CurrentRuntimeSettings()
+			t.Cleanup(func() { proxy.ApplyRuntimeSettings(previous) })
+			cfg := proxy.DefaultRuntimeSettings()
+			cfg.AutoResetCreditsEnabled = true
+			cfg.AutoResetCreditsBeforeExpiryMin = 60
+			cfg.AutoResetCreditsOnExhaustionEnabled = true
+			proxy.ApplyRuntimeSettings(cfg)
+			store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2})
+			t.Cleanup(store.Stop)
+			account := &auth.Account{DBID: 73, AccountID: "workspace-73", AccessToken: "fake", PlanType: "plus"}
+			if !tt.disableMidRun {
+				atomic.StoreInt32(tt.flag(account), 1)
+			}
+			store.AddAccount(account)
+			now := time.Now()
+			var queried atomic.Bool
+			h := &Handler{store: store,
+				queryResetCredits: func(context.Context, *auth.Account, string) (*proxy.WhamResetCreditsList, *http.Response, error) {
+					queried.Store(true)
+					if tt.disableMidRun {
+						atomic.StoreInt32(tt.flag(account), 1)
+					}
+					return &proxy.WhamResetCreditsList{AvailableCount: 1, Credits: []proxy.WhamResetCreditItem{{ID: "one", ResetType: "codex_rate_limits", Status: "available", ExpiresAt: now.Add(30 * time.Minute).Format(time.RFC3339)}}}, nil, nil
+				},
+				queryResetUsage: func(context.Context, *auth.Account, string) (*proxy.WhamUsage, *http.Response, error) {
+					u := &proxy.WhamUsage{}
+					u.RateLimit.SecondaryWindow = &proxy.WhamUsageWindow{UsedPercent: 100, LimitWindowSeconds: 604800, ResetAt: now.Add(time.Hour).Unix()}
+					return u, nil, nil
+				},
+				consumeResetCredit: func(context.Context, *auth.Account, string, string) (*proxy.WhamResetResult, *http.Response, error) {
+					t.Error("consumed a reset credit on a disabled account")
+					return nil, nil, errors.New("unexpected consume")
+				},
+			}
+			t.Cleanup(h.WaitAutoResetCredits)
+			stats := h.runAutoResetCreditsScan(context.Background(), now)
+			if stats.Consumed != 0 || stats.Failed != 0 || queried.Load() != tt.wantQueried {
+				t.Fatalf("stats %+v queried=%v", stats, queried.Load())
+			}
+		})
+	}
+}

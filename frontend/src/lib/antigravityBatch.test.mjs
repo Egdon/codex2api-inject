@@ -95,3 +95,15 @@ test("component guards lifecycle, locks synchronously, and only emits outer comp
   assert.match(source, /onClose=\{\(\) => setProgressHidden\(true\)\}/);
   assert.doesNotMatch(source, /AbortController|localStorage|sessionStorage|console\./);
 });
+
+test("batch group creation preserves upstream capability inside the fork confirmation lock", () => {
+  const source = readFileSync(new URL("../components/AntigravityBatchActions.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../pages/AntigravityAccounts.tsx", import.meta.url), "utf8");
+  assert.match(page, /<AntigravityBatchActions[\s\S]*?onCreateGroup=\{createAntigravityGroup\}/);
+  assert.match(source, /onCreateGroup=\{onCreateGroup \? createGroup : undefined\}/);
+  assert.match(source, /if \(!onCreateGroup \|\| lock\.current !== "confirm" \|\| creatingGroupRef\.current\) return null/);
+  assert.match(source, /if \(lock\.current !== "confirm" \|\| creatingGroupRef\.current\) return/);
+  assert.match(source, /if \(creatingGroupRef\.current\) return/);
+  assert.match(source, /finally \{\s*creatingGroupRef\.current = false/);
+  assert.match(source, /groups=\{groups\.filter\(\(group\) => group\.channel === "antigravity"\)\}/);
+});

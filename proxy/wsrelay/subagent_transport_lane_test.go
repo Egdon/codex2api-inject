@@ -149,7 +149,7 @@ func TestSubagentTransportLanesAvoidSharedSessionBusyWait(t *testing.T) {
 			manager.DiscardConnection(parent)
 		})
 		executor := NewExecutorWithManager(manager)
-		if err := executor.sendRequest(parent, []byte(`{"type":"response.create","input":"parent"}`), parentPending.RequestID); err != nil {
+		if err := executor.sendRequest(context.Background(), parent, []byte(`{"type":"response.create","input":"parent"}`), parentPending.RequestID, ""); err != nil {
 			t.Fatalf("send parent request: %v", err)
 		}
 		select {
@@ -167,7 +167,7 @@ func TestSubagentTransportLanesAvoidSharedSessionBusyWait(t *testing.T) {
 		if err != nil {
 			t.Fatalf("child lane waited behind parent: %v", err)
 		}
-		if err := executor.sendRequest(child, []byte(`{"type":"response.create","input":"child"}`), childPending.RequestID); err != nil {
+		if err := executor.sendRequest(ctx, child, []byte(`{"type":"response.create","input":"child"}`), childPending.RequestID, ""); err != nil {
 			t.Fatalf("send child request: %v", err)
 		}
 		select {

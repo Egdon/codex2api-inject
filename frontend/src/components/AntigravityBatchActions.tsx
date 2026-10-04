@@ -25,13 +25,14 @@ export interface AntigravityBatchActionsProps {
   hiddenSelectedCount: number;
   proxies: ProxyRow[];
   groups: AccountGroup[];
+  onCreateGroup?: (name: string) => Promise<number | null>;
   onClearSelection: () => void;
   onChanged: () => Promise<void>;
   onBusyChange?: (busy: boolean) => void;
   onDeleted?: (ids: number[]) => void;
 }
 
-export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount, proxies, groups, onClearSelection, onChanged, onBusyChange, onDeleted }: AntigravityBatchActionsProps) {
+export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount, proxies, groups, onCreateGroup, onClearSelection, onChanged, onBusyChange, onDeleted }: AntigravityBatchActionsProps) {
   const { t } = useTranslation();
   const mounted = useRef(true);
   useEffect(() => {
@@ -43,6 +44,8 @@ export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount,
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [groupIDs, setGroupIDs] = useState<number[]>([]);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const creatingGroupRef = useRef(false);
   const [proxy, setProxy] = useState("");
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [progressHidden, setProgressHidden] = useState(false);
@@ -66,7 +69,7 @@ export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount,
     onBusyChange?.(false);
   };
   const closeConfirmation = () => {
-    if (lock.current !== "confirm") return;
+    if (lock.current !== "confirm" || creatingGroupRef.current) return;
     setConfirmation(null);
     release();
   };
@@ -78,7 +81,21 @@ export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount,
     setConfirmation({ action, accounts });
   };
 
+  const createGroup = async (name: string) => {
+    if (!onCreateGroup || lock.current !== "confirm" || creatingGroupRef.current) return null;
+    creatingGroupRef.current = true;
+    setCreatingGroup(true);
+    try {
+      const id = await onCreateGroup(name);
+      return mounted.current && lock.current === "confirm" ? id : null;
+    } finally {
+      creatingGroupRef.current = false;
+      if (mounted.current) setCreatingGroup(false);
+    }
+  };
+
   const execute = async (action: Action, accounts: AntigravityBatchAccount[], confirmed = false) => {
+    if (creatingGroupRef.current) return;
     if (confirmed) {
       if (lock.current !== "confirm") return;
       lock.current = "running";
@@ -237,8 +254,8 @@ export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount,
     </div>}
     {notice && <div role={notice.error ? "alert" : "status"} className={`rounded-lg border p-3 text-sm ${notice.error ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-border bg-muted/30"}`}>{notice.text}</div>}
     <Modal show={!!confirmation} title={confirmation ? title(confirmation.action) : ""} onClose={closeConfirmation} footer={<>
-      <Button type="button" variant="outline" onClick={closeConfirmation} disabled={busy}>{t("antigravity.batch.cancel")}</Button>
-      <Button type="button" variant={confirmation?.action === "delete" ? "destructive" : "default"} disabled={busy || !confirmation}
+      <Button type="button" variant="outline" onClick={closeConfirmation} disabled={busy || creatingGroup}>{t("antigravity.batch.cancel")}</Button>
+      <Button type="button" variant={confirmation?.action === "delete" ? "destructive" : "default"} disabled={busy || creatingGroup || !confirmation}
         onClick={() => { if (confirmation) void execute(confirmation.action, confirmation.accounts, true); }}>
         {t(confirmation?.action === "groups" && !groupIDs.length ? "antigravity.batch.confirmClearGroups" : confirmation?.action === "proxy" && !proxy.trim() ? "antigravity.batch.confirmClearProxy" : "antigravity.batch.confirm")}
       </Button>
@@ -248,7 +265,10 @@ export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount,
         <p className="text-sm text-muted-foreground">{t(`antigravity.batch.${confirmation.action}Confirm`)}</p>
         {confirmation.action === "groups" && <AccountGroupMultiSelect groups={groups.filter((group) => group.channel === "antigravity")} value={groupIDs} onChange={setGroupIDs}
           placeholder={t("antigravity.batch.chooseGroups")} emptyLabel={t("antigravity.batch.noGroups")}
-          selectedLabel={t("antigravity.batch.groupCount", { count: groupIDs.length })} disabled={busy} />}
+          selectedLabel={t("antigravity.batch.groupCount", { count: groupIDs.length })} disabled={busy || creatingGroup}
+          onCreateGroup={onCreateGroup ? createGroup : undefined}
+          createLabel={t("accounts.groupCreate")} createPlaceholder={t("accounts.groupNamePlaceholder")}
+          creatingLabel={t("accounts.groupCreating")} createEmptyHint={t("accounts.groupCreateInlineEmptyHint")} />}
         {confirmation.action === "proxy" && <ProxyField value={proxy} onChange={setProxy} proxies={proxies} disabled={busy} label={t("antigravity.batch.proxy")} />}
         <ul className="max-h-40 overflow-auto rounded-md bg-muted/40 p-3 text-xs">
           {confirmation.accounts.slice(0, 20).map((account) => <li key={account.id} className="break-all">#{account.id} {account.email || account.name}</li>)}
