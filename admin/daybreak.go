@@ -16,7 +16,7 @@ func (h *Handler) refreshImportedDaybreak(ctx context.Context, id int64) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	snapshot := account.BeginDaybreakObservation()
-	manifest, err := proxy.FetchCodexModelsManifest(ctx, account, h.store.ResolveProxyForAccount(account), "", "")
+	manifest, err := proxy.FetchCodexModelsManifest(ctx, account, h.store.ResolveProxyForAccount(account), "", "", nil)
 	if err == nil {
 		err = (proxy.DaybreakObservation{Account: account, Snapshot: snapshot, Body: manifest.Body}).Save(ctx, h.db)
 		if err == nil {

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
+
+	"github.com/codex2api/auth"
 )
 
 // ==================== 动态 User-Agent 生成 ====================
@@ -143,19 +145,42 @@ func MinimalCodexCLIUserAgentForHeaders() string {
 // when it discovers models. Some Responses gateways apply their official
 // client policy to GET /v1/models before any request body exists, so the
 // installation ID cannot rely on client_metadata from /v1/responses.
-func ApplyCodexModelDiscoveryHeaders(headers http.Header, seed string) {
+//
+// account 可为空（新建账号时尚未落库）。统一身份开关开启时，身份头与中转对话请求
+// 同源（applyOpenAIResponsesRequestHeaders），installation id 与对话请求体
+// client_metadata 取同一个按中转凭据派生的值（issue #774）。
+func ApplyCodexModelDiscoveryHeaders(headers http.Header, account *auth.Account, baseURL, apiKey string) {
 	if headers == nil {
+		return
+	}
+	identity := ResolveCodexMaintenanceIdentity(account, nil)
+	if identity.Unified {
+		headers.Set("User-Agent", identity.UserAgent)
+		if identity.Version != "" {
+			headers.Set("Version", identity.Version)
+			headers.Set("x-codex-app-version", identity.Version)
+		}
+		headers.Set("Originator", identity.Originator)
+		headers.Set(codexInstallationIDHeader, codexRelayInstallationID(baseURL, apiKey))
 		return
 	}
 	version := effectiveLatestCodexCLIVersion()
 	headers.Set("User-Agent", replaceCodexUserAgentVersion(defaultCodexCLIUserAgent, version))
 	headers.Set("Version", version)
 	headers.Set("Originator", Originator)
-	seed = strings.TrimSpace(seed)
-	if seed == "" {
+	seed := strings.TrimSpace(baseURL) + "|" + strings.TrimSpace(apiKey)
+	if seed == "|" {
 		seed = "default"
 	}
 	headers.Set(codexInstallationIDHeader, deriveStableCodexUUID("codex2api:model-discovery-installation:v1:"+seed))
+}
+
+// codexRelayInstallationID 是统一身份开关下中转账号的设备标识：按中转凭据派生，
+// 对话请求体与模型发现请求头取同一值，不随下游 API Key 分裂成多台设备。
+// 真实客户端的 installation id 是 UUIDv4，与 deriveStableCodexUUID 一致。
+func codexRelayInstallationID(baseURL, apiKey string) string {
+	baseURL = strings.ToLower(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	return deriveStableCodexUUID("codex2api:openai-responses-installation:v1:" + baseURL + "|" + strings.TrimSpace(apiKey))
 }
 
 func DefaultCodexUserAgentConfigJSON() string {
