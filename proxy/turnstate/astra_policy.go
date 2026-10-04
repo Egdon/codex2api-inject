@@ -69,7 +69,7 @@ func (h *Harvester) automaticPolicyAllowed(id int64, model string, cfg Config) b
 
 func (h *Harvester) preparePolicyBatch(ctx context.Context, c *scheduledCell, cfg Config) {
 	c.batchID = randomSID() + randomSID()
-	c.bpsCaptured = false
+	c.expectationCaptured = false
 	c.policyEpoch, c.batchSequence = 0, 0
 	c.expectedGroups = database.AstraPolicyExpectation{}
 	c.ordinaryMisses = 0
@@ -81,9 +81,9 @@ func (h *Harvester) preparePolicyBatch(ctx context.Context, c *scheduledCell, cf
 	if err != nil {
 		return
 	} // fail closed: no captured expectation, no mutation
-	c.bpsCaptured = true
+	c.expectationCaptured = true
 	c.expectedGroups = expected
-	if expected.BPSEnabled || !astraPolicyEnabled(cfg) || !strings.EqualFold(c.model, astraModel) {
+	if !astraPolicyEnabled(cfg) || !strings.EqualFold(c.model, astraModel) {
 		return
 	}
 	c.policyEpoch = cfg.astraPolicyEpoch

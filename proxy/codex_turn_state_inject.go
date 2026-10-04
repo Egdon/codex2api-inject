@@ -73,12 +73,6 @@ func prepareCodexTurnStateInjection(ctx context.Context, account *auth.Account, 
 	if account == nil || !turnstate.GetConfig().InjectEnabled {
 		return ctx, requestBody, headers
 	}
-	// Configured BPS intent includes global inheritance, even while the route
-	// is paused, cooling or model-ineligible. Cached harvester tickets can
-	// outlive a settings change, so fence the injection itself as well.
-	if account.IsExcelBPSConfigured() {
-		return withCodexTurnStateInjection(ctx, ""), requestBody, headers
-	}
 	upstreamModel := strings.TrimSpace(gjson.GetBytes(requestBody, "model").String())
 	clientModel := codexClientModelFromContext(ctx)
 	injected := ""

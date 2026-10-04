@@ -25,7 +25,7 @@ func TestModelTraceChallengesUseUniqueSupportedLengths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewModelTraceDetector() error = %v", err)
 	}
-	challenges, err := detector.GenerateChallenges(ModelTraceMaxAttempts)
+	challenges, err := detector.GenerateChallenges(2 * ModelTraceTargetOutputs)
 	if err != nil {
 		t.Fatalf("GenerateChallenges() error = %v", err)
 	}
@@ -49,11 +49,36 @@ func TestModelTraceAnalysisMatchesUpstreamCore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewModelTraceDetector() error = %v", err)
 	}
-	if models := detector.Models(); len(models) != 13 {
-		t.Fatalf("Models() returned %d models, want 13", len(models))
+	if models := detector.Models(); len(models) != 17 {
+		t.Fatalf("Models() returned %d models, want 17", len(models))
 	}
 
-	lengths := []int{310, 311, 312}
+	// Golden values come from upstream static/fingerprint-core.js run against
+	// the same pinned bank, so drift in the Go port shows up here.
+	report, err := detector.Analyze(syntheticModelTraceOutputs(310, 311, 312))
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if report.Prediction != "claude-sonnet-5" || report.FamilyPrediction != "claude" || report.UsedOutputs != 3 || report.Calibration.Queries != 3 {
+		t.Fatalf("Analyze() prediction=%q family=%q outputs=%d queries=%d", report.Prediction, report.FamilyPrediction, report.UsedOutputs, report.Calibration.Queries)
+	}
+	assertModelTraceClose(t, report.Probability, 0.8333973665444901)
+	assertModelTraceClose(t, report.FamilyProbability, 0.8354263908577124)
+	assertModelTraceClose(t, report.Results[0].ProfileSimilarity, 0.5247777892155716)
+
+	single, err := detector.Analyze(syntheticModelTraceOutputs(310))
+	if err != nil {
+		t.Fatalf("Analyze(single) error = %v", err)
+	}
+	if single.Prediction != "gpt-5.6-sol" || single.FamilyPrediction != "claude" || single.UsedOutputs != 1 || single.Calibration.Queries != 1 {
+		t.Fatalf("Analyze(single) prediction=%q family=%q outputs=%d queries=%d", single.Prediction, single.FamilyPrediction, single.UsedOutputs, single.Calibration.Queries)
+	}
+	assertModelTraceClose(t, single.Probability, 0.400810092958018)
+	assertModelTraceClose(t, single.FamilyProbability, 0.5126217933968289)
+	assertModelTraceClose(t, single.Results[0].ProfileSimilarity, 0.29050196506693937)
+}
+
+func syntheticModelTraceOutputs(lengths ...int) []ModelTraceOutput {
 	outputs := make([]ModelTraceOutput, len(lengths))
 	for outputIndex, length := range lengths {
 		var text strings.Builder
@@ -66,16 +91,7 @@ func TestModelTraceAnalysisMatchesUpstreamCore(t *testing.T) {
 		}
 		outputs[outputIndex] = ModelTraceOutput{Text: text.String(), ExpectedCount: length}
 	}
-	report, err := detector.Analyze(outputs)
-	if err != nil {
-		t.Fatalf("Analyze() error = %v", err)
-	}
-	if report.Prediction != "gpt-5.6-sol" || report.FamilyPrediction != "gpt" || report.UsedOutputs != 3 {
-		t.Fatalf("Analyze() prediction=%q family=%q outputs=%d", report.Prediction, report.FamilyPrediction, report.UsedOutputs)
-	}
-	assertModelTraceClose(t, report.Probability, 0.5729222023076296)
-	assertModelTraceClose(t, report.FamilyProbability, 0.5939508610797128)
-	assertModelTraceClose(t, report.Results[0].ProfileSimilarity, 0.5540245094777102)
+	return outputs
 }
 
 func assertModelTraceClose(t *testing.T, got, want float64) {

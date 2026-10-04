@@ -1102,10 +1102,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	if db.isSQLite() {
 		return db.migrateSQLite(ctx)
 	}
-	if err := db.migrateLegacyExcelBPS(ctx); err != nil {
-		return err
-	}
-	query := `
+	query := codexClientVersionCacheSchema + `;
 	CREATE TABLE IF NOT EXISTS accounts (
 		id            SERIAL PRIMARY KEY,
 		name          VARCHAR(255) DEFAULT '',
@@ -1411,7 +1408,6 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS visible_channels_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS channel_test_config TEXT DEFAULT '{}';
 		ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS antigravity_config TEXT DEFAULT '{}';
-		ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS openai_excel_bps_enabled BOOLEAN DEFAULT true;
 		ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS turn_state_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS test_content TEXT DEFAULT 'hi';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
@@ -1505,13 +1501,6 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS public_account_portal_page_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_force_websocket BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_request_compression BOOLEAN DEFAULT TRUE;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_basispoints_enabled BOOLEAN DEFAULT FALSE;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_basispoints_revision BIGINT NOT NULL DEFAULT 0;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_basispoints_models TEXT DEFAULT '';
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_basispoints_403_pause_disabled BOOLEAN DEFAULT FALSE;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_basispoints_403_probe_interval_minutes INT DEFAULT 1;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_basispoints_429_cooldown_seconds INT DEFAULT 5;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_basispoints_cache_creation_as_input BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_ws_weak_network_mode BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_ws_keepalive_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_ws_keepalive_interval_sec INT DEFAULT 60;
@@ -2455,7 +2444,6 @@ type SystemSettings struct {
 	PublicAccountPortalPageEnabled     bool // 账号自助添加公开门户开关，默认 false
 	CodexForceWebsocket                bool // 强制 Codex 上游走 WebSocket（复用连接池），默认 false
 	CodexRequestCompression            bool // HTTP /responses 请求体 zstd 压缩（对齐真实客户端），默认 true
-	CodexBasispointsEnabled            bool // 所有合格 OAuth 账号默认走 Excel Basispoints 适配器，默认 false
 	CodexWSWeakNetworkMode             bool // WS 弱网保守复用模式，默认 false
 	CodexWSKeepaliveEnabled            bool // 启用上游 WS 空闲连接保活（仅 Ping，不发业务帧），默认 false
 	CodexWSKeepaliveIntervalSec        int  // WS 保活 Ping 间隔（秒），默认 60
@@ -2513,21 +2501,6 @@ type SystemSettings struct {
 	AutoResetCreditsEnabled bool
 	// AutoResetCreditsOnExhaustionEnabled consumes a credit after a live window reaches 100%.
 	AutoResetCreditsOnExhaustionEnabled bool
-	// CodexBasispointsModels is the optional global Basispoints model list
-	// (normalized, comma-separated); empty does not restrict models.
-	CodexBasispointsModels string
-	// CodexBasispoints403PauseDisabled turns off the automatic Basispoints pause
-	// after HTTP 403 (stored inverted so zero-value settings keep it on).
-	CodexBasispoints403PauseDisabled bool
-	// CodexBasispointsProbeMinutes is the recovery probe interval
-	// (1-10080 minutes; 0 means the default of 1).
-	CodexBasispointsProbeMinutes int
-	// CodexBasispoints429CooldownSeconds is the route cooldown after a Basispoints
-	// rate limit without Retry-After (1-600 seconds; 0 means the default of 5).
-	CodexBasispoints429CooldownSeconds int
-	// CodexBasispointsCacheWriteAsInput zeroes Basispoints cache-creation
-	// counters in client usage so they bill as ordinary input (default false).
-	CodexBasispointsCacheWriteAsInput bool
 	// AutoResetCreditsBeforeExpiryMin 是进入临期窗口的提前分钟数（默认 60，范围 10-10080）。
 	AutoResetCreditsBeforeExpiryMin int
 	// AutoActivate5hWindowEnabled 控制 5h 窗口重置后是否发送一次最小真实 /responses 以启动下一轮窗口（默认关闭，issue #581）。
@@ -2767,13 +2740,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(NULLIF(TRIM(codex_turn_state_account_mode), ''), 'auto'),
 		       COALESCE(codex_oauth_keepalive_enabled, false),
 		       COALESCE(codex_telemetry_timing_debug, false),
-		       COALESCE(auto_reset_credits_on_exhaustion_enabled, false),
-		       COALESCE(codex_basispoints_enabled, false),
-		       COALESCE(codex_basispoints_models, ''),
-		       COALESCE(codex_basispoints_403_pause_disabled, false),
-		       COALESCE(codex_basispoints_403_probe_interval_minutes, 1),
-		       COALESCE(codex_basispoints_429_cooldown_seconds, 5),
-		       COALESCE(codex_basispoints_cache_creation_as_input, false)
+		       COALESCE(auto_reset_credits_on_exhaustion_enabled, false)
 			FROM system_settings WHERE id = 1
 		`).Scan(
 		&s.SiteName, &s.SiteLogo,
@@ -2861,12 +2828,6 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.CodexOAuthKeepaliveEnabled,
 		&s.CodexTelemetryTimingDebug,
 		&s.AutoResetCreditsOnExhaustionEnabled,
-		&s.CodexBasispointsEnabled,
-		&s.CodexBasispointsModels,
-		&s.CodexBasispoints403PauseDisabled,
-		&s.CodexBasispointsProbeMinutes,
-		&s.CodexBasispoints429CooldownSeconds,
-		&s.CodexBasispointsCacheWriteAsInput,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -3046,8 +3007,6 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		testContent = "hi"
 	}
 	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
-		// The upsert locks settings before any account publication and advances
-		// the BPS fence atomically, including a first insert with global enabled.
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO system_settings (
 				id, site_name, site_logo, max_concurrency, global_rpm, test_model, test_content, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
@@ -3133,16 +3092,9 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					codex_turn_state_account_mode,
 					codex_oauth_keepalive_enabled,
 					codex_telemetry_timing_debug,
-					auto_reset_credits_on_exhaustion_enabled,
-					codex_basispoints_enabled,
-					codex_basispoints_models,
-					codex_basispoints_403_pause_disabled,
-					codex_basispoints_403_probe_interval_minutes,
-					codex_basispoints_429_cooldown_seconds,
-					codex_basispoints_cache_creation_as_input,
-					codex_basispoints_revision
+					auto_reset_credits_on_exhaustion_enabled
 					)
-						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125, $126, $127, $128, $129, $130, $131, $132, CASE WHEN $127 THEN 1 ELSE 0 END)
+						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125, $126)
 				ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -3182,10 +3134,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				prompt_filter_log_matches = EXCLUDED.prompt_filter_log_matches,
 				prompt_filter_max_text_length = EXCLUDED.prompt_filter_max_text_length,
 				prompt_filter_sensitive_words = EXCLUDED.prompt_filter_sensitive_words,
-				prompt_filter_custom_patterns = CASE WHEN $133 THEN system_settings.prompt_filter_custom_patterns ELSE EXCLUDED.prompt_filter_custom_patterns END,
+				prompt_filter_custom_patterns = CASE WHEN $127 THEN system_settings.prompt_filter_custom_patterns ELSE EXCLUDED.prompt_filter_custom_patterns END,
 				prompt_filter_disabled_patterns = EXCLUDED.prompt_filter_disabled_patterns,
 				prompt_filter_review_enabled = EXCLUDED.prompt_filter_review_enabled,
-				prompt_filter_review_api_key = CASE WHEN $134 THEN system_settings.prompt_filter_review_api_key ELSE EXCLUDED.prompt_filter_review_api_key END,
+				prompt_filter_review_api_key = CASE WHEN $128 THEN system_settings.prompt_filter_review_api_key ELSE EXCLUDED.prompt_filter_review_api_key END,
 				prompt_filter_review_base_url = EXCLUDED.prompt_filter_review_base_url,
 				prompt_filter_review_model = EXCLUDED.prompt_filter_review_model,
 				prompt_filter_review_timeout_seconds = EXCLUDED.prompt_filter_review_timeout_seconds,
@@ -3266,14 +3218,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					codex_turn_state_account_mode = EXCLUDED.codex_turn_state_account_mode,
 					codex_oauth_keepalive_enabled = EXCLUDED.codex_oauth_keepalive_enabled,
 					codex_telemetry_timing_debug = EXCLUDED.codex_telemetry_timing_debug,
-					auto_reset_credits_on_exhaustion_enabled = EXCLUDED.auto_reset_credits_on_exhaustion_enabled,
-					codex_basispoints_revision = system_settings.codex_basispoints_revision + CASE WHEN COALESCE(system_settings.codex_basispoints_enabled,false) <> EXCLUDED.codex_basispoints_enabled THEN 1 ELSE 0 END,
-					codex_basispoints_enabled = EXCLUDED.codex_basispoints_enabled,
-					codex_basispoints_models = EXCLUDED.codex_basispoints_models,
-					codex_basispoints_403_pause_disabled = EXCLUDED.codex_basispoints_403_pause_disabled,
-					codex_basispoints_403_probe_interval_minutes = EXCLUDED.codex_basispoints_403_probe_interval_minutes,
-					codex_basispoints_429_cooldown_seconds = EXCLUDED.codex_basispoints_429_cooldown_seconds,
-					codex_basispoints_cache_creation_as_input = EXCLUDED.codex_basispoints_cache_creation_as_input
+					auto_reset_credits_on_exhaustion_enabled = EXCLUDED.auto_reset_credits_on_exhaustion_enabled
 			`, NormalizeSiteName(s.SiteName), strings.TrimSpace(s.SiteLogo),
 			s.MaxConcurrency, s.GlobalRPM, s.TestModel, testContent, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
 			s.AutoCleanUnauthorized, s.AutoCleanRateLimited, s.AdminSecret, s.AutoCleanFullUsage, s.ProxyPoolEnabled,
@@ -3330,12 +3275,6 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 			s.CodexOAuthKeepaliveEnabled,
 			s.CodexTelemetryTimingDebug,
 			s.AutoResetCreditsOnExhaustionEnabled,
-			s.CodexBasispointsEnabled,
-			NormalizeCodexBasispointsModels(s.CodexBasispointsModels),
-			s.CodexBasispoints403PauseDisabled,
-			NormalizeCodexBasispoints403ProbeIntervalMinutes(s.CodexBasispointsProbeMinutes),
-			NormalizeCodexBasispoints429CooldownSeconds(s.CodexBasispoints429CooldownSeconds),
-			s.CodexBasispointsCacheWriteAsInput,
 			s.PreservePromptFilterCustomPatterns,
 			s.PreservePromptFilterReviewAPIKey)
 		return err
@@ -7439,9 +7378,6 @@ func (db *DB) UpdateAccountSchedulerMetadata(ctx context.Context, id int64, scor
 		if len(credentialUpdates) > 0 {
 			current := decodeCredentials(currentRaw)
 			merged := mergeCredentialMaps(cloneCredentialUpdates(current), credentialUpdates)
-			if err := db.markBPSPolicyTransition(ctx, tx, id, current, merged); err != nil {
-				return err
-			}
 			identityChanged := grokIdentityCredentialChanged(current, merged) || codexIdentityCredentialChanged(current, merged)
 			credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
 			if err != nil {
@@ -7679,9 +7615,6 @@ func (db *DB) batchUpdateAccountCredentials(ctx context.Context, tx *sql.Tx, cur
 		// so an idempotent update for one row does not inherit another row's
 		// generation bump.
 		merged := mergeCredentialMaps(cloneCredentialUpdates(credentials), updates)
-		if err := db.markBPSPolicyTransition(ctx, tx, id, credentials, merged); err != nil {
-			return err
-		}
 		identityChanged := grokIdentityCredentialChanged(credentials, merged) || codexIdentityCredentialChanged(credentials, merged)
 		credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
 		if err != nil {
@@ -7872,9 +7805,6 @@ func (db *DB) updateCredentialsReadMerge(ctx context.Context, id int64, credenti
 	}
 
 	merged := mergeCredentialMaps(decodeCredentials(currentRaw), credentials)
-	if err := db.markBPSPolicyTransition(ctx, tx, id, decodeCredentials(currentRaw), merged); err != nil {
-		return err
-	}
 	identityChanged := grokIdentityCredentialChanged(decodeCredentials(currentRaw), merged) || codexIdentityCredentialChanged(decodeCredentials(currentRaw), merged)
 	credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
 	if err != nil {
@@ -7910,11 +7840,7 @@ func (db *DB) updateCredentialsSQLite(ctx context.Context, id int64, credentials
 	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
 		_, hasEmail := credentials["email"]
 		_, hasHeaders := credentials["custom_headers"]
-		_, hasBPS := credentials["openai_excel_bps"]
-		_, hasBPSOptOut := credentials["openai_excel_bps_opt_out"]
-		// Both tri-state keys require the read/merge path so actual intent
-		// transitions atomically advance the legacy-harvester revision fence.
-		if grokIdentityUpdateKeysPresent(credentials) || hasEmail || hasHeaders || hasBPS || hasBPSOptOut {
+		if grokIdentityUpdateKeysPresent(credentials) || hasEmail || hasHeaders {
 			return db.updateCredentialsReadMergeSQLiteTx(ctx, tx, id, credentials)
 		}
 
@@ -7977,9 +7903,6 @@ func (db *DB) updateCredentialsReadMergeSQLiteTx(ctx context.Context, tx *sql.Tx
 
 	current := decodeCredentials(currentRaw)
 	merged := mergeCredentialMaps(decodeCredentials(currentRaw), credentials)
-	if err := db.markBPSPolicyTransition(ctx, tx, id, decodeCredentials(currentRaw), merged); err != nil {
-		return err
-	}
 	identityChanged := grokIdentityCredentialChanged(current, merged) || codexIdentityCredentialChanged(current, merged)
 	credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
 	if err != nil {
@@ -8070,9 +7993,6 @@ func (db *DB) UpdateOpenAIResponsesAccount(ctx context.Context, id int64, name s
 
 		current := decodeCredentials(currentRaw)
 		merged := mergeCredentialMaps(cloneCredentialUpdates(current), credentials)
-		if err := db.markBPSPolicyTransition(ctx, tx, id, current, merged); err != nil {
-			return err
-		}
 		identityChanged := openAIResponsesIdentityCredentialChanged(current, merged)
 		credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
 		if err != nil {
@@ -8124,9 +8044,6 @@ func (db *DB) UpdateOAuthAccountCredentials(ctx context.Context, id int64, crede
 		}
 
 		merged := mergeCredentialMaps(decodeCredentials(currentRaw), credentials)
-		if err := db.markBPSPolicyTransition(ctx, tx, id, decodeCredentials(currentRaw), merged); err != nil {
-			return err
-		}
 		credJSON, err := json.Marshal(encryptSensitiveCredentials(merged))
 		if err != nil {
 			return fmt.Errorf("序列化 credentials 失败: %w", err)

@@ -183,7 +183,11 @@ func antigravityApplyNativeGeminiThinkingConfig(request map[string]any, publicMo
 		return
 	}
 	if level, enabled := antigravityGeminiThinkingLevel(publicModel, wireModel, nil); enabled {
-		genConfig["thinkingConfig"] = map[string]any{"thinkingLevel": level}
+		thinkingConfig := map[string]any{"thinkingLevel": level}
+		if auth.AntigravityExposeThoughts() {
+			thinkingConfig["includeThoughts"] = true
+		}
+		genConfig["thinkingConfig"] = thinkingConfig
 		return
 	}
 	if budget, enabled := antigravityGeminiThinkingBudget(publicModel, wireModel, nil); enabled {

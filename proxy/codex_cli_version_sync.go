@@ -180,11 +180,17 @@ func applyCodexCLIVersion(ctx context.Context, db *database.DB, result *CodexCLI
 // 新间隔从下一轮计时生效，无需重启。环境变量 CODEX_DISABLE_CLI_VERSION_SYNC 为硬开关，优先级最高。
 // proxyResolver 允许调用方注入出站代理（可为 nil）。
 func StartCodexCLIVersionSync(ctx context.Context, db *database.DB, proxyResolver func() string) {
-	if db == nil || CodexCLIVersionSyncDisabled() {
-		return
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if db == nil {
+		return
+	}
+	if err := LoadCodexClientVersionCache(ctx, db); err != nil {
+		fmt.Printf("[codex-client-version-sync] 缓存加载失败: %v\n", err)
+	}
+	if CodexCLIVersionSyncDisabled() {
+		return
 	}
 	resolveProxy := func() string {
 		if proxyResolver == nil {

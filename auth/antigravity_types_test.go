@@ -325,3 +325,20 @@ func TestAntigravityQuotaSnapshotReadsLegacyGroupsAndWritesCanonicalField(t *tes
 		t.Fatalf("canonical quota JSON = %s", encoded)
 	}
 }
+
+func TestAntigravityVersionFromUserAgent(t *testing.T) {
+	for userAgent, want := range map[string]string{
+		"antigravity/hub/2.19.1 windows/amd64": "2.19.1",
+		"antigravity/1.11.3 linux/amd64":       "1.11.3",
+		"custom-client/1.0":                    AntigravityClientVersion,
+		"":                                     AntigravityClientVersion,
+	} {
+		if got := antigravityVersionFromUserAgent(userAgent); got != want {
+			t.Fatalf("antigravityVersionFromUserAgent(%q) = %q, want %q", userAgent, got, want)
+		}
+	}
+	t.Setenv(antigravityUserAgentEnv, "antigravity/hub/9.9.9 darwin/arm64")
+	if got := AntigravityUserAgent(); got != "antigravity/hub/9.9.9 darwin/arm64" {
+		t.Fatalf("env override = %q", got)
+	}
+}

@@ -59,20 +59,9 @@ type ModelPricingOverride struct {
 	LongContextThresholdTokens int `json:"long_context_threshold_tokens,omitempty"`
 }
 
-// NormalizeModelPricingOverride 应用 Codex Astra 的长上下文计费例外。
-// 旧覆盖、手工编辑和官方 API 定价同步都不能重新启用 Astra 的长档；
-// 标准价、priority 价及其他模型的覆盖保持原样。
+// NormalizeModelPricingOverride 保留模型覆盖中的长上下文档位。
+// 长上下文价格由每个模型自己的规则决定，不能对 Astra 做全局清零。
 func NormalizeModelPricingOverride(model string, o ModelPricingOverride) ModelPricingOverride {
-	if discoveredGPTPricingKey(model) != "" || CanonicalBillingModelKey(model) != "gpt-6-astra" {
-		return o
-	}
-	o.InputLong = 0
-	o.CachedInputLong = 0
-	o.OutputLong = 0
-	o.InputLongPriority = 0
-	o.CachedInputLongPriority = 0
-	o.OutputLongPriority = 0
-	o.LongContextThresholdTokens = 0
 	return o
 }
 

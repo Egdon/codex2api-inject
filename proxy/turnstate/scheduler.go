@@ -54,7 +54,7 @@ type harvestCandidate struct {
 }
 
 type scheduledCell struct {
-	bpsCaptured          bool
+	expectationCaptured  bool
 	batchSequence        int64
 	batchID              string
 	policyEpoch          int64
@@ -292,7 +292,7 @@ func (h *Harvester) submit(ctx context.Context, accountID int64, ids []int64, mo
 		task := &scheduledCell{key: key, accountID: c.acc.ID(), model: c.model, manual: manual, force: force, max: cfg.MaxAttempts, generation: generation, version: version}
 		task.syncRegionPlan(cfg)
 		h.preparePolicyBatch(ctx, task, cfg)
-		if h.db != nil && (!task.bpsCaptured || task.expectedGroups.BPSEnabled) {
+		if h.db != nil && !task.expectationCaptured {
 			h.releaseGeneration(task.key, generation)
 			continue
 		}

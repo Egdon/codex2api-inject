@@ -544,6 +544,28 @@ export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   return search
 }
 
+export interface ModelTraceBankInfo {
+  origin: 'embedded' | 'override'
+  revision: string
+  built_at: string
+  models: string[]
+}
+
+export interface ModelTraceBankStatus {
+  active: ModelTraceBankInfo
+  embedded: ModelTraceBankInfo
+  override?: ModelTraceBankInfo
+  override_stale?: boolean
+  override_error?: string
+}
+
+export interface ModelTraceBankUpdateResult extends ModelTraceBankStatus {
+  updated: boolean
+  message: string
+  added_models?: string[]
+  removed_models?: string[]
+}
+
 export const api = {
   getBranding: () => requestPublic<SiteBranding>('/api/branding'),
   // 公开账号自助门户:生成 OpenAI 授权链接(无鉴权)。
@@ -917,9 +939,6 @@ export const api = {
     request<import('./types').SubscriptionRefreshResponse>(`/accounts/${id}/subscription/refresh`, { method: 'POST', timeoutMs: 30_000 }),
   updateAccountScheduler: (id: number, data: UpdateAccountSchedulerRequest) =>
     request<MessageResponse>(`/accounts/${id}/scheduler`, { method: 'PATCH', body: JSON.stringify(data) }),
-  // 立即恢复账号的 Excel BPS 路由(清除 403 自动暂停与 429 冷却)。
-  clearAccountExcelBpsPause: (id: number) =>
-    request<{ message: string; cleared: boolean }>(`/accounts/${id}/bps-pause/clear`, { method: 'POST' }),
   // 设置 OAuth 账号的支持模型白名单;空数组表示清空(该账号可调度所有模型)。返回归一化后的白名单。
   updateAccountModels: (id: number, models: string[]) =>
     request<{ models: string[] }>(`/accounts/${id}/models`, { method: 'PATCH', body: JSON.stringify({ models }) }),
@@ -1040,7 +1059,7 @@ export const api = {
       body: JSON.stringify({ channels }),
     }),
   getAntigravitySettings: () => request<AntigravitySettingsResponse>('/settings/antigravity'),
-  updateAntigravitySettings: (patch: { model_redirects?: Record<string, string>; redirect_overrides_effort?: boolean }) =>
+  updateAntigravitySettings: (patch: { model_redirects?: Record<string, string>; redirect_overrides_effort?: boolean; expose_thoughts?: boolean }) =>
     request<AntigravitySettingsResponse>('/settings/antigravity', {
       method: 'PUT',
       body: JSON.stringify(patch),
@@ -1074,7 +1093,7 @@ export const api = {
   },
   updateAccountCredit: (id: number, data: { credit_enabled: boolean; credit_skip_usage_window: boolean }) =>
     request<MessageResponse>(`/accounts/${id}/credit`, { method: 'PATCH', body: JSON.stringify(data) }),
-  getHealth: () => request<HealthResponse>('/health'),
+  getHealth: (options?: { timeoutMs?: number }) => request<HealthResponse>('/health', options),
   getPromptFilterNewAPIBindings: () =>
     request<PromptFilterNewAPIBindingsResponse>('/prompt-filter/newapi-bindings'),
   getPromptFilterNewAPIBinding: (apiKeyId: number) =>
@@ -1516,7 +1535,7 @@ export const api = {
     request<{ prompt: QualityTestPrompt }>(`/quality-test-prompts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteQualityTestPrompt: (id: number) =>
     request<{ message: string }>(`/quality-test-prompts/${id}`, { method: 'DELETE' }),
-  createQualityTest: (accountId: number, body: { model: string; reasoning_effort: string; prompt: string; prompt_id?: number; preset_key?: string; preset_name?: string }) =>
+  createQualityTest: (accountId: number, body: { model: string; reasoning_effort: string; prompt: string; prompt_id?: number; preset_key?: string; preset_name?: string; timeout_minutes?: number }) =>
     request<{ job: QualityTestJob }>(`/accounts/${accountId}/quality-test`, { method: 'POST', body: JSON.stringify(body) }),
   getQualityTests: (page = 1, filter: QualityTestJobsFilter = {}, signal?: AbortSignal) =>
     request<QualityTestJobsResponse>(`/quality-tests?${qualityTestFilterQuery(page, filter)}`, { signal }),
@@ -1533,13 +1552,7 @@ export const api = {
       updated: boolean
     }>('/codex-cli-version/sync', { method: 'POST' }),
   syncCodexClientVersions: () =>
-    request<Record<'cli' | 'desktop_mac' | 'desktop_windows' | 'vscode', {
-      fetched_version?: string
-      synced_version?: string
-      effective_version: string
-      updated: boolean
-      error?: string
-    }>>('/codex-client-versions/sync', { method: 'POST' }),
+    request<Record<'cli' | 'desktop_mac' | 'desktop_windows' | 'vscode', import('./types').CodexClientVersionSyncResult>>('/codex-client-versions/sync', { method: 'POST' }),
   listModelPricing: () =>
     request<{
       models: Array<{
@@ -1568,6 +1581,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url: url ?? '' }),
     }),
+  getModelTraceBank: () => request<ModelTraceBankStatus>('/modeltrace/bank'),
+  updateModelTraceBank: () =>
+    request<ModelTraceBankUpdateResult>('/modeltrace/bank/update', { method: 'POST', timeoutMs: 120_000 }),
+  resetModelTraceBank: () => request<ModelTraceBankStatus>('/modeltrace/bank', { method: 'DELETE' }),
 	updateOfficialPricingSyncConfig: (config: Pick<OfficialPricingSyncConfig, 'enabled' | 'interval_minutes' | 'include_openai' | 'include_grok' | 'include_claude'>) =>
 		request<OfficialPricingSyncConfig>('/model-pricing/official-sync/config', {
 			method: 'PUT',
@@ -1626,6 +1643,9 @@ export const api = {
   },
   downloadAccountAuthJSON: (id: number) =>
     requestBlob(`/accounts/${id}/auth-json`),
+  // Grok CLI(~/.grok/auth.json)格式;不带 refresh token 时不会与网关争用同一 RT 家族。
+  downloadGrokAuthJSON: (id: number, includeRefreshToken: boolean) =>
+    requestBlob(`/accounts/${id}/grok/auth-json?include_refresh_token=${includeRefreshToken}`),
   /**
    * 导出 Grok 账号凭据。ids 为空则导出全部 Grok 账号。
    * 单个账号返回裸 JSON，多个账号返回 ZIP（内部每账号一个 <邮箱>.json）。

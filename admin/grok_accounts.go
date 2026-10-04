@@ -154,7 +154,7 @@ func grokCredentialsFromRequestWithImportMeta(req *addGrokAccountReq) (map[strin
 		return nil, "", meta, fmt.Errorf("auth_kind 必须是 oauth 或 api_key")
 	}
 
-	models := auth.NormalizeAccountModels(req.Models)
+	models := auth.FilterGrokModelsForAuthKind(req.AuthKind, auth.NormalizeAccountModels(req.Models))
 	for _, model := range models {
 		if err := security.ValidateModelName(model); err != nil {
 			return nil, "", meta, fmt.Errorf("模型名称无效: %s", model)
@@ -231,7 +231,7 @@ func (h *Handler) AddGrokAccount(c *gin.Context) {
 	}
 	h.db.InsertAccountEventAsync(id, "added", "manual_grok")
 
-	models := auth.NormalizeAccountModels(req.Models)
+	models := auth.FilterGrokModelsForAuthKind(req.AuthKind, auth.NormalizeAccountModels(req.Models))
 	acc := grokAccountFromCredentials(id, credentials, req.ProxyURL)
 	acc.Models = models
 	acc.ModelMapping = strings.TrimSpace(req.ModelMapping)
@@ -291,7 +291,11 @@ func (h *Handler) UpdateGrokAccount(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "代理URL无效")
 		return
 	}
-	models := auth.NormalizeAccountModels(req.Models)
+	authKind := auth.GrokAuthKindOAuth
+	if strings.TrimSpace(row.GetCredential("api_key")) != "" || strings.TrimSpace(req.APIKey) != "" {
+		authKind = auth.GrokAuthKindAPIKey
+	}
+	models := auth.FilterGrokModelsForAuthKind(authKind, auth.NormalizeAccountModels(req.Models))
 	for _, model := range models {
 		if err := security.ValidateModelName(model); err != nil {
 			writeError(c, http.StatusBadRequest, fmt.Sprintf("模型名称无效: %s", model))
@@ -390,12 +394,17 @@ func (h *Handler) BatchUpdateGrokModels(c *gin.Context) {
 			failed++
 			continue
 		}
-		if err := h.db.UpdateCredentials(ctx, id, map[string]interface{}{"models": models}); err != nil {
+		authKind := auth.GrokAuthKindOAuth
+		if strings.TrimSpace(row.GetCredential("api_key")) != "" {
+			authKind = auth.GrokAuthKindAPIKey
+		}
+		accountModels := auth.FilterGrokModelsForAuthKind(authKind, models)
+		if err := h.db.UpdateCredentials(ctx, id, map[string]interface{}{"models": accountModels}); err != nil {
 			failed++
 			continue
 		}
 		if h.store != nil {
-			h.store.ApplyAccountModels(id, models)
+			h.store.ApplyAccountModels(id, accountModels)
 		}
 		h.db.InsertAccountEventAsync(id, "updated", "batch_grok_models")
 		success++

@@ -56,7 +56,6 @@ const (
 	antigravityOAuthDailyEndpoint    = "https://daily-cloudcode-pa.googleapis.com"
 	antigravityOAuthSandboxEndpoint  = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 	antigravityOfficialBodyUserAgent = "antigravity"
-	antigravityOfficialHTTPUserAgent = "antigravity/hub/2.9.1 windows/amd64"
 	antigravityZeroWidthSpace        = "\u200B"
 )
 
@@ -98,18 +97,42 @@ func antigravityOAuthEndpointList() []string {
 // ExecuteAntigravityResponsesRequest adapts an OpenAI Responses request to the
 // Cloud Code v1internal Gemini envelope used by both Antigravity projects.
 func ExecuteAntigravityResponsesRequest(ctx context.Context, account *auth.Account, model string, body []byte, stream bool, proxyURL string) (*http.Response, error) {
+	return executeAntigravityResponses(ctx, account, model, body, stream, stream, proxyURL)
+}
+
+// ExecuteAntigravityResponsesRequestBuffered returns the same Responses SSE as
+// a streamed call but reads the upstream answer unstreamed. Cloud Code's
+// streamGenerateContent almost never carries thought summaries while
+// generateContent always does, so a client that waits for the whole answer
+// anyway gets its reasoning this way. API-key accounts keep streaming.
+func ExecuteAntigravityResponsesRequestBuffered(ctx context.Context, account *auth.Account, model string, body []byte, proxyURL string) (*http.Response, error) {
+	return executeAntigravityResponses(ctx, account, model, body, false, true, proxyURL)
+}
+
+// AntigravityBuffersUpstream reports whether a non-streaming Chat/Messages
+// request should use ExecuteAntigravityResponsesRequestBuffered: only when
+// thoughts are exposed for this request on an OAuth account.
+func AntigravityBuffersUpstream(account *auth.Account, downstreamStream bool, body []byte) bool {
+	return !downstreamStream && account != nil && account.AntigravityAuthKind() != auth.AntigravityAuthKindAPIKey &&
+		antigravityExposeThoughtsForRequest(body)
+}
+
+func executeAntigravityResponses(ctx context.Context, account *auth.Account, model string, body []byte, upstreamStream, sseOut bool, proxyURL string) (*http.Response, error) {
 	resetUpstreamAttemptTrace(ctx)
 	if account == nil {
 		return nil, fmt.Errorf("antigravity account is nil")
 	}
 	if account.AntigravityAuthKind() == auth.AntigravityAuthKindAPIKey {
-		return executeAntigravityInteractionsRequest(ctx, account, model, body, stream, proxyURL)
+		return executeAntigravityInteractionsRequest(ctx, account, model, body, sseOut, proxyURL)
 	}
 	project, bearer := account.AntigravityCredentials()
 	if project == "" || bearer == "" {
 		return nil, fmt.Errorf("antigravity account %d has no project_id or access token", account.ID())
 	}
-	gemini, err := responsesToGeminiInternal(body, project, model)
+	// One snapshot per request keeps the upstream includeThoughts flag and the
+	// downstream reasoning output consistent if the switch flips mid-stream.
+	exposeThoughts := antigravityExposeThoughtsForRequest(body)
+	gemini, err := responsesToGeminiInternalWithThoughts(body, project, model, account, exposeThoughts)
 	if err != nil {
 		return nil, err
 	}
@@ -123,13 +146,29 @@ func ExecuteAntigravityResponsesRequest(ctx context.Context, account *auth.Accou
 	// custom_tool_call by name and will not accept a function_call for a tool it
 	// declared as custom.
 	customTools := antigravityCustomToolNames(body)
-	return executeAntigravityOAuthRequest(ctx, account, payload, antigravityOAuthGenerateCall(stream), proxyURL, wireModel, func(resp *http.Response, stream bool, _ string) (*http.Response, error) {
+	return executeAntigravityOAuthRequest(ctx, account, payload, antigravityOAuthGenerateCall(upstreamStream), proxyURL, wireModel, func(resp *http.Response, stream bool, _ string) (*http.Response, error) {
+		if !stream && sseOut {
+			// A generateContent body has the shape of one streamed chunk; replay
+			// it as a single compact SSE event through the stream converter.
+			raw, readErr := readBoundedAntigravityBody(resp.Body, antigravityResponseBodyLimit)
+			if readErr != nil {
+				return nil, fmt.Errorf("read Antigravity JSON response: %w", readErr)
+			}
+			var compact bytes.Buffer
+			if compactErr := json.Compact(&compact, raw); compactErr != nil {
+				return nil, fmt.Errorf("decode Antigravity JSON response: %w", compactErr)
+			}
+			event := append(append([]byte("data: "), compact.Bytes()...), '\n', '\n')
+			resp.Body = io.NopCloser(bytes.NewReader(event))
+			resp.ContentLength = -1
+			stream = true
+		}
 		if stream {
-			resp.Body = newAntigravitySSEResponseBodyWithCustomTools(resp.Body, customTools, publicModel)
+			resp.Body = newAntigravitySSEResponseBodyWithThoughts(resp.Body, customTools, exposeThoughts, publicModel)
 			resp.Header.Set("Content-Type", "text/event-stream")
 			return resp, nil
 		}
-		converted, convertErr := newAntigravityJSONResponseBodyWithCustomTools(resp.Body, publicModel, customTools)
+		converted, convertErr := newAntigravityJSONResponseBodyWithThoughts(resp.Body, publicModel, customTools, exposeThoughts)
 		if convertErr != nil {
 			return nil, convertErr
 		}
@@ -199,7 +238,7 @@ func executeAntigravityOAuthRequest(ctx context.Context, account *auth.Account, 
 				}
 				req.Header.Set("Authorization", "Bearer "+bearer)
 				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("User-Agent", antigravityOfficialHTTPUserAgent)
+				req.Header.Set("User-Agent", auth.AntigravityUserAgent())
 				if useUserProject {
 					req.Header.Set("x-goog-user-project", project)
 				}
@@ -470,6 +509,27 @@ func executeAntigravityInteractionsRequest(ctx context.Context, account *auth.Ac
 }
 
 func responsesToGeminiInternal(raw []byte, project, model string) (map[string]any, error) {
+	return responsesToGeminiInternalForAccount(raw, project, model, nil)
+}
+
+// antigravityExposeThoughtsForRequest reports whether Gemini thought parts are
+// requested from upstream and forwarded as reasoning output. The channel switch
+// gates it, and a client asking for reasoning.summary "none" opts out.
+func antigravityExposeThoughtsForRequest(raw []byte) bool {
+	if !auth.AntigravityExposeThoughts() {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(gjson.GetBytes(raw, "reasoning.summary").String()), "none")
+}
+
+// responsesToGeminiInternalForAccount caps max_output_tokens at the limit the
+// account's synchronized catalog reports for the wire model, falling back to
+// the static per-family limit when the catalog has none.
+func responsesToGeminiInternalForAccount(raw []byte, project, model string, account *auth.Account) (map[string]any, error) {
+	return responsesToGeminiInternalWithThoughts(raw, project, model, account, antigravityExposeThoughtsForRequest(raw))
+}
+
+func responsesToGeminiInternalWithThoughts(raw []byte, project, model string, account *auth.Account, exposeThoughts bool) (map[string]any, error) {
 	var in map[string]any
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, fmt.Errorf("decode Responses request: %w", err)
@@ -649,7 +709,11 @@ func responsesToGeminiInternal(raw []byte, project, model string) (map[string]an
 	isGeminiModel := strings.HasPrefix(strings.ToLower(strings.TrimSpace(wireModel)), "gemini-")
 	if n, ok := in["max_output_tokens"].(float64); ok && !isGeminiModel {
 		maxOutputTokens := int(n)
-		if limit := antigravityGeminiMaxOutputTokens(wireModel); maxOutputTokens > limit {
+		limit, ok := account.AntigravityModelMaxOutputTokens(wireModel)
+		if !ok {
+			limit = antigravityGeminiMaxOutputTokens(wireModel)
+		}
+		if maxOutputTokens > limit {
 			maxOutputTokens = limit
 		}
 		generationConfig["maxOutputTokens"] = maxOutputTokens
@@ -658,7 +722,11 @@ func responsesToGeminiInternal(raw []byte, project, model string) (map[string]an
 		generationConfig["temperature"] = t
 	}
 	if level, enabled := antigravityGeminiThinkingLevel(model, wireModel, reasoning); enabled {
-		generationConfig["thinkingConfig"] = map[string]any{"thinkingLevel": level}
+		thinkingConfig := map[string]any{"thinkingLevel": level}
+		if exposeThoughts {
+			thinkingConfig["includeThoughts"] = true
+		}
+		generationConfig["thinkingConfig"] = thinkingConfig
 	} else if thinkingBudget, enabled := antigravityGeminiThinkingBudget(model, wireModel, reasoning); enabled {
 		generationConfig["thinkingConfig"] = map[string]any{
 			"includeThoughts": true,
@@ -947,12 +1015,6 @@ func antigravityGeminiThinkingBudget(requestedModel, wireModel string, reasoning
 		}
 		effort := antigravityGeminiReasoningTier(reasoning)
 		switch strings.ToLower(strings.TrimSpace(wireModel)) {
-		case "gemini-3.5-flash-extra-low":
-			budget = 1000
-		case "gemini-3.5-flash-low":
-			budget = 4000
-		case "gemini-3-flash-agent":
-			budget = 10000
 		case "gemini-3.6-flash-low":
 			budget = 4096
 		case "gemini-3.6-flash-medium":
@@ -990,12 +1052,6 @@ func antigravityGeminiThinkingBudget(requestedModel, wireModel string, reasoning
 func antigravityGeminiThinkingBudgetCap(model string) int {
 	name := strings.ToLower(strings.TrimSpace(model))
 	switch name {
-	case "gemini-3.5-flash-extra-low":
-		return 1000
-	case "gemini-3.5-flash-low":
-		return 4000
-	case "gemini-3-flash-agent":
-		return 10000
 	case "gemini-3.6-flash-low":
 		return 4096
 	case "gemini-3.6-flash-medium":
@@ -1631,10 +1687,16 @@ func newAntigravityJSONResponseBody(r io.ReadCloser, model string) (io.ReadClose
 // freeform tool names declared by the request, so their calls are rebuilt as
 // custom_tool_call instead of function_call.
 func newAntigravityJSONResponseBodyWithCustomTools(r io.ReadCloser, model string, customTools map[string]bool) (io.ReadCloser, error) {
+	return newAntigravityJSONResponseBodyWithThoughts(r, model, customTools, false)
+}
+
+// newAntigravityJSONResponseBodyWithThoughts additionally places Gemini thought
+// parts in a leading reasoning output item when exposeThoughts is set.
+func newAntigravityJSONResponseBodyWithThoughts(r io.ReadCloser, model string, customTools map[string]bool, exposeThoughts bool) (io.ReadCloser, error) {
 	// Reading the complete upstream body may block until generation finishes.
 	// Freeze the synthetic Responses creation time before that work starts.
 	createdAt := time.Now().Unix()
-	return newAntigravityJSONResponseBodyAtWithCustomTools(r, model, createdAt, customTools)
+	return newAntigravityJSONResponseBodyAtWithThoughts(r, model, createdAt, customTools, exposeThoughts)
 }
 
 func newAntigravityJSONResponseBodyAt(r io.ReadCloser, model string, createdAt int64) (io.ReadCloser, error) {
@@ -1642,6 +1704,10 @@ func newAntigravityJSONResponseBodyAt(r io.ReadCloser, model string, createdAt i
 }
 
 func newAntigravityJSONResponseBodyAtWithCustomTools(r io.ReadCloser, model string, createdAt int64, customTools map[string]bool) (io.ReadCloser, error) {
+	return newAntigravityJSONResponseBodyAtWithThoughts(r, model, createdAt, customTools, false)
+}
+
+func newAntigravityJSONResponseBodyAtWithThoughts(r io.ReadCloser, model string, createdAt int64, customTools map[string]bool, exposeThoughts bool) (io.ReadCloser, error) {
 	body, err := readBoundedAntigravityBody(r, antigravityResponseBodyLimit)
 	if err != nil {
 		return nil, fmt.Errorf("read Antigravity JSON response: %w", err)
@@ -1654,6 +1720,10 @@ func newAntigravityJSONResponseBodyAtWithCustomTools(r io.ReadCloser, model stri
 		env = v
 	}
 	text := extractGeminiText(env)
+	thoughts := ""
+	if exposeThoughts {
+		thoughts = extractGeminiThoughts(env)
+	}
 	functionCalls := extractGeminiFunctionCalls(env, customTools)
 	finishReason := geminiFinishReason(env)
 	blocked := geminiBlocked(env)
@@ -1666,10 +1736,17 @@ func newAntigravityJSONResponseBodyAtWithCustomTools(r io.ReadCloser, model stri
 		// Safety/policy rejected candidate text must never be exposed in a failed
 		// response. The terminal error is the only safe downstream payload.
 		text = ""
+		thoughts = ""
 		functionCalls = nil
 	}
 	message := map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}}}
-	output := make([]any, 0, 1+len(functionCalls))
+	output := make([]any, 0, 2+len(functionCalls))
+	if thoughts != "" {
+		output = append(output, map[string]any{
+			"id": "rs_ag_" + antigravityRandomHex(12), "type": "reasoning",
+			"summary": []any{map[string]any{"type": "summary_text", "text": thoughts}},
+		})
+	}
 	if text != "" || len(functionCalls) == 0 {
 		output = append(output, message)
 	}
@@ -1817,6 +1894,17 @@ type antigravitySSEBody struct {
 	// customTools holds the tool names the request declared as freeform, so a
 	// Gemini functionCall for one of them is rebuilt as custom_tool_call.
 	customTools map[string]bool
+	// exposeThoughts forwards Gemini thought parts as a reasoning output item
+	// placed ahead of the assistant message.
+	exposeThoughts   bool
+	reasoning        strings.Builder
+	reasoningID      string
+	reasoningStarted bool
+	reasoningDone    bool
+	reasoningIndex   int
+	messageIndex     int
+	// nextOutputIndex hands out output_index values in the order items open.
+	nextOutputIndex int
 }
 
 func newAntigravitySSEResponseBody(r io.ReadCloser, model ...string) io.ReadCloser {
@@ -1826,16 +1914,22 @@ func newAntigravitySSEResponseBody(r io.ReadCloser, model ...string) io.ReadClos
 // newAntigravitySSEResponseBodyWithCustomTools additionally carries the set of
 // freeform tool names declared by the request.
 func newAntigravitySSEResponseBodyWithCustomTools(r io.ReadCloser, customTools map[string]bool, model ...string) io.ReadCloser {
+	return newAntigravitySSEResponseBodyWithThoughts(r, customTools, false, model...)
+}
+
+func newAntigravitySSEResponseBodyWithThoughts(r io.ReadCloser, customTools map[string]bool, exposeThoughts bool, model ...string) io.ReadCloser {
 	modelID := ""
 	if len(model) > 0 {
 		modelID = strings.TrimSpace(model[0])
 	}
 	return &antigravitySSEBody{
 		source: r, reader: bufio.NewReader(r),
-		responseID: "resp_ag_" + antigravityRandomHex(12),
-		messageID:  "msg_ag_" + antigravityRandomHex(12),
-		model:      modelID, createdAt: time.Now().Unix(),
-		customTools: customTools,
+		responseID:  "resp_ag_" + antigravityRandomHex(12),
+		messageID:   "msg_ag_" + antigravityRandomHex(12),
+		reasoningID: "rs_ag_" + antigravityRandomHex(12),
+		model:       modelID, createdAt: time.Now().Unix(),
+		customTools:    customTools,
+		exposeThoughts: exposeThoughts,
 	}
 }
 func (b *antigravitySSEBody) Close() error {
@@ -1906,16 +2000,21 @@ func (b *antigravitySSEBody) openTextItem() {
 		return
 	}
 	b.enqueueStart()
+	// Downstream translators expect items to finish in order, so the reasoning
+	// item closes before the message opens.
+	b.closeReasoningItem()
 	b.textStarted = true
+	b.messageIndex = b.nextOutputIndex
+	b.nextOutputIndex++
 	b.enqueue("response.output_item.added", map[string]any{
-		"output_index": 0,
+		"output_index": b.messageIndex,
 		"item": map[string]any{
 			"id": b.messageID, "type": "message", "status": "in_progress",
 			"role": "assistant", "content": []any{},
 		},
 	})
 	b.enqueue("response.content_part.added", map[string]any{
-		"item_id": b.messageID, "output_index": 0, "content_index": 0,
+		"item_id": b.messageID, "output_index": b.messageIndex, "content_index": 0,
 		"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
 	})
 }
@@ -1930,8 +2029,63 @@ func (b *antigravitySSEBody) emitTextDelta(fragment string) {
 	b.openTextItem()
 	b.text.WriteString(fragment)
 	b.enqueue("response.output_text.delta", map[string]any{
-		"item_id": b.messageID, "output_index": 0, "content_index": 0, "delta": fragment,
+		"item_id": b.messageID, "output_index": b.messageIndex, "content_index": 0, "delta": fragment,
 	})
+}
+
+func (b *antigravitySSEBody) openReasoningItem() {
+	if b.reasoningStarted {
+		return
+	}
+	b.enqueueStart()
+	b.reasoningStarted = true
+	b.reasoningIndex = b.nextOutputIndex
+	b.nextOutputIndex++
+	b.enqueue("response.output_item.added", map[string]any{
+		"output_index": b.reasoningIndex,
+		"item":         map[string]any{"id": b.reasoningID, "type": "reasoning", "summary": []any{}},
+	})
+	b.enqueue("response.reasoning_summary_part.added", map[string]any{
+		"item_id": b.reasoningID, "output_index": b.reasoningIndex, "summary_index": 0,
+		"part": map[string]any{"type": "summary_text", "text": ""},
+	})
+}
+
+// emitReasoningDelta forwards one upstream thought fragment as a reasoning
+// summary delta. Thoughts that arrive after the message item opened are not
+// streamed: the reasoning item is already closed by then.
+func (b *antigravitySSEBody) emitReasoningDelta(fragment string) {
+	if fragment == "" || b.terminal || !b.exposeThoughts || b.textStarted || b.reasoningDone {
+		return
+	}
+	b.openReasoningItem()
+	b.reasoning.WriteString(fragment)
+	b.enqueue("response.reasoning_summary_text.delta", map[string]any{
+		"item_id": b.reasoningID, "output_index": b.reasoningIndex, "summary_index": 0, "delta": fragment,
+	})
+}
+
+// closeReasoningItem finishes the reasoning item once and returns its final
+// form, or nil when no thought was streamed.
+func (b *antigravitySSEBody) closeReasoningItem() map[string]any {
+	if !b.reasoningStarted {
+		return nil
+	}
+	text := b.reasoning.String()
+	part := map[string]any{"type": "summary_text", "text": text}
+	item := map[string]any{"id": b.reasoningID, "type": "reasoning", "summary": []any{part}}
+	if b.reasoningDone {
+		return item
+	}
+	b.reasoningDone = true
+	b.enqueue("response.reasoning_summary_text.done", map[string]any{
+		"item_id": b.reasoningID, "output_index": b.reasoningIndex, "summary_index": 0, "text": text,
+	})
+	b.enqueue("response.reasoning_summary_part.done", map[string]any{
+		"item_id": b.reasoningID, "output_index": b.reasoningIndex, "summary_index": 0, "part": part,
+	})
+	b.enqueue("response.output_item.done", map[string]any{"output_index": b.reasoningIndex, "item": item})
+	return item
 }
 
 func (b *antigravitySSEBody) enqueueSuccess(status string, usage map[string]any) {
@@ -1945,18 +2099,21 @@ func (b *antigravitySSEBody) enqueueSuccess(status string, usage map[string]any)
 		"id": b.messageID, "type": "message", "status": "completed",
 		"role": "assistant", "content": []any{content},
 	}
-	output := make([]any, 0, 1+len(b.functions))
+	output := make([]any, 0, 2+len(b.functions))
+	if reasoning := b.closeReasoningItem(); reasoning != nil {
+		output = append(output, reasoning)
+	}
 	if b.textStarted || len(b.functions) == 0 {
 		// A response with neither text nor tool calls still needs one empty
 		// message item so the Responses lifecycle stays well-formed.
 		b.openTextItem()
 		b.enqueue("response.output_text.done", map[string]any{
-			"item_id": b.messageID, "output_index": 0, "content_index": 0, "text": text,
+			"item_id": b.messageID, "output_index": b.messageIndex, "content_index": 0, "text": text,
 		})
 		b.enqueue("response.content_part.done", map[string]any{
-			"item_id": b.messageID, "output_index": 0, "content_index": 0, "part": content,
+			"item_id": b.messageID, "output_index": b.messageIndex, "content_index": 0, "part": content,
 		})
-		b.enqueue("response.output_item.done", map[string]any{"output_index": 0, "item": message})
+		b.enqueue("response.output_item.done", map[string]any{"output_index": b.messageIndex, "item": message})
 		output = append(output, message)
 	}
 	b.terminal = true
@@ -2069,11 +2226,16 @@ func (b *antigravitySSEBody) Read(p []byte) (int, error) {
 		// that frame's text is forwarded; a rejection that arrives in a later
 		// frame terminates the stream with response.failed instead.
 		fragment := extractGeminiText(env)
+		thoughts := ""
+		if b.exposeThoughts {
+			thoughts = extractGeminiThoughts(env)
+		}
 		calls := extractGeminiFunctionCalls(env, b.customTools)
-		if b.text.Len()+len(fragment)+antigravityFunctionCallsSize(b.functions)+antigravityFunctionCallsSize(calls) > antigravityResponseBodyLimit {
+		if b.text.Len()+len(fragment)+b.reasoning.Len()+len(thoughts)+antigravityFunctionCallsSize(b.functions)+antigravityFunctionCallsSize(calls) > antigravityResponseBodyLimit {
 			b.enqueueFailure(ErrorCodeUpstreamError, "antigravity streamed response exceeded the safe size limit")
 			continue
 		}
+		b.emitReasoningDelta(thoughts)
 		b.emitTextDelta(fragment)
 		b.addFunctionCalls(calls)
 		if finishReason != "" {
@@ -2155,6 +2317,15 @@ func geminiFinishStatus(reason string) string {
 	}
 }
 func extractGeminiText(v map[string]any) string {
+	return extractGeminiTextParts(v, false)
+}
+
+// extractGeminiThoughts returns the concatenated text of thought parts.
+func extractGeminiThoughts(v map[string]any) string {
+	return extractGeminiTextParts(v, true)
+}
+
+func extractGeminiTextParts(v map[string]any, thoughts bool) string {
 	c, _ := v["candidates"].([]any)
 	if len(c) == 0 {
 		return ""
@@ -2165,7 +2336,7 @@ func extractGeminiText(v map[string]any) string {
 	var out []string
 	for _, p := range parts {
 		pm, _ := p.(map[string]any)
-		if thought, _ := pm["thought"].(bool); thought {
+		if thought, _ := pm["thought"].(bool); thought != thoughts {
 			continue
 		}
 		if s, ok := pm["text"].(string); ok {

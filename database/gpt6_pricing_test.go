@@ -46,6 +46,59 @@ func TestGPT6SolAndLunaIndependentPricingKeys(t *testing.T) {
 	}
 }
 
+func TestGPT61SolUsesIndependentSolPricing(t *testing.T) {
+	previous := currentModelPricingOverrides()
+	SetModelPricingOverrides(nil)
+	t.Cleanup(func() { SetModelPricingOverrides(previous) })
+
+	for _, model := range []string{
+		"gpt-6.1-sol",
+		"GPT-6.1-SOL",
+		"models/gpt-6.1-sol",
+		"gpt-6.1-sol-high",
+		"gpt-6.1-sol(xhigh)",
+		"gpt-6.1-sol-2026-09-22",
+		"gpt-6.1-sol-openai-compact",
+	} {
+		if got := CanonicalBillingModelKey(model); got != "gpt-6.1-sol" {
+			t.Fatalf("CanonicalBillingModelKey(%q) = %q, want gpt-6.1-sol", model, got)
+		}
+		if got := PricingManagementModelKey(model); got != "gpt-6.1-sol" {
+			t.Fatalf("PricingManagementModelKey(%q) = %q, want gpt-6.1-sol", model, got)
+		}
+		if got := PricingAliasTarget(model); got != "" {
+			t.Fatalf("PricingAliasTarget(%q) = %q, want canonical model", model, got)
+		}
+		p := GetModelPricing(model)
+		assertFloatEqual(t, p.InputPricePerMToken, 2)
+		assertFloatEqual(t, p.CacheReadPricePerMToken, 0.1)
+		assertFloatEqual(t, p.CacheWrite5mPricePerMToken, 2.5)
+		assertFloatEqual(t, p.CacheWrite1hPricePerMToken, 2.5)
+		assertFloatEqual(t, p.OutputPricePerMToken, 10)
+		assertFloatEqual(t, p.LongInputPricePerMToken, 4)
+		assertFloatEqual(t, p.LongCacheReadPricePerMToken, 0.2)
+		assertFloatEqual(t, p.LongOutputPricePerMToken, 15)
+	}
+
+	short := CalculateCostBreakdownWithCacheWrites(271999, 1000, 100000, 1000, 500, "gpt-6.1-sol", "")
+	if short.LongContext {
+		t.Fatalf("short-tier request unexpectedly used long pricing: %+v", short)
+	}
+	assertFloatEqual(t, short.InputPricePerMToken, 2)
+	assertFloatEqual(t, short.CacheReadPricePerMToken, 0.1)
+	assertFloatEqual(t, short.CacheWrite5mPricePerMToken, 2.5)
+	assertFloatEqual(t, short.CacheWrite1hPricePerMToken, 2.5)
+	assertFloatEqual(t, short.OutputPricePerMToken, 10)
+
+	long := CalculateCostBreakdownWithCacheWrites(272001, 1000, 100000, 1000, 500, "gpt-6.1-sol", "")
+	if !long.LongContext {
+		t.Fatalf("long-tier request did not use long pricing: %+v", long)
+	}
+	assertFloatEqual(t, long.InputPricePerMToken, 4)
+	assertFloatEqual(t, long.CacheReadPricePerMToken, 0.2)
+	assertFloatEqual(t, long.OutputPricePerMToken, 15)
+}
+
 func TestGPT6SolAndLunaCostBreakdown(t *testing.T) {
 	previous := currentModelPricingOverrides()
 	SetModelPricingOverrides(nil)

@@ -534,7 +534,7 @@ curl 'https://your-host/v1/images/jobs/42/result' \
 }
 ```
 
-池内存在 Grok 账号时会一并列出其文本模型（如 `grok-4.7`）与媒体模型（`grok-imagine-*`）。媒体模型与账号的文本模型白名单相互独立：白名单只声明文本模型不会关闭媒体能力；白名单里显式写了 `grok-imagine` 条目时以声明为准收窄。
+池内存在 Grok 账号时会一并列出其文本模型（如 `grok-4.7`、`grok-4.7-fast`）与媒体模型（`grok-imagine-*`）。`grok-4.7-fast` 是对外名字，转发到上游时改成 `grok-4.7-build-fast`。媒体模型与账号的文本模型白名单相互独立：白名单只声明文本模型不会关闭媒体能力；白名单里显式写了 `grok-imagine` 条目时以声明为准收窄。文本白名单如果写了，也要包含 `grok-4.7-fast` 才会暴露这个名字。
 
 #### Grok 的 GPT 兼容别名
 

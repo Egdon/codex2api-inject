@@ -224,7 +224,7 @@ test('Usage page surfaces Anthropic prompt-cache write tokens and costs', () => 
   assert.match(usage, /cache_write_5m_cost/)
   assert.match(usage, /cache_write_1h_price_per_mtoken/)
   assert.match(usage, /cacheCreateTooltip/)
-  assert.match(usage, /<DatabaseBackup\b/)
+  assert.match(usage, /<DatabasePlus\b/)
   assert.match(types, /cache_write_1h_tokens: number/)
   assert.equal(typeof zh.usage?.cacheWrite1hCost, 'string')
 })

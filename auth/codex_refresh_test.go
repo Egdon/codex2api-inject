@@ -290,6 +290,18 @@ func TestCodexRefreshBackgroundEligibility(t *testing.T) {
 		t.Fatal("Codex change altered legacy Claude refresh policy")
 	}
 	for _, tc := range []struct {
+		name             string
+		disabled, paused int32
+		want             bool
+	}{
+		{"grok enabled", 0, 0, true}, {"grok disabled", 1, 0, false}, {"grok paused", 0, 1, false},
+	} {
+		grok := &Account{RefreshToken: "rt", ExpiresAt: time.Now(), UpstreamType: UpstreamGrok, HealthTier: HealthTierHealthy, Disabled: tc.disabled, DispatchPaused: tc.paused}
+		if got := store.shouldBackgroundRefresh(grok, false); got != tc.want {
+			t.Fatalf("%s: eligible=%t, want %t", tc.name, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
 		name, upstream, reason string
 		disabled, paused       int32
 		want                   bool

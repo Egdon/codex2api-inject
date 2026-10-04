@@ -647,9 +647,6 @@ func (db *DB) ReauthGrokAccount(ctx context.Context, accountID int64, credential
 		inRecycleBin := deleted || strings.EqualFold(strings.TrimSpace(status), "deleted") || strings.EqualFold(strings.TrimSpace(errorMessage), "deleted")
 
 		merged := mergeCredentialMaps(existing, credentials)
-		if err := db.markBPSPolicyTransition(ctx, tx, accountID, decodeCredentials(currentRaw), merged); err != nil {
-			return err
-		}
 		// credentialFamilyCandidate 优先取既有 credential_family_id,family 跨 RT 轮转稳定。
 		familyID := credentialFamilyCandidate(merged)
 		if familyID == "" {
@@ -843,9 +840,6 @@ func (db *DB) UpdateAccountCredentialsCAS(ctx context.Context, accountID, expect
 			return nil
 		}
 		merged := mergeCredentialMaps(decodeCredentials(raw), updates)
-		if err := db.markBPSPolicyTransition(ctx, tx, accountID, decodeCredentials(raw), merged); err != nil {
-			return err
-		}
 		familyID = strings.TrimSpace(familyID)
 		if familyID == "" {
 			familyID = credentialFamilyCandidate(merged)
@@ -928,9 +922,6 @@ func (db *DB) ReplaceAccountCredentialsCAS(ctx context.Context, accountID, expec
 			return nil
 		}
 		merged := mergeCredentialMaps(decodeCredentials(raw), updates)
-		if err := db.markBPSPolicyTransition(ctx, tx, accountID, decodeCredentials(raw), merged); err != nil {
-			return err
-		}
 		familyID = strings.TrimSpace(familyID)
 		if familyID == "" {
 			familyID = credentialFamilyCandidate(merged)
