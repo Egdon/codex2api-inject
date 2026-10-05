@@ -2348,6 +2348,12 @@ func (h *Handler) reportStreamOutcomeFailure(account *auth.Account, outcome stre
 	if outcome.capacityShed || outcome.requestScoped {
 		return
 	}
+	// Cloud Code can report a model capacity shortage inside an HTTP 200
+	// stream. Like the HTTP 503, it describes Google's shared pool rather than
+	// this credential.
+	if antigravityNonPenalizingUpstreamFailure(account, outcome.logStatusCode, responseFailedErrorBody(outcome.failurePayload)) {
+		return
+	}
 	h.store.ReportRequestFailure(account, outcome.failureKind, d)
 }
 
