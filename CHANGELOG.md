@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.0.7 - 2026-10-05
+
+### Features
+
+- **Gateway maintenance requests can use the same Codex client identity as chat traffic (#774, reported by @OneAHPro).** The new global setting `codex_unified_client_identity_enabled` (off by default) makes the requests the gateway sends to ChatGPT on its own behalf use the identity resolved for chat traffic instead of the built-in codex-tui one. This covers usage, reset-credit list and consumption, daily usage, token breakdown, subscription sync (Codex profile only), the models manifest (background fetch and downstream passthrough) and relay model discovery. Pool personas are picked per account, Originator follows the generated User-Agent, and pinned User-Agent, Originator and Version account headers still win. Maintenance requests never add headers they did not send before. If the configured identity cannot be resolved, for example because of the minimum CLI version in auto mode, probes fall back to the built-in identity. For relay accounts the switch also derives one installation ID from the relay credentials, used by both chat requests and model discovery. Chat identity selection is unchanged: outside `force` compatibility mode, official Codex clients still pass their own User-Agent through, and the Settings page says so.
+
+- **Degraded accounts can keep their configured concurrency (#772, reported by @zjm54321).** The new per-account switch `keep_concurrency_on_degrade` (off by default) keeps warm and risky accounts at their configured base concurrency instead of halving it or dropping to 1. Tiers, ordering and score bonuses are still computed, a banned account still gets 0, and the premium 5h guard still caps at 1. The switch is stored in the account credentials (no schema change) and can be set in the account edit dialog, quick config sheet and batch editor, or through the scheduler PATCH and batch-update endpoints. It stays off by default because a relay 429 is often a real concurrency limit.
+
+- **Upstream model mismatch markers on the Usage page can be hidden.** The new setting `show_upstream_model_mismatch` (on by default) controls whether usage rows mark requests whose upstream response model differs from the requested model, and whether the mismatch filter is shown. Turning it off only hides the markers; the audit is still recorded.
+
+### Fixes
+
+- **Antigravity keeps the status of backend errors reported mid-stream.** Cloud Code can accept a streaming request with HTTP 200 and report a failure later in the body, either as an SSE event or as a bare, often pretty-printed JSON document outside SSE framing, for example a 503 "No capacity available for model ..." with reason `MODEL_CAPACITY_EXHAUSTED`. The bare form was skipped and the stream ended as a generic stream break, and the SSE form became a generic "antigravity upstream error". Both were treated as a 500 that counted against the account, so a shared capacity shortage lowered account health and a mid-stream quota 429 never cooled the model down. The stream reader now assembles these documents (including array-wrapped and multi-line ones), and the failure carries the upstream status, message and quota details, so the same cooldown policy as for an HTTP error applies: a capacity shortage is not charged to the account, and quota exhaustion cools the model down for the retry delay Google returns. Native Gemini streams return the upstream status to the client instead of a generic 502, so Gemini clients can retry 429 and 503 themselves. Only the quota fields of Google's error details are forwarded.
+
+- **A saved Grok model list now decides both the listed and the routable models.** On accounts with a saved list, `/v1/models` still showed every catalog model and `grok-4.7-fast`, while requests were only routed to models on the list, so some listed models always failed. An account with a list now exposes exactly the names on it that its credential type allows and that are in the presets or the synced catalog, and `grok-4.7` in the catalog no longer adds `grok-4.7-fast` to a saved list. An empty list still uses the visible catalog, or the default models before the first sync. The UI and API docs call it a model list instead of a whitelist.
+
+- **The account link button only appears where it has a target.** On the Accounts page the link button is shown for OpenAI Responses relay and Grok API accounts, and for other accounts only when a custom link is configured.
+
+### Removed
+
+- **Turn State is no longer shown in the Usage page's User-Agent column (#773, reported by @10373064).** Replaying Turn State has no effect upstream, so the TS marker, the injected and returned Turn State lines in the tooltip and the template-cache rewrite marker are removed. Recorded fields and the error log detail view are unchanged.
+
 ## v3.0.6 - 2026-10-03
 
 ### Features
