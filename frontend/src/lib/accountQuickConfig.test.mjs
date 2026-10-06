@@ -151,3 +151,19 @@ for (const mode of ['single_machine_multi_window']) {
     assert.equal(formStateFromAccount({ ...detailedRow, codex_fingerprint_mode: mode }).fingerprintMode, mode);
   });
 }
+
+
+test("quick edit defaults keep-concurrency off and round-trips both explicit states", () => {
+  for (const value of [undefined, false, true]) {
+    const form = formStateFromAccount({ ...detailedRow, keep_concurrency_on_degrade: value });
+    assert.equal(form.keepConcurrencyOnDegrade, value ?? false);
+    const result = buildQuickConfigSavePayload(form, true);
+    assert.equal(result.ok, true);
+    assert.equal(result.payload.keep_concurrency_on_degrade, value ?? false);
+    assert.equal(buildQuickConfigSavePayload(form, false).ok, false);
+  }
+  const form = formStateFromAccount({ ...detailedRow, keep_concurrency_on_degrade: true });
+  const result = buildQuickConfigSavePayload({ ...form, keepConcurrencyOnDegrade: false }, true);
+  assert.equal(result.ok, true);
+  assert.equal(result.payload.keep_concurrency_on_degrade, false);
+});

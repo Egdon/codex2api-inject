@@ -850,7 +850,7 @@ func (a *Account) fastSchedulerSnapshotForSpark(baseLimit int64, now time.Time) 
 	if baseConcurrencyEffective <= 0 {
 		baseConcurrencyEffective = a.effectiveBaseConcurrencyLocked(baseLimit)
 	}
-	limit := concurrencyLimitForTier(baseConcurrencyEffective, tier)
+	limit := a.tierConcurrencyLimitLocked(baseConcurrencyEffective, tier)
 	// sparkDispatchEligibleLocked 与 isAvailableLocked 一样只看锁内状态;
 	// DispatchPaused 是锁外原子标志,标准快照在这里显式补一道门,spark 必须
 	// 对齐,否则运维手动停调度或过载熔断置位的账号仍会被 spark 请求选中。
@@ -893,7 +893,7 @@ func (a *Account) fastSchedulerSnapshotWithUsageOverride(baseLimit int64, now ti
 		if baseConcurrencyEffective <= 0 {
 			baseConcurrencyEffective = a.effectiveBaseConcurrencyLocked(baseLimit)
 		}
-		limit = a.quotaAutoPause5hGuardConcurrencyLimitLocked(concurrencyLimitForTier(baseConcurrencyEffective, tier), now)
+		limit = a.quotaAutoPause5hGuardConcurrencyLimitLocked(a.tierConcurrencyLimitLocked(baseConcurrencyEffective, tier), now)
 		limit = a.smartPacingConcurrencyLimitLocked(limit, now)
 	}
 

@@ -873,6 +873,16 @@ function isOAuthAccount(account: AccountRow | null): boolean {
   return account?.account_type === "oauth";
 }
 
+// 跳转链接图标只给 API Key 类账号（有 api-base 可回退）；OAuth 账号不显示，
+// 除非已配置过自定义链接（否则失去打开/清除入口）。
+function showsAccountHrefLink(account: AccountRow): boolean {
+  return Boolean(
+    account.openai_responses_api ||
+      account.grok_api ||
+      account.account_href?.trim(),
+  );
+}
+
 function parseOAuthCallbackParams(rawUrl: string): { code: string; state: string } {
   const raw = rawUrl.trim();
   try {
@@ -1309,23 +1319,25 @@ const AccountTableRow = memo(function AccountTableRow({
                                         ? formatAccountName(account)
                                         : formatAccountListEmail(account)}
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
-                                      title={t("accounts.hrefClickHint")}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        // 点击 = 跳转（account_href → base_url
-                                        // 回退）；Alt/Option+点击 = 打开配置弹窗。
-                                        if (event.altKey) {
-                                          actions.openHrefEditor(account);
-                                        } else {
-                                          actions.openHref(account);
-                                        }
-                                      }}
-                                    >
-                                      <Link2 className="size-3" />
-                                    </button>
+                                    {showsAccountHrefLink(account) && (
+                                      <button
+                                        type="button"
+                                        className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
+                                        title={t("accounts.hrefClickHint")}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          // 点击 = 跳转（account_href → base_url
+                                          // 回退）；Alt/Option+点击 = 打开配置弹窗。
+                                          if (event.altKey) {
+                                            actions.openHrefEditor(account);
+                                          } else {
+                                            actions.openHref(account);
+                                          }
+                                        }}
+                                      >
+                                        <Link2 className="size-3" />
+                                      </button>
+                                    )}
                                   </div>
                                   {account.effective_workspace_id && (
                                     <span
@@ -1991,6 +2003,8 @@ export default function Accounts() {
   );
   const [concurrencyInput, setConcurrencyInput] = useState("");
   const [skipWarmTier, setSkipWarmTier] = useState(false);
+  const [keepConcurrencyOnDegrade, setKeepConcurrencyOnDegrade] =
+    useState(false);
   const [editAutoPause5hThresholdInput, setEditAutoPause5hThresholdInput] =
     useState("");
   const [editAutoPause7dThresholdInput, setEditAutoPause7dThresholdInput] =
@@ -2265,6 +2279,9 @@ export default function Accounts() {
     useState(false);
   const [batchBaseConcurrencyInput, setBatchBaseConcurrencyInput] =
     useState("");
+  const [batchUpdateKeepConcurrency, setBatchUpdateKeepConcurrency] =
+    useState(false);
+  const [batchKeepConcurrency, setBatchKeepConcurrency] = useState(false);
   const [batchUpdateSchedulerPriority, setBatchUpdateSchedulerPriority] =
     useState(false);
   const [batchSchedulerPriorityInput, setBatchSchedulerPriorityInput] =
@@ -5210,6 +5227,8 @@ export default function Accounts() {
     setBatchScoreBiasInput("");
     setBatchUpdateBaseConcurrency(false);
     setBatchBaseConcurrencyInput("");
+    setBatchUpdateKeepConcurrency(false);
+    setBatchKeepConcurrency(false);
     setBatchUpdateSchedulerPriority(false);
     setBatchSchedulerPriorityInput("");
     setBatchUpdateCodexFingerprintMode(false);
@@ -5230,6 +5249,8 @@ export default function Accounts() {
     setBatchScoreBiasInput("");
     setBatchUpdateBaseConcurrency(false);
     setBatchBaseConcurrencyInput("");
+    setBatchUpdateKeepConcurrency(false);
+    setBatchKeepConcurrency(false);
     setBatchUpdateSchedulerPriority(false);
     setBatchSchedulerPriorityInput("");
     setBatchUpdateCodexFingerprintMode(false);
@@ -5477,6 +5498,7 @@ export default function Accounts() {
     batchUpdateGroups ||
     batchUpdateScoreBias ||
     batchUpdateBaseConcurrency ||
+    batchUpdateKeepConcurrency ||
     batchUpdateSchedulerPriority ||
     batchUpdateCodexFingerprintMode ||
     batchUpdateTimezone;
@@ -5504,6 +5526,8 @@ export default function Accounts() {
           scoreBias: batchScoreBiasValue,
           updateBaseConcurrency: batchUpdateBaseConcurrency,
           baseConcurrency: batchBaseConcurrencyValue,
+          updateKeepConcurrency: batchUpdateKeepConcurrency,
+          keepConcurrency: batchKeepConcurrency,
           updateSchedulerPriority: batchUpdateSchedulerPriority,
           schedulerPriority: schedulerPriorityInputToValue(
             batchSchedulerPriorityInput,
@@ -5729,6 +5753,7 @@ export default function Accounts() {
         : String(account.base_concurrency_override),
     );
     setSkipWarmTier(account.skip_warm_tier ?? false);
+    setKeepConcurrencyOnDegrade(account.keep_concurrency_on_degrade ?? false);
     setEditAutoPause5hThresholdInput(
       formatQuotaAutoPausePercentInput(account.auto_pause_5h_threshold),
     );
@@ -5808,6 +5833,7 @@ export default function Accounts() {
     setConcurrencyMode("default");
     setConcurrencyInput("");
     setSkipWarmTier(false);
+    setKeepConcurrencyOnDegrade(false);
     setEditAutoPause5hThresholdInput("");
     setEditAutoPause7dThresholdInput("");
     setEditAutoPause5hDisabled(false);
@@ -5916,6 +5942,7 @@ export default function Accounts() {
         healthTier,
         editingAccount,
         baseConcurrency,
+        keepConcurrencyOnDegrade,
       ),
       appliedBias,
       baseConcurrency,
@@ -5927,6 +5954,7 @@ export default function Accounts() {
     concurrencyMode,
     parsedBaseConcurrency,
     skipWarmTier,
+    keepConcurrencyOnDegrade,
   ]);
 
   const handleSaveScheduler = async () => {
@@ -5955,6 +5983,7 @@ export default function Accounts() {
         base_concurrency_override:
           concurrencyMode === "custom" ? parsedBaseConcurrency : null,
         skip_warm_tier: skipWarmTier,
+        keep_concurrency_on_degrade: keepConcurrencyOnDegrade,
         allowed_api_key_ids: allowedAPIKeySelection,
         proxy_url: editProxyUrl.trim() || null,
         tags: editTags,
@@ -10008,6 +10037,35 @@ export default function Accounts() {
                           </div>
                         </div>
 
+                        {/* 降级不降并发 (issue #772) */}
+                        <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs hover:border-border/90 transition-colors">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 font-semibold text-foreground text-sm">
+                                <Gauge className="size-4 text-sky-500" />
+                                <span>{t("accounts.schedulerKeepConcurrencyLabel")}</span>
+                              </div>
+                              <p className="text-xs text-muted-foreground leading-relaxed">
+                                {t("accounts.schedulerKeepConcurrencyHint")}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-label={t("accounts.schedulerKeepConcurrencyLabel")}
+                              aria-checked={keepConcurrencyOnDegrade}
+                              onClick={() =>
+                                setKeepConcurrencyOnDegrade((current) => !current)
+                              }
+                              className={`relative inline-flex h-5.5 w-10 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 ${keepConcurrencyOnDegrade ? "bg-primary" : "bg-muted"}`}
+                            >
+                              <span
+                                className={`pointer-events-none block size-4.5 rounded-full bg-white shadow-xs transition-transform ${keepConcurrencyOnDegrade ? "translate-x-4.5" : "translate-x-0"}`}
+                              />
+                            </button>
+                          </div>
+                        </div>
+
                         {/* 请求次数限流 */}
                         <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs hover:border-border/90 transition-colors">
                           <div className="flex items-center gap-2 font-semibold text-foreground text-sm">
@@ -10745,6 +10803,35 @@ export default function Accounts() {
                       {batchBaseConcurrencyInvalid
                         ? t("accounts.schedulerConcurrencyRange")
                         : t("accounts.batchMetaResetHint")}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-foreground">
+                          {t("accounts.schedulerKeepConcurrencyLabel")}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {t("accounts.schedulerKeepConcurrencyHint")}
+                        </div>
+                      </div>
+                      <Switch
+                        checked={batchUpdateKeepConcurrency}
+                        onCheckedChange={setBatchUpdateKeepConcurrency}
+                        aria-label={`${t("accounts.batchMetaTitle")}: ${t("accounts.schedulerKeepConcurrencyLabel")}`}
+                      />
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
+                      <span className="text-xs text-muted-foreground">
+                        {t("accounts.schedulerKeepConcurrencyLabel")}
+                      </span>
+                      <Switch
+                        checked={batchKeepConcurrency}
+                        onCheckedChange={setBatchKeepConcurrency}
+                        disabled={!batchUpdateKeepConcurrency}
+                        aria-label={t("accounts.schedulerKeepConcurrencyLabel")}
+                      />
                     </div>
                   </div>
 
@@ -13450,7 +13537,14 @@ function computePreviewDynamicConcurrency(
   healthTier: string | undefined,
   account: AccountRow,
   baseConcurrency: number,
+  keepConcurrencyOnDegrade: boolean,
 ): number {
+  if (
+    keepConcurrencyOnDegrade &&
+    (healthTier === "warm" || healthTier === "risky")
+  ) {
+    return baseConcurrency;
+  }
   switch (healthTier) {
     case "healthy":
       return baseConcurrency;
@@ -13986,22 +14080,24 @@ function AccountMobileCard({
               >
                 {displayName}
               </button>
-              <button
-                type="button"
-                className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
-                title={t("accounts.hrefClickHint")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  // 与表格行同口径：点击跳转，Alt/Option+点击配置。
-                  if (event.altKey) {
-                    onOpenHrefEditor();
-                  } else {
-                    onOpenHref();
-                  }
-                }}
-              >
-                <Link2 className="size-3" />
-              </button>
+              {showsAccountHrefLink(account) && (
+                <button
+                  type="button"
+                  className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted hover:text-primary"
+                  title={t("accounts.hrefClickHint")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    // 与表格行同口径：点击跳转，Alt/Option+点击配置。
+                    if (event.altKey) {
+                      onOpenHrefEditor();
+                    } else {
+                      onOpenHref();
+                    }
+                  }}
+                >
+                  <Link2 className="size-3" />
+                </button>
+              )}
             </div>
             {chatgptAccountId && (
               <div

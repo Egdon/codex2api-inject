@@ -45,11 +45,12 @@ export function filterGrokModelsForAuthKind(models: string[], authKind?: string)
   return models.filter((model) => grokModelAllowedForAuthKind(model, authKind));
 }
 
-// Reading this must never mutate or populate the operator's fixed whitelist.
-// A saved whitelist stays visible even when the synced catalog is narrower:
-// OAuth catalogs often list only grok-4.7, while the operator still declared
+// Reading this must never mutate or populate the operator's model list.
+// A saved model list stays visible even when the synced catalog is narrower:
+// OAuth catalogs often list only grok-4.7, while the operator still listed
 // grok-4.6 / grok-4.5 / grok-4.7-fast. Names outside both the catalog and the
 // built-in preset stay hidden. An authoritative empty catalog stays empty.
+// A catalog entry is not added unless the model list contains it.
 export function grokDisplayModels(account: ModelAccount): string[] {
   const raw = account.models ?? [];
   const configured = filterGrokModelsForAuthKind(raw, account.grok_auth_kind);
@@ -95,7 +96,7 @@ export function grokConnectionTestModels(account: ModelAccount): string[] {
 }
 
 export function grokModelSummaryTitle(account: ModelAccount): string {
-  const source = account.models?.length ? "Whitelist" : "Automatic";
+  const source = account.models?.length ? "Model list" : "Automatic";
   const summary = account.grok_models;
   return [source, summary?.status ?? "unknown", summary?.updated_at ?? ""].filter(Boolean).join(" · ");
 }

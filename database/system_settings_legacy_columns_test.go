@@ -74,9 +74,52 @@ func runSystemSettingsIgnoresRetiredColumnsAfterRestart(t *testing.T, driver, ds
 			t.Fatal(err)
 		}
 	}
-	if err := db.UpdateSystemSettings(ctx, &SystemSettings{SiteName: "Before upgrade", MaxConcurrency: 4}); err != nil {
+	// Exercise SQL defaults independently of Go's zero-value bools.
+	if _, err := db.conn.ExecContext(ctx, `INSERT INTO system_settings (id) VALUES (1)
+		ON CONFLICT (id) DO UPDATE SET
+		codex_unified_client_identity_enabled=EXCLUDED.codex_unified_client_identity_enabled,
+		show_upstream_model_mismatch=EXCLUDED.show_upstream_model_mismatch`); err != nil {
 		t.Fatal(err)
 	}
+	settings, err := db.GetSystemSettings(ctx)
+	if err != nil || settings == nil || settings.CodexUnifiedClientIdentityEnabled || !settings.ShowUpstreamModelMismatch {
+		t.Fatalf("new upstream setting defaults = %+v, %v", settings, err)
+	}
+	settings.SiteName, settings.MaxConcurrency = "Before upgrade", 4
+	settings.CodexUnifiedClientIdentityEnabled, settings.ShowUpstreamModelMismatch = true, false
+	settings.PromptFilterCustomPatterns, settings.PromptFilterReviewAPIKey = `[{"id":"fork-fixture"}]`, "fork-fixture-key"
+	if err := db.UpdateSystemSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	// These fork-only narrow settings must survive full settings upserts as well
+	// as additive migrations for the two upstream controls.
+	for kind, build := range map[string]string{
+		"desktop-mac": "mac-fork-build", "desktop-windows": "windows-fork-build", "vscode": "vscode-fork-build",
+	} {
+		if err := db.UpdateCodexSyncedAppBuild(ctx, kind, build); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkSettings := func(unified, mismatch bool) *SystemSettings {
+		t.Helper()
+		got, err := db.GetSystemSettings(ctx)
+		if err != nil || got == nil {
+			t.Fatalf("read merged settings: %+v, %v", got, err)
+		}
+		if got.CodexUnifiedClientIdentityEnabled != unified || got.ShowUpstreamModelMismatch != mismatch {
+			t.Fatalf("merged toggles = (%v, %v), want (%v, %v)", got.CodexUnifiedClientIdentityEnabled, got.ShowUpstreamModelMismatch, unified, mismatch)
+		}
+		if got.CodexSyncedDesktopMacBuild != "mac-fork-build" || got.CodexSyncedDesktopWindowsBuild != "windows-fork-build" || got.CodexSyncedVSCodeBuild != "vscode-fork-build" {
+			t.Fatal("upstream settings update or migration changed fork app builds")
+		}
+		if got.PromptFilterCustomPatterns != `[{"id":"fork-fixture"}]` || got.PromptFilterReviewAPIKey != "fork-fixture-key" {
+			t.Fatal("new SQL parameters disturbed preserve flags")
+		}
+		return got
+	}
+	checkSettings(true, false)
+	restart()
+	checkSettings(true, false)
 	if _, err := db.conn.ExecContext(ctx, `UPDATE system_settings SET openai_excel_bps_enabled=false WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +186,15 @@ func runSystemSettingsIgnoresRetiredColumnsAfterRestart(t *testing.T, driver, ds
 		jobIDs[source] = job.ID
 	}
 	db.FlushUsageLogs()
+	turnStateConfig, err := db.LoadTurnStateConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	checkPreserved := func() {
 		t.Helper()
+		if got, err := db.LoadTurnStateConfig(ctx); err != nil || got != turnStateConfig {
+			t.Fatalf("upstream settings merge changed fork Astra config: %q, %v", got, err)
+		}
 		for _, before := range accounts {
 			if after := readAccount(before.id); after != before {
 				t.Fatalf("retirement rewrote legacy metadata for account %d", before.id)
@@ -192,10 +242,26 @@ func runSystemSettingsIgnoresRetiredColumnsAfterRestart(t *testing.T, driver, ds
 		}
 	}
 
+	// Simulate the pre-v3.0.7 fork schema with real settings, Astra state and
+	// history already present. Reopening must only add defaulted columns.
+	if !db.DrainBackgroundTasks(10 * time.Second) {
+		t.Fatal("background migration did not drain before schema downgrade")
+	}
+	for _, column := range []string{"codex_unified_client_identity_enabled", "show_upstream_model_mismatch"} {
+		if _, err := db.conn.ExecContext(ctx, `ALTER TABLE system_settings DROP COLUMN `+column); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// A fork-only schema with its master disabled must NOT undergo the old
 	// tri-state conversion (which would rewrite account flags and opt-outs).
 	restart()
+	checkSettings(false, true)
 	checkPreserved()
+	// Nullable legacy rows use the same read defaults as absent columns.
+	if _, err := db.conn.ExecContext(ctx, `UPDATE system_settings SET codex_unified_client_identity_enabled=NULL, show_upstream_model_mismatch=NULL WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	checkSettings(false, true)
 	for _, column := range legacyColumns {
 		if columnCount("system_settings", column.name) != 0 {
 			t.Fatalf("restart recreated retired column %s", column.name)
@@ -212,19 +278,29 @@ func runSystemSettingsIgnoresRetiredColumnsAfterRestart(t *testing.T, driver, ds
 		t.Fatal(err)
 	}
 	restart()
-	settings, err := db.GetSystemSettings(ctx)
-	if err != nil || settings == nil || settings.SiteName != "Before upgrade" || settings.MaxConcurrency != 4 {
-		t.Fatalf("read after upgrade = %+v, %v", settings, err)
+	settings = checkSettings(false, true)
+	if settings.SiteName != "Before upgrade" || settings.MaxConcurrency != 4 {
+		t.Fatalf("read after upgrade = %+v", settings)
 	}
 	settings.SiteName, settings.MaxConcurrency = "After upgrade", 8
-	if err := db.UpdateSystemSettings(ctx, settings); err != nil {
-		t.Fatalf("save after upgrade: %v", err)
+	for _, toggles := range []struct{ unified, mismatch bool }{{true, false}, {true, true}, {false, false}, {false, true}} {
+		settings.CodexUnifiedClientIdentityEnabled = toggles.unified
+		settings.ShowUpstreamModelMismatch = toggles.mismatch
+		settings.PreservePromptFilterCustomPatterns, settings.PreservePromptFilterReviewAPIKey = true, true
+		settings.PromptFilterCustomPatterns, settings.PromptFilterReviewAPIKey = "[]", ""
+		// Stale whole-row snapshots cannot overwrite the fork's narrow fields.
+		settings.CodexSyncedDesktopMacBuild, settings.CodexSyncedDesktopWindowsBuild, settings.CodexSyncedVSCodeBuild = "stale", "stale", "stale"
+		if err := db.UpdateSystemSettings(ctx, settings); err != nil {
+			t.Fatalf("save after upgrade: %v", err)
+		}
+		checkSettings(toggles.unified, toggles.mismatch)
+		restart()
+		checkSettings(toggles.unified, toggles.mismatch)
+		checkPreserved()
 	}
-	restart()
-	checkPreserved()
-	settings, err = db.GetSystemSettings(ctx)
-	if err != nil || settings == nil || settings.SiteName != "After upgrade" || settings.MaxConcurrency != 8 {
-		t.Fatalf("read saved settings after restart = %+v, %v", settings, err)
+	settings = checkSettings(false, true)
+	if settings.SiteName != "After upgrade" || settings.MaxConcurrency != 8 {
+		t.Fatalf("read saved settings after restart = %+v", settings)
 	}
 	var enabled, pauseDisabled, cacheAsInput, forkMaster bool
 	var probeMinutes, cooldownSeconds, revision int

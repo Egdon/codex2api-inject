@@ -424,6 +424,23 @@ export default function AccountQuickConfigSheet({
               />
             </div>
 
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold text-foreground">
+                  {t("accounts.schedulerKeepConcurrencyLabel")}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {t("accounts.schedulerKeepConcurrencyHint")}
+                </div>
+              </div>
+              <Switch
+                checked={form.keepConcurrencyOnDegrade}
+                onCheckedChange={(checked) =>
+                  patchForm({ keepConcurrencyOnDegrade: checked })
+                }
+              />
+            </div>
+
             <div className="space-y-1.5 pt-1 border-t border-border/40">
               <label className="block text-xs font-semibold text-foreground">
                 代理服务器 (Proxy URL)

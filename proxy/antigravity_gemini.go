@@ -876,7 +876,7 @@ func ensureGeminiFinishReason(body []byte) []byte {
 
 type antigravityNativeGeminiSSEBody struct {
 	source         io.ReadCloser
-	reader         *bufio.Reader
+	events         *antigravitySSEReader
 	queue          bytes.Buffer
 	reverseNameMap map[string]string
 	terminalErr    error
@@ -884,7 +884,7 @@ type antigravityNativeGeminiSSEBody struct {
 }
 
 func newAntigravityNativeGeminiSSEResponseBody(r io.ReadCloser, reverseNameMap map[string]string) io.ReadCloser {
-	return &antigravityNativeGeminiSSEBody{source: r, reader: bufio.NewReader(r), reverseNameMap: reverseNameMap}
+	return &antigravityNativeGeminiSSEBody{source: r, events: newAntigravitySSEReader(bufio.NewReader(r)), reverseNameMap: reverseNameMap}
 }
 
 func (b *antigravityNativeGeminiSSEBody) Close() error {
@@ -929,48 +929,20 @@ func (b *antigravityNativeGeminiSSEBody) endError(err error) error {
 	return fmt.Errorf("antigravity Gemini stream ended before a terminal response: %w", io.ErrUnexpectedEOF)
 }
 
-// Keep an error that accompanies the final event: the event is drained before
-// Read returns that error, including when the stream has no trailing blank line.
+// The final event is drained before Read reports the end of the stream,
+// including when the stream has no trailing blank line.
 func (b *antigravityNativeGeminiSSEBody) readEvent() ([]byte, error) {
-	var data []byte
-	for {
-		line, err := b.reader.ReadBytes('\n')
-		if len(line) > 0 {
-			line = bytes.TrimRight(line, "\r\n")
-			if bytes.HasPrefix(line, []byte("data:")) {
-				part := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
-				if len(data) > 0 {
-					data = append(data, '\n')
-				}
-				data = append(data, part...)
-			}
-			if len(line) == 0 && len(data) > 0 {
-				return data, err
-			}
-		}
-		if err != nil {
-			return data, err
-		}
-	}
+	return b.events.next()
 }
 
 func antigravityNativeGeminiStreamPayload(data []byte) (map[string]any, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
+	payload, err := decodeAntigravityStreamEnvelope(data)
+	if err != nil {
 		return nil, fmt.Errorf("decode antigravity Gemini stream event: %w", err)
-	}
-	if payload == nil {
-		return nil, fmt.Errorf("antigravity Gemini stream event must be a JSON object")
 	}
 	for {
 		if upstreamError, ok := payload["error"]; ok {
-			message := "antigravity Gemini upstream returned an error"
-			if detail, ok := upstreamError.(map[string]any); ok {
-				if text, ok := detail["message"].(string); ok && strings.TrimSpace(text) != "" {
-					message += ": " + text
-				}
-			}
-			return nil, errors.New(message)
+			return nil, newAntigravityStreamError(upstreamError)
 		}
 		response, ok := payload["response"].(map[string]any)
 		if !ok {

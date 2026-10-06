@@ -968,18 +968,28 @@ func ensureCodexClientInstallationMetadata(requestBody []byte, account *auth.Acc
 		return requestBody, false
 	}
 
-	seed := ""
-	if headers != nil {
-		seed = strings.TrimSpace(headers.Get("Authorization"))
+	installationID := ""
+	if CurrentRuntimeSettings().CodexUnifiedClientIdentityEnabled && account != nil {
+		// 统一身份：按中转凭据派生账号级设备标识，与模型发现请求头同值，
+		// 不再按下游 Key 分裂成多台设备（issue #774）。
+		if baseURL, apiKey := account.OpenAIResponsesCredentials(); baseURL != "" && apiKey != "" {
+			installationID = codexRelayInstallationID(baseURL, apiKey)
+		}
 	}
-	if seed == "" && account != nil {
-		baseURL, apiKey := account.OpenAIResponsesCredentials()
-		seed = fmt.Sprintf("%d|%s|%s", account.ID(), baseURL, apiKey)
+	if installationID == "" {
+		seed := ""
+		if headers != nil {
+			seed = strings.TrimSpace(headers.Get("Authorization"))
+		}
+		if seed == "" && account != nil {
+			baseURL, apiKey := account.OpenAIResponsesCredentials()
+			seed = fmt.Sprintf("%d|%s|%s", account.ID(), baseURL, apiKey)
+		}
+		if seed == "" {
+			seed = "default"
+		}
+		installationID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("codex2api:client-installation:"+seed)).String()
 	}
-	if seed == "" {
-		seed = "default"
-	}
-	installationID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("codex2api:client-installation:"+seed)).String()
 	updatedBody, err := sjson.SetBytes(requestBody, "client_metadata.x-codex-installation-id", installationID)
 	if err != nil {
 		return requestBody, false
