@@ -1384,13 +1384,19 @@ func TestGrokFastPublicModelRewritesToBuildFast(t *testing.T) {
 
 	narrowed := &auth.Account{UpstreamType: auth.UpstreamGrok, RefreshToken: "rt", Models: []string{"grok-4.7"}}
 	narrowed.SetGrokRoutingState(auth.GrokRoutingState{Models: []auth.GrokModelRoute{{ModelID: "grok-4.7", APIBackend: auth.GrokProtocolResponses}}})
-	if relayAccountSupportsModel(narrowed, auth.GrokFastPublicModelID) {
-		t.Fatal("whitelist without grok-4.7-fast must hide it")
+	if relayAccountSupportsModel(narrowed, auth.GrokFastPublicModelID) || modelIDInList(auth.GrokFastPublicModelID, GrokVisibleModelIDsForAccount(narrowed)) {
+		t.Fatal("model list without grok-4.7-fast must hide it")
+	}
+	if !modelIDInList("grok-4.7", GrokVisibleModelIDsForAccount(narrowed)) {
+		t.Fatal("model list should keep grok-4.7")
 	}
 	allowed := &auth.Account{UpstreamType: auth.UpstreamGrok, RefreshToken: "rt", Models: []string{auth.GrokFastPublicModelID}}
 	allowed.SetGrokRoutingState(auth.GrokRoutingState{Models: []auth.GrokModelRoute{{ModelID: "grok-4.7", APIBackend: auth.GrokProtocolResponses}}})
-	if !relayAccountSupportsModel(allowed, auth.GrokFastPublicModelID) {
-		t.Fatal("whitelist that names grok-4.7-fast should admit it")
+	if !relayAccountSupportsModel(allowed, auth.GrokFastPublicModelID) || !modelIDInList(auth.GrokFastPublicModelID, GrokVisibleModelIDsForAccount(allowed)) {
+		t.Fatal("model list that names grok-4.7-fast should admit it")
+	}
+	if modelIDInList("grok-4.7", GrokVisibleModelIDsForAccount(allowed)) {
+		t.Fatal("model list that only names grok-4.7-fast must not inherit grok-4.7 from the catalog")
 	}
 	empty := &auth.Account{UpstreamType: auth.UpstreamGrok, RefreshToken: "rt"}
 	empty.SetGrokRoutingState(auth.GrokRoutingState{CatalogKnown: true})

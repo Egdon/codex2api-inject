@@ -158,6 +158,15 @@ installation is unsupported; this workflow does not publish Windows packages.
 Archive names retain the **complete exact patched tag**. The checksum manifest
 uses standard SHA-256 lines for these exact archive basenames.
 
+`assemble-patched-binaries.sh` builds and packages in an external `RUNNER_TEMP`
+directory, then stages upload assets in root `dist/` only after all four builds
+succeed. Every build starts from a clean tracked/untracked checkout and must
+report the expected GOOS/GOARCH, `vcs.revision` and `vcs.modified=false` through
+`go version -m`. Never suppress VCS stamping or falsify cleanliness to pass this
+gate. The synthetic assembly regression runs in ordinary CI without compilation
+or network access; actual four-platform provenance is checked again at release.
+An existing `dist/` is refused rather than overwritten.
+
 No existing release (public or draft) or asset is overwritten. Upload does not
 use `--clobber`. Before publication, all five uploaded assets must have exactly
 the expected names, uploaded state, sizes and GitHub SHA-256 digests matching

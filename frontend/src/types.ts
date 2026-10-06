@@ -441,6 +441,7 @@ export interface AccountRow {
   base_concurrency_override?: number | null
   base_concurrency_effective?: number
   skip_warm_tier?: boolean
+  keep_concurrency_on_degrade?: boolean
   dynamic_concurrency_limit?: number
   allowed_api_key_ids?: number[]
   tags?: string[]
@@ -1547,6 +1548,7 @@ export interface UpdateAccountSchedulerRequest {
   score_bias_override?: number | null
   base_concurrency_override?: number | null
   skip_warm_tier?: boolean
+  keep_concurrency_on_degrade?: boolean
   allowed_api_key_ids?: number[] | null
   proxy_url?: string | null
   tags?: string[] | null
@@ -2199,6 +2201,7 @@ export interface SystemSettings {
   codex_force_websocket: boolean
   codex_telemetry_enabled: boolean
   codex_telemetry_timing_debug: boolean
+  codex_unified_client_identity_enabled: boolean
   codex_request_compression: boolean
   codex_ws_weak_network_mode: boolean
   codex_ws_keepalive_enabled: boolean
@@ -2345,6 +2348,7 @@ export interface SystemSettings {
   billing_tier_policy: 'actual' | 'requested' | string
   models_list_read_max_bytes: number
   show_full_usage_numbers: boolean
+  show_upstream_model_mismatch: boolean
   public_key_usage_page_enabled: boolean
   public_image_studio_page_enabled: boolean
   public_account_portal_page_enabled: boolean

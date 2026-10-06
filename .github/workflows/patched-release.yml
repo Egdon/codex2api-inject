@@ -91,23 +91,9 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Assemble all binary archives and checksums
+      - name: Assemble verified clean binaries and checksums
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist build
-          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
-            goos=${target%_*}
-            goarch=${target#*_}
-            workdir="build/$target"
-            mkdir -p "$workdir"
-            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
-              -ldflags="-s -w -X github.com/codex2api/internal/version.Version=$RELEASE_TAG -X github.com/codex2api/internal/version.Source=patched -X github.com/codex2api/internal/version.UpstreamBase=$UPSTREAM_BASE -X github.com/codex2api/internal/version.Revision=$CANDIDATE_SHA" \
-              -o "$workdir/codex2api" .
-            cp .env.example README.md "$workdir/"
-            tar -C "$workdir" -czf "dist/codex2api_${RELEASE_TAG}_${target}.tar.gz" codex2api .env.example README.md
-          done
-          (cd dist && sha256sum codex2api_*.tar.gz > SHA256SUMS.txt)
+        run: bash .github/scripts/assemble-patched-binaries.sh
       - name: Create draft, upload without replacement, then publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

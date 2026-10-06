@@ -1,4 +1,8 @@
 {
+  "grok": {
+    "modelSourceList": "模型列表",
+    "modelSourceAuto": "自動"
+  },
   "upstreamSource": {
     "title": "實際上游來源",
     "all": "全部上游來源",
@@ -361,6 +365,8 @@
     }
   },
   "accounts": {
+    "schedulerKeepConcurrencyLabel": "降級不降並發",
+    "schedulerKeepConcurrencyHint": "開啟後預熱／風險層級仍按設定的基礎並發調度（層級與排序照常計算），封禁仍為 0，5h 限流等額度保護不受影響。適合已確認上游並發能力的 API／中轉帳號；若上游 429 本身就是並發限制，請勿開啟。",
     "refreshAllUsage": "一鍵重新整理用量",
     "refreshAllUsageHint": "查詢執行池中所有支援 WHAM 的 Codex 帳號，更新 5 小時和週用量進度條。",
     "batchUsageRefreshing": "正在重新整理用量",
@@ -543,6 +549,11 @@
     "hrefClickHint": "點擊開啟跳轉位址（未設定時開啟 api-base）；Alt/Option+點擊 設定自訂連結"
   },
   "settings": {
+    "showUpstreamModelMismatch": "顯示上游模型不一致",
+    "showUpstreamModelMismatchDesc": "開啟後，用量記錄會標示上游回應模型與請求模型不一致的情況，並提供對應篩選。關閉後只隱藏這些標記，仍會繼續記錄。",
+    "codexUnifiedClientIdentity": "維護請求統一用戶端身分",
+    "codexUnifiedClientIdentityDesc": "開啟後，用量探針、重置券、每日用量、訂閱同步、模型清單與中轉模型探索等閘道自行發起的請求，改用與對話請求相同的用戶端身分（含號池畫像與帳號自訂身分標頭），不再固定傳送內建 codex-tui 身分。訂閱同步受到挑戰時的瀏覽器回退不受影響。預設關閉。",
+    "codexUnifiedClientIdentityCompatHint": "目前相容模式不是「強制模擬」：官方 Codex 用戶端的對話請求仍透傳其自身 UA，同一帳號對上游仍可能呈現多份身分。要完全統一，請將相容模式改為強制模擬。",
     "codexClientVersions": {
       "platform": "用戶端 / 平台",
       "pair": "應用程式 / 內建 CLI",

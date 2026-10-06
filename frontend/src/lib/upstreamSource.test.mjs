@@ -87,3 +87,21 @@ test('historical upstream source strings survive across locales without runtime 
     assert.deepEqual(Object.keys(locale.accounts).filter(key => key.startsWith('excelBps')), [])
   }
 })
+
+
+test('upstream UA cleanup preserves the independent historical TurnState length audit', () => {
+  const usage = source('../pages/Usage.tsx')
+  const ua = usage.slice(usage.indexOf('function UserAgentCell('), usage.indexOf('function CyberPolicyDetailButton('))
+  assert.doesNotMatch(ua, /injected_turn_state|upstream_turn_state|turnStateChip|turnStateRows|TurnStateCell/)
+  assert.equal((usage.match(/<TurnStateLengthCell log=\{log\}/g) ?? []).length, 2)
+  assert.match(usage, /visibleColumns\.turnState && <TableHead/)
+  assert.match(usage, /turnState: true/)
+  assert.match(usage, /const FULL_BLOOD_TURN_STATE_CHARS = 292/)
+  const body = usage.match(/function turnStateLengthForLog\(log: UsageLog\): \{ length: number; source: 'injected' \| 'upstream' \} \| null \{([\s\S]*?)\n\s*\}/)
+  assert.ok(body)
+  const lengthForLog = Function('log', body[1])
+  assert.equal(lengthForLog({}), null)
+  assert.equal(lengthForLog({ injected_turn_state: ' ', upstream_turn_state: '' }), null)
+  assert.deepEqual(lengthForLog({ injected_turn_state: 'x'.repeat(292), upstream_turn_state: 'old' }), { length: 292, source: 'injected' })
+  assert.deepEqual(lengthForLog({ injected_turn_state: ' ', upstream_turn_state: ' old ' }), { length: 3, source: 'upstream' })
+})

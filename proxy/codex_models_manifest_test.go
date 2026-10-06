@@ -197,7 +197,7 @@ func TestFetchCodexModelsManifest_PassesThroughBodyAndETag(t *testing.T) {
 	defer server.Close()
 
 	account := &auth.Account{DBID: 1, AccessToken: "at-123", AccountID: "acc-1"}
-	manifest, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", "")
+	manifest, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", "", nil)
 	if err != nil {
 		t.Fatalf("fetchCodexModelsManifestWithURL error: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestFetchCodexModelsManifestRejectsConfiguredOversizeBody(t *testing.T) {
 	defer server.Close()
 
 	account := &auth.Account{DBID: 1, AccessToken: "at-123"}
-	_, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", "")
+	_, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", "", nil)
 	if !errors.Is(err, ErrModelsListResponseTooLarge) {
 		t.Fatalf("error = %v, want ErrModelsListResponseTooLarge", err)
 	}
@@ -242,7 +242,7 @@ func TestFetchCodexModelsManifest_NotModified(t *testing.T) {
 	defer server.Close()
 
 	account := &auth.Account{DBID: 1, AccessToken: "at-123"}
-	manifest, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", `W/"abc123"`)
+	manifest, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", `W/"abc123"`, nil)
 	if err != nil {
 		t.Fatalf("fetchCodexModelsManifestWithURL error: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestFetchCodexModelsManifest_UpstreamErrorFastFails(t *testing.T) {
 	defer server.Close()
 
 	account := &auth.Account{DBID: 1, AccessToken: "at-123"}
-	_, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", "")
+	_, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", "", nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -280,7 +280,7 @@ func TestFetchCodexModelsManifest_EmptyClientVersionFallsBack(t *testing.T) {
 	defer server.Close()
 
 	account := &auth.Account{DBID: 1, AccessToken: "at-123"}
-	if _, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "", ""); err != nil {
+	if _, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "", "", nil); err != nil {
 		t.Fatalf("fetchCodexModelsManifestWithURL error: %v", err)
 	}
 	if gotVersion != latestCodexCLIVersion {
@@ -302,7 +302,7 @@ func TestFetchCodexModelsManifest_UsesCustomHeaderAccountIDOverride(t *testing.T
 		AccountID:     "acc-1",
 		CustomHeaders: map[string]string{"Chatgpt-Account-Id": "acc-override"},
 	}
-	if _, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", ""); err != nil {
+	if _, err := fetchCodexModelsManifestWithURL(context.Background(), account, "", server.URL, "0.140.0", "", nil); err != nil {
 		t.Fatalf("fetchCodexModelsManifestWithURL error: %v", err)
 	}
 	if gotAccountID != "acc-override" {

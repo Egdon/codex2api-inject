@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1712,8 +1713,8 @@ func newAntigravityJSONResponseBodyAtWithThoughts(r io.ReadCloser, model string,
 	if err != nil {
 		return nil, fmt.Errorf("read Antigravity JSON response: %w", err)
 	}
-	var env map[string]any
-	if err := json.Unmarshal(body, &env); err != nil {
+	env, err := decodeAntigravityStreamEnvelope(body)
+	if err != nil {
 		return nil, fmt.Errorf("decode Antigravity JSON response: %w", err)
 	}
 	if v, ok := env["response"].(map[string]any); ok {
@@ -1758,7 +1759,11 @@ func newAntigravityJSONResponseBodyAtWithThoughts(r io.ReadCloser, model string,
 		"output":      output,
 		"output_text": text,
 	}
-	if status == "failed" {
+	if upstreamError, ok := env["error"]; ok {
+		_, errorValue := antigravityUpstreamErrorFields(upstreamError)
+		errorValue["type"] = "upstream_error"
+		response["error"] = errorValue
+	} else if status == "failed" {
 		message := "antigravity upstream returned no usable candidate"
 		if blocked {
 			message = "antigravity response blocked by safety policy"
@@ -1877,7 +1882,7 @@ func antigravityFunctionCallItem(functionCall antigravityFunctionCall, status, a
 
 type antigravitySSEBody struct {
 	source     io.ReadCloser
-	reader     *bufio.Reader
+	events     *antigravitySSEReader
 	queue      bytes.Buffer
 	text       strings.Builder
 	functions  []antigravityFunctionCall
@@ -1923,7 +1928,7 @@ func newAntigravitySSEResponseBodyWithThoughts(r io.ReadCloser, customTools map[
 		modelID = strings.TrimSpace(model[0])
 	}
 	return &antigravitySSEBody{
-		source: r, reader: bufio.NewReader(r),
+		source: r, events: newAntigravitySSEReader(bufio.NewReader(r)),
 		responseID:  "resp_ag_" + antigravityRandomHex(12),
 		messageID:   "msg_ag_" + antigravityRandomHex(12),
 		reasoningID: "rs_ag_" + antigravityRandomHex(12),
@@ -1988,6 +1993,20 @@ func (b *antigravitySSEBody) enqueueFailure(code, message string, statusCode ...
 	if len(statusCode) > 0 && statusCode[0] >= 400 && statusCode[0] <= 599 {
 		errorValue["status_code"] = statusCode[0]
 	}
+	response := b.response("failed", nil)
+	response["error"] = errorValue
+	b.enqueue("response.failed", map[string]any{"response": response})
+}
+
+// enqueueUpstreamError ends the stream with a backend error document the
+// upstream reported after HTTP 200, keeping its status and quota details.
+func (b *antigravitySSEBody) enqueueUpstreamError(value any) {
+	if b.terminal {
+		return
+	}
+	_, errorValue := antigravityUpstreamErrorFields(value)
+	b.enqueueStart()
+	b.terminal = true
 	response := b.response("failed", nil)
 	response["error"] = errorValue
 	b.enqueue("response.failed", map[string]any{"response": response})
@@ -2178,7 +2197,11 @@ func (b *antigravitySSEBody) Read(p []byte) (int, error) {
 		if b.terminal {
 			return 0, io.EOF
 		}
-		data, err := readSSEDataLine(b.reader)
+		data, err := b.events.next()
+		if errors.Is(err, errAntigravityStreamEventTooLarge) {
+			b.enqueueFailure(ErrorCodeUpstreamError, "antigravity streamed response exceeded the safe size limit")
+			continue
+		}
 		if err != nil {
 			b.enqueueFailure(ErrorCodeUpstreamStreamBreak, "antigravity stream ended before completion")
 			continue
@@ -2187,16 +2210,16 @@ func (b *antigravitySSEBody) Read(p []byte) (int, error) {
 			b.enqueueFailure(ErrorCodeUpstreamStreamBreak, "antigravity stream ended before completion")
 			continue
 		}
-		var env map[string]any
-		if err := json.Unmarshal(data, &env); err != nil {
+		env, err := decodeAntigravityStreamEnvelope(data)
+		if err != nil {
 			b.enqueueFailure(ErrorCodeUpstreamError, "antigravity upstream emitted invalid SSE JSON")
 			continue
 		}
 		if v, ok := env["response"].(map[string]any); ok {
 			env = v
 		}
-		if _, ok := env["error"]; ok {
-			b.enqueueFailure(ErrorCodeUpstreamError, "antigravity upstream error")
+		if upstreamError, ok := env["error"]; ok {
+			b.enqueueUpstreamError(upstreamError)
 			continue
 		}
 		finishReason := geminiFinishReason(env)

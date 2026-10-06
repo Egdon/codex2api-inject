@@ -349,9 +349,9 @@ type batchUpdateGrokModelsReq struct {
 	Models []string `json:"models"`
 }
 
-// BatchUpdateGrokModels 批量替换 Grok 账号的模型白名单
+// BatchUpdateGrokModels 批量替换 Grok 账号的模型列表
 // （POST /api/admin/accounts/grok/batch-models）。
-// 空数组 = 清空白名单（未声明，仅 grok 渠道 Key 可调度）；非空则整体替换。
+// 空数组 = 清空模型列表（未声明，仅 grok 渠道 Key 可调度）；非空则整体替换。
 // 非 Grok / 不存在的 ID 计入 failed，不中断整批。
 func (h *Handler) BatchUpdateGrokModels(c *gin.Context) {
 	var req batchUpdateGrokModelsReq

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OAUTH_GROK_PRESET_MODELS, API_KEY_GROK_PRESET_MODELS, grokConnectionTestModels, grokDisplayModels, grokPresetModels } from "./grokModelDisplay.ts";
 
-test("auto model directory follows upstream without modifying whitelist", () => {
+test("auto model directory follows upstream without modifying the model list", () => {
  const account={models:[],grok_models:{models:["grok-4.6","grok-4.7"],status:"fresh"}};
  const result=grokDisplayModels(account);
  assert.deepEqual(result,["grok-4.6","grok-4.7"]);
@@ -10,7 +10,7 @@ test("auto model directory follows upstream without modifying whitelist", () => 
  assert.deepEqual(account.models,[]);
  assert.equal(account.grok_models.models.length,2);
 });
-test("fixed whitelist remains an explicit subset, including a known empty catalog", () => {
+test("explicit model list stays as saved, including a known empty catalog", () => {
  assert.deepEqual(grokDisplayModels({models:["grok-4.6"],grok_models:{models:["grok-4.6","grok-4.7"],status:"fresh"}}),["grok-4.6"]);
  assert.deepEqual(grokDisplayModels({models:["grok-4.6"],grok_models:{models:[],status:"fresh"}}),[]);
  assert.deepEqual(grokDisplayModels({models:["grok-4.6"]}),["grok-4.6"]);

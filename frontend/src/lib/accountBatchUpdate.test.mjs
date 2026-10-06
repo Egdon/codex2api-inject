@@ -121,3 +121,36 @@ for (const mode of ['single_machine_multi_window']) {
     assert.deepEqual(buildBatchMetadataUpdate({ ...base, updateCodexFingerprintMode: false }), { ids: [1, 2] });
   });
 }
+
+test("buildBatchMetadataUpdate sends keep_concurrency_on_degrade only when enabled", () => {
+  const base = {
+    ids: [5],
+    updateTags: false,
+    tags: [],
+    updateGroups: false,
+    groupIds: [],
+    updateScoreBias: false,
+    scoreBias: null,
+    updateBaseConcurrency: false,
+    baseConcurrency: null,
+    updateSchedulerPriority: false,
+    schedulerPriority: null,
+  };
+
+  assert.deepEqual(
+    buildBatchMetadataUpdate({ ...base, keepConcurrency: true }),
+    { ids: [5] },
+  );
+  assert.deepEqual(
+    buildBatchMetadataUpdate({ ...base, updateKeepConcurrency: true }),
+    { ids: [5], keep_concurrency_on_degrade: false },
+  );
+  assert.deepEqual(
+    buildBatchMetadataUpdate({
+      ...base,
+      updateKeepConcurrency: true,
+      keepConcurrency: true,
+    }),
+    { ids: [5], keep_concurrency_on_degrade: true },
+  );
+});

@@ -44,6 +44,10 @@ jobs:
           node --check "$RUNNER_TEMP/admin-inject.js"
       - name: Test admin JavaScript against checked-out Go source
         run: node --test admin/inject_page_js.test.mjs
+      - name: Check clean patched binary assembly
+        run: |
+          bash -n .github/scripts/assemble-patched-binaries.sh
+          python3 .github/scripts/test-assemble-patched-binaries.py
 
   docker-build:
     runs-on: ubuntu-latest

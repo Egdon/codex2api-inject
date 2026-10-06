@@ -2554,6 +2554,8 @@ export default function Settings() {
       codex_images_main_model: cacheNormalized.codex_images_main_model ?? '',
       codex_telemetry_enabled: cacheNormalized.codex_telemetry_enabled ?? false,
       codex_telemetry_timing_debug: cacheNormalized.codex_telemetry_timing_debug ?? false,
+      codex_unified_client_identity_enabled: cacheNormalized.codex_unified_client_identity_enabled ?? false,
+      show_upstream_model_mismatch: cacheNormalized.show_upstream_model_mismatch ?? true,
       billing_tier_policy: normalizeBillingTierPolicyValue(cacheNormalized.billing_tier_policy),
       first_token_mode: 'loose',
       models_list_read_max_bytes:
@@ -2608,6 +2610,7 @@ export default function Settings() {
     codex_force_websocket: false,
     codex_telemetry_enabled: false,
     codex_telemetry_timing_debug: false,
+    codex_unified_client_identity_enabled: false,
     codex_request_compression: true,
     codex_ws_weak_network_mode: false,
     codex_ws_keepalive_enabled: false,
@@ -2718,6 +2721,7 @@ export default function Settings() {
     billing_tier_policy: 'actual',
     models_list_read_max_bytes: DEFAULT_MODELS_LIST_READ_MAX_BYTES,
     show_full_usage_numbers: false,
+    show_upstream_model_mismatch: true,
     public_key_usage_page_enabled: true,
     public_image_studio_page_enabled: true,
     public_account_portal_page_enabled: false,
@@ -4888,6 +4892,24 @@ export default function Settings() {
                     </>
                   )}
                 </div>
+                <div className="mt-4 border-t border-border/60 pt-4">
+                  <SettingField
+                    label={t('settings.codexUnifiedClientIdentity')}
+                    description={t('settings.codexUnifiedClientIdentityDesc')}
+                    layout="row"
+                  >
+                    <Switch
+                      aria-label={t('settings.codexUnifiedClientIdentity')}
+                      checked={settingsForm.codex_unified_client_identity_enabled}
+                      onCheckedChange={(checked) => autoSaveBooleanField('codex_unified_client_identity_enabled', checked)}
+                    />
+                  </SettingField>
+                  {settingsForm.codex_unified_client_identity_enabled && settingsForm.client_compat_mode !== 'force' ? (
+                    <p className="mt-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400 sm:text-xs">
+                      {t('settings.codexUnifiedClientIdentityCompatHint')}
+                    </p>
+                  ) : null}
+                </div>
               </SettingsCard>
               </SettingsSection>
 
@@ -5463,6 +5485,12 @@ export default function Settings() {
                         <Switch
                           checked={settingsForm.show_full_usage_numbers}
                           onCheckedChange={(checked) => autoSaveBooleanField('show_full_usage_numbers', checked)}
+                        />
+                      </SettingField>
+                      <SettingField label={t('settings.showUpstreamModelMismatch')} description={t('settings.showUpstreamModelMismatchDesc')} layout="switch">
+                        <Switch
+                          checked={settingsForm.show_upstream_model_mismatch}
+                          onCheckedChange={(checked) => autoSaveBooleanField('show_upstream_model_mismatch', checked)}
                         />
                       </SettingField>
                     </div>
