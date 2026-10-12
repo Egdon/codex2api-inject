@@ -79,7 +79,10 @@ func TestNativeWebsocketInvalidProxyDoesNotFabricateDispatch(t *testing.T) {
 	manager := NewManager()
 	t.Cleanup(manager.Stop)
 	ctx := proxy.ContextWithUpstreamTrace(context.Background(), nil)
-	proxy.RecordWebsocketUpstreamDispatch(ctx, &auth.Account{DBID: 2, UpstreamType: auth.UpstreamAntigravity}, "")
+	proxy.RecordWebsocketUpstreamDispatch(ctx, &auth.Account{DBID: 2, UpstreamType: auth.UpstreamAntigravity, AccessToken: "synthetic-other"}, "")
+	if source := proxy.UpstreamSourceFromContext(ctx); source != proxy.UpstreamSourceOther {
+		t.Fatalf("fixture source=%q", source)
+	}
 	calls := 0
 	manager.dialer.NetDialContext = func(context.Context, string, string) (net.Conn, error) {
 		calls++
