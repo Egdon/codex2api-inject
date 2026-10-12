@@ -2623,6 +2623,7 @@ export default function Settings() {
     codex_ws_busy_overflow_enabled: false,
     codex_ws_busy_patience_sec: 2,
     codex_ws_stateless_slots: 8,
+    codex_ws_downstream_keepalive_slots: 8,
     github_token_configured: false,
     github_proxy_url: '',
     codex_overload_pause_enabled: false,
@@ -4244,11 +4245,26 @@ export default function Settings() {
                       />
                     </SettingField>
                     <SettingField
+                      label={t('settings.codexWSDownstreamKeepaliveSlots')}
+                      description={t('settings.codexWSDownstreamKeepaliveSlotsDesc')}
+                    >
+                      <DraftNumberInput
+                        min={0}
+                        max={32}
+                        value={settingsForm.codex_ws_downstream_keepalive_slots}
+                        emptyValue={8}
+                        onValueChange={(value) => setSettingsForm(f => ({ ...f, codex_ws_downstream_keepalive_slots: value }))}
+                        onValueCommit={(value) => {
+                          void autoSaveSettingsPatch({ codex_ws_downstream_keepalive_slots: value })
+                        }}
+                      />
+                    </SettingField>
+                    <SettingField
                       label={t('settings.codexWSStatelessSlots')}
                       description={t('settings.codexWSStatelessSlotsDesc')}
                     >
                       <DraftNumberInput
-                        min={1}
+                        min={0}
                         max={32}
                         value={settingsForm.codex_ws_stateless_slots}
                         emptyValue={8}

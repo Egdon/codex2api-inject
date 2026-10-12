@@ -103,13 +103,14 @@ func TestSessionExpiration(t *testing.T) {
 	}
 
 	// 手动设置 LastActiveAt 为很久以前
+	session.Touch()
 	session.mu.Lock()
-	session.LastActiveAt = time.Now().Add(-10 * time.Minute)
+	session.LastActiveAt = time.Now().Add(-IdleTimeout - time.Minute)
 	session.mu.Unlock()
 
-	// 现在应该过期（IdleTimeout = 5分钟）
+	// 超过当前业务空闲窗口后应过期。
 	if !session.IsExpired() {
-		t.Error("session should be expired after 10 minutes of inactivity")
+		t.Error("session should be expired after IdleTimeout of inactivity")
 	}
 }
 

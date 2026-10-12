@@ -1781,7 +1781,7 @@ export default function Usage() {
 
   const loadAPIKeys = useCallback(async () => {
     try {
-      const response = await api.getAPIKeys()
+      const response = await api.getAPIKeys({ view: 'lite' })
       setAPIKeys(response.keys ?? [])
       setAPIKeyLoadFailed(false)
     } catch {
@@ -2654,20 +2654,20 @@ export default function Usage() {
               emptyTitle={t('usage.emptyTitle')}
               emptyDescription={hasActiveFilters ? t('usage.emptyFilteredDesc') : t('usage.emptyDesc')}
             >
-              {/* Mobile log cards */}
+              {/* 手机日志卡片：显式单列避免长 UA / 模型名撑宽隐式 Grid 列。 */}
               <TooltipProvider>
-              <div className="grid gap-3 lg:hidden">
+              <div className="grid grid-cols-1 gap-3 lg:hidden">
                 {logs.map((log: UsageLog) => {
                   const hasDetails = visibleColumns.account || visibleColumns.apiKey || visibleColumns.clientIp || visibleColumns.endpoint || visibleColumns.userAgent
                   const hasMetrics = visibleColumns.token || visibleColumns.cached || visibleColumns.timing || visibleColumns.tokensPerSec || visibleColumns.cost
                   return (
                     <div
                       key={log.id}
-                      className="rounded-xl border border-border bg-background/70 p-3.5 shadow-sm"
+                      className="min-w-0 rounded-xl border border-border bg-background/70 p-3.5 shadow-sm"
                     >
                       {/* flex-wrap + nowrap 时间：徽标再多也只会把时间挤到下一行，不会挤出视口（issue #522） */}
                       <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
                           {visibleColumns.status && (
                             <button
                               type="button"
@@ -2690,7 +2690,7 @@ export default function Usage() {
                           {visibleColumns.model && (
                             <Badge
                               variant="outline"
-                              className={`${usageTableBadgeClass} ${usageClickableFilterClass} ${log.ultra ? 'usage-ultra-model' : ''} ${filterModel === log.model ? 'border-primary/50 text-primary' : ''}`}
+                              className={`${usageTableBadgeClass} ${usageClickableFilterClass} max-w-full whitespace-normal ${log.ultra ? 'usage-ultra-model' : ''} ${filterModel === log.model ? 'border-primary/50 text-primary' : ''}`}
                               role="button"
                               tabIndex={0}
                               title={usageRequestedModelTitle(
@@ -2709,7 +2709,7 @@ export default function Usage() {
                                   title={log.channel === 'grok' ? 'Grok' : log.channel === 'antigravity' ? 'Antigravity' : log.channel === 'claude' ? 'Claude' : 'Codex'}
                                 />
                               )}
-                              {log.model || '-'}
+                              <span className="min-w-0 break-all text-left">{log.model || '-'}</span>
                             </Badge>
                           )}
                           {log.reasoning_effort ? (
@@ -2795,7 +2795,7 @@ export default function Usage() {
                       )}
 
                       {hasMetrics && (
-                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                        <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
                           {visibleColumns.token && (
                             <div className="rounded-lg border border-border/70 bg-card/60 px-2.5 py-2">
                               <div className="text-[11px] font-semibold text-muted-foreground">{t('usage.tableToken')}</div>

@@ -185,7 +185,8 @@ func TestSubagentTransportLanesAvoidSharedSessionBusyWait(t *testing.T) {
 		}
 	})
 
-	t.Run("account capacity remains authoritative", func(t *testing.T) {
+	t.Run("inference lanes do not consume idle retention", func(t *testing.T) {
+		setBusyRuntimeSettings(t, func(s *proxy.RuntimeSettings) { s.CodexWSDownstreamKeepaliveSlots = 1 })
 		manager := NewManager()
 		t.Cleanup(manager.Stop)
 		limitedAccount := &auth.Account{DBID: 43, DynamicConcurrencyLimit: 1}
@@ -209,8 +210,16 @@ func TestSubagentTransportLanesAvoidSharedSessionBusyWait(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
-		if _, _, err := manager.AcquireConnection(ctx, limitedAccount, wsURL, childLane, childHeaders, ""); err == nil {
-			t.Fatal("child bypassed the account connection capacity limit")
+		child, childPending, err := manager.AcquireConnection(ctx, limitedAccount, wsURL, childLane, childHeaders, "")
+		if err != nil {
+			t.Fatalf("idle retention rejected active child lane: %v", err)
+		}
+		t.Cleanup(func() {
+			child.session.RemovePendingRequest(childPending.RequestID)
+			manager.DiscardConnection(child)
+		})
+		if child == parent || !parent.IsConnected() || !child.IsConnected() {
+			t.Fatal("idle retention should preserve both active inference lanes")
 		}
 	})
 }

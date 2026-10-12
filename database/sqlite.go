@@ -355,6 +355,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 					codex_ws_busy_overflow_enabled INTEGER DEFAULT 0,
 					codex_ws_busy_patience_sec INTEGER DEFAULT 2,
 					codex_ws_stateless_slots INTEGER DEFAULT 8,
+					codex_ws_downstream_keepalive_slots INTEGER DEFAULT 8,
 					github_token TEXT DEFAULT '',
 					github_proxy_url TEXT DEFAULT '',
 					codex_overload_pause_enabled INTEGER DEFAULT 0,
@@ -683,6 +684,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "codex_ws_busy_overflow_enabled", "INTEGER DEFAULT 0"},
 		{"system_settings", "codex_ws_busy_patience_sec", "INTEGER DEFAULT 2"},
 		{"system_settings", "codex_ws_stateless_slots", "INTEGER DEFAULT 8"},
+		{"system_settings", "codex_ws_downstream_keepalive_slots", "INTEGER DEFAULT 8"},
 		{"system_settings", "github_token", "TEXT DEFAULT ''"},
 		{"system_settings", "github_proxy_url", "TEXT DEFAULT ''"},
 		{"system_settings", "codex_overload_pause_enabled", "INTEGER DEFAULT 0"},
@@ -1248,10 +1250,6 @@ func (db *DB) getUsageStatsSQLite(ctx context.Context, rangeStart, rangeEnd time
 		stats.AvgUserBilled = stats.TotalUserBilled / float64(stats.TotalRequests)
 	}
 	if includeBreakdowns {
-		stats.ModelStats, err = db.getUsageModelStats(ctx, 10, rangeStart, rangeEnd, channel, dim)
-		if err != nil {
-			return nil, err
-		}
 		if err := db.populateUsageBreakdownStats(ctx, stats, rangeStart, rangeEnd, channel, dim); err != nil {
 			return nil, err
 		}

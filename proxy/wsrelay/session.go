@@ -36,8 +36,8 @@ const (
 	// 写超时：30 秒
 	WriteTimeout = 30 * time.Second
 
-	// 空闲超时：5 分钟无活动则断开
-	IdleTimeout = 5 * time.Minute
+	// 业务空闲超时：30 分钟未处理聊天请求或响应则断开，心跳不续期。
+	IdleTimeout = 30 * time.Minute
 
 	// 连接最大寿命：上游 chatgpt backend 对每条 Responses WS 连接强制 60 分钟
 	// 寿命上限，超限后该连接上的 response.create 一律返回
@@ -132,6 +132,9 @@ type Session struct {
 	// 最后活跃时间
 	LastActiveAt time.Time
 
+	// 曾用于用户聊天；续链绑定过期后仍保留，不能降回空白预热槽位。
+	userContext bool
+
 	// 连接状态
 	Connected bool
 
@@ -161,20 +164,6 @@ func NewSession(accountID int64, manager *Manager) *Session {
 		Connected:    false,
 		manager:      manager,
 	}
-}
-
-// Touch 更新最后活跃时间
-func (s *Session) Touch() {
-	s.mu.Lock()
-	s.LastActiveAt = time.Now()
-	s.mu.Unlock()
-}
-
-// IsExpired 检查会话是否过期（空闲超时）
-func (s *Session) IsExpired() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return time.Since(s.LastActiveAt) > connectionIdleTimeout()
 }
 
 // SetConnected 设置连接状态
@@ -341,11 +330,6 @@ func (s *Session) StopHeartbeat() {
 		s.heartbeatTimer = nil
 	}
 	s.mu.Unlock()
-}
-
-// HandlePong 处理 Pong 响应并刷新会话活动时间。
-func (s *Session) HandlePong() {
-	s.Touch()
 }
 
 // Close 关闭会话

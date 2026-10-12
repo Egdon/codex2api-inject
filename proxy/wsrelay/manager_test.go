@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/proxy"
 	"github.com/gorilla/websocket"
 )
 
@@ -272,6 +273,7 @@ func TestCanReuseConnection(t *testing.T) {
 		session.SetConnected(true)
 		conn := &WsConnection{session: session}
 		conn.SetState(StateConnected)
+		conn.Touch()
 		conn.lastUsed.Store(time.Now().Add(-IdleTimeout - time.Second).UnixNano())
 
 		if canReuseConnection(conn) {
@@ -314,7 +316,8 @@ func TestAcquireConnectionWaitsWhileSessionHasPendingRequest(t *testing.T) {
 	}
 }
 
-func TestAcquireConnectionCapsIdleConnectionsAtAccountConcurrency(t *testing.T) {
+func TestAcquireConnectionCapsIdleConnectionsAtConfiguredSlots(t *testing.T) {
+	setBusyRuntimeSettings(t, func(s *proxy.RuntimeSettings) { s.CodexWSDownstreamKeepaliveSlots = 2 })
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -332,7 +335,7 @@ func TestAcquireConnectionCapsIdleConnectionsAtAccountConcurrency(t *testing.T) 
 
 	manager := NewManager()
 	t.Cleanup(manager.Stop)
-	account := &auth.Account{DBID: 42, DynamicConcurrencyLimit: 2}
+	account := &auth.Account{DBID: 42, DynamicConcurrencyLimit: 1}
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	connections := make([]*WsConnection, 0, 3)
 
@@ -355,7 +358,7 @@ func TestAcquireConnectionCapsIdleConnectionsAtAccountConcurrency(t *testing.T) 
 	}
 
 	if got := manager.ConnectionCount(); got != 2 {
-		t.Fatalf("ConnectionCount = %d, want account concurrency cap 2", got)
+		t.Fatalf("ConnectionCount = %d, want configured connection cap 2", got)
 	}
 	if connections[0].IsConnected() {
 		t.Fatal("oldest idle connection should be evicted when the account cap is reached")
@@ -423,7 +426,8 @@ func TestAcquireConnectionKeepsActualHandshakeUserAgentWhenReused(t *testing.T) 
 	}
 }
 
-func TestAcquireConnectionTrimsIdleConnectionsAfterDynamicLimitDecrease(t *testing.T) {
+func TestAcquireConnectionTrimsIdleConnectionsAfterConfiguredSlotDecrease(t *testing.T) {
+	setBusyRuntimeSettings(t, func(s *proxy.RuntimeSettings) { s.CodexWSDownstreamKeepaliveSlots = 3 })
 	manager := NewManager()
 	t.Cleanup(manager.Stop)
 	manager.probeFunc = func(*WsConnection) bool { return true }
@@ -439,9 +443,10 @@ func TestAcquireConnectionTrimsIdleConnectionsAfterDynamicLimitDecrease(t *testi
 		t.Fatalf("ConnectionCount before limit decrease = %d, want 3", got)
 	}
 
-	account.Mu().Lock()
-	account.DynamicConcurrencyLimit = 1
-	account.Mu().Unlock()
+	proxy.UpdateRuntimeSettings(func(s proxy.RuntimeSettings) proxy.RuntimeSettings {
+		s.CodexWSDownstreamKeepaliveSlots = 1
+		return s
+	})
 	protected := connections[1]
 	got, pending, err := manager.AcquireConnection(
 		context.Background(), account, wsURL, "session-1", http.Header{}, "",
@@ -452,21 +457,25 @@ func TestAcquireConnectionTrimsIdleConnectionsAfterDynamicLimitDecrease(t *testi
 	if got != protected {
 		t.Fatal("existing session connection should be reused after the limit decrease")
 	}
-	if count := manager.ConnectionCount(); count != 1 {
-		t.Fatalf("ConnectionCount after limit decrease = %d, want 1", count)
+	if count := manager.ConnectionCount(); count != 2 {
+		t.Fatalf("ConnectionCount after limit decrease = %d, want active 1 + idle 1", count)
 	}
 	if !protected.IsConnected() {
 		t.Fatal("the connection selected for reuse must remain connected")
 	}
-	for i, wc := range connections {
-		if wc != protected && wc.IsConnected() {
-			t.Fatalf("idle connection %d remained connected after the limit decreased", i)
-		}
+	if connections[0].IsConnected() || !connections[2].IsConnected() {
+		t.Fatal("limit decrease should keep the newest idle connection beside the active one")
 	}
 	got.session.RemovePendingRequest(pending.RequestID)
+	manager.ReleaseConnection(got)
+	if manager.ConnectionCount() != 1 || !protected.IsConnected() || connections[2].IsConnected() {
+		t.Fatal("completed request should replace the older idle connection")
+	}
 }
 
-func TestAcquireConnectionCountsPendingDialTowardAccountCap(t *testing.T) {
+func TestAcquireConnectionCountsPendingDialTowardBlankBudget(t *testing.T) {
+	setBusyRuntimeSettings(t, func(s *proxy.RuntimeSettings) { s.CodexWSStatelessSlots = 1 })
+	blankCtx := withConnectionCapacityKind(context.Background(), nil, []byte(`{"generate":false,"input":[]}`))
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -501,7 +510,7 @@ func TestAcquireConnectionCountsPendingDialTowardAccountCap(t *testing.T) {
 	firstResult := make(chan acquireResult, 1)
 	go func() {
 		wc, pending, err := manager.AcquireConnection(
-			context.Background(), account, wsURL, "session-first", http.Header{}, "",
+			blankCtx, account, wsURL, "session-first", http.Header{}, "",
 		)
 		firstResult <- acquireResult{wc: wc, pending: pending, err: err}
 	}()
@@ -512,13 +521,13 @@ func TestAcquireConnectionCountsPendingDialTowardAccountCap(t *testing.T) {
 		t.Fatal("first websocket dial did not reach the server")
 	}
 
-	secondCtx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	secondCtx, cancel := context.WithTimeout(blankCtx, 40*time.Millisecond)
 	defer cancel()
 	_, _, secondErr := manager.AcquireConnection(
 		secondCtx, account, wsURL, "session-second", http.Header{}, "",
 	)
 	if secondErr == nil {
-		t.Fatal("second dial should wait for account connection capacity")
+		t.Fatal("second dial should be rejected at account connection capacity")
 	}
 	if got := attempts.Load(); got != 1 {
 		t.Fatalf("websocket dial attempts = %d, want 1 while first dial is pending", got)

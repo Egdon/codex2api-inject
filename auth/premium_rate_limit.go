@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -236,7 +235,7 @@ func (s *Store) ClearAbsentUsageSnapshot5hAt(acc *Account, observedAt time.Time)
 		}
 	}
 	if s != nil {
-		acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	}
 	acc.mu.Unlock()
 
@@ -328,7 +327,7 @@ func (s *Store) markPremium5hRateLimited(acc *Account, resetAt, observedAt time.
 	if acc.HealthTier != HealthTierBanned {
 		acc.HealthTier = HealthTierRisky
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 
 	s.fastSchedulerUpdate(acc)

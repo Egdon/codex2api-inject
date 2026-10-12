@@ -682,7 +682,7 @@ export default function PayloadRules() {
     })()
     void (async () => {
       try {
-        const resp = await api.getAPIKeys()
+        const resp = await api.getAPIKeys({ view: 'lite' })
         const keys = resp.keys || []
         setApiKeyNameOptions(keys.map((k) => k.name).filter(Boolean))
         setApiKeyIdOptions(keys.map((k) => String(k.id)))

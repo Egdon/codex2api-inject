@@ -1255,7 +1255,10 @@ export const api = {
     sp.set('bucket_minutes', String(params.bucketMinutes))
     return request<{ trend: AccountEventTrendPoint[] }>(`/accounts/event-trend?${sp.toString()}`)
   },
-  getAPIKeys: () => request<APIKeysResponse>('/keys'),
+  // view: 'lite' — 只要密钥行本身,跳过窗口费用/最近使用时间的日志聚合(筛选下拉等场景)。
+  getAPIKeys: (params: { view?: 'lite' } = {}) =>
+    request<APIKeysResponse>(params.view ? `/keys?view=${params.view}` : '/keys'),
+  getAPIKeyConcurrency: () => request<{ concurrency: Record<string, number> }>('/keys-concurrency'),
   createAPIKey: (data: CreateAPIKeyRequest) =>
     request<CreateAPIKeyResponse>('/keys', {
       method: 'POST',

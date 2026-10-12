@@ -58,9 +58,13 @@ func TestAccountWaitSignalClosedByPoolChanges(t *testing.T) {
 
 	// 拨号占位归还 → 唤醒
 	third := manager.accountWaitSignal(accountID)
-	manager.releaseAccountConnectionCapacity(accountID)
+	capacity := manager.reserveAccountConnectionCapacity(connectionCapacityRequest{accountID: accountID, limit: connectionLimit(capacityChat)})
+	if capacity == nil {
+		t.Fatal("dial capacity reservation failed")
+	}
+	capacity.release()
 	if !signalClosed(third) {
-		t.Fatal("releaseAccountConnectionCapacity did not wake account waiters")
+		t.Fatal("capacity release did not wake account waiters")
 	}
 
 	// 没有等待者时 notify 是空操作，不应留下条目。

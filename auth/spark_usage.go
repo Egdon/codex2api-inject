@@ -205,7 +205,7 @@ func (s *Store) ClearAbsentUsageSnapshotSparkAt(acc *Account, observedAt time.Ti
 	acc.ResetSparkAt = time.Time{}
 	acc.UsageUpdatedAtSpark = time.Time{}
 	if s != nil {
-		acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	}
 	acc.mu.Unlock()
 

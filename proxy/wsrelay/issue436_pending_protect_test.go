@@ -165,6 +165,7 @@ func TestEvictExpiredSkipsConnectionsWithPendingRequests(t *testing.T) {
 	wc := NewWsConnection(nil, session, "ws://example")
 	wc.PoolKey = "key-busy"
 	wc.SetState(StateConnected)
+	wc.Touch()
 	// 伪造超龄空闲时间戳：lastUsed 早于 IdleTimeout，LastActiveAt 同步做旧
 	wc.lastUsed.Store(time.Now().Add(-2 * IdleTimeout).UnixNano())
 	session.mu.Lock()

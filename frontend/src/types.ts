@@ -2214,6 +2214,7 @@ export interface SystemSettings {
   codex_ws_busy_overflow_enabled: boolean
   codex_ws_busy_patience_sec: number
   codex_ws_stateless_slots: number
+  codex_ws_downstream_keepalive_slots: number
   // GitHub 访问（issue #522）：token 只写不读，响应仅回 configured
   github_token?: string
   github_token_configured?: boolean

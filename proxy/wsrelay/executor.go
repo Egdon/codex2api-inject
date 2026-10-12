@@ -188,13 +188,18 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// 同线程上的后台副请求（request_kind=memory、guardian 子代理）另成一道，
 	// 不与用户在飞轮次同键排队；Desktop 走 HTTP 时元数据只在请求体里。
 	poolSessionID := proxy.ResolveCodexWebsocketTransportSessionKeyWithBody(sessionID, ginHeaders, wsBody)
+	ctx = withConnectionCapacityKind(ctx, ginHeaders, wsBody)
 	var wc *WsConnection
 	var pr *PendingRequest
 	var err2 error
 	acquireStart := time.Now()
 	if prevRespID := strings.TrimSpace(gjson.GetBytes(wsBody, "previous_response_id").String()); prevRespID != "" {
-		if pwc, ppr, slotKey := e.acquireClientContinuation(websocketContinuation{responseID: prevRespID, accountID: account.ID(), apiKey: apiKey, identity: websocketClientIdentity(headers)}); pwc != nil {
-			wc, pr, poolSessionID = pwc, ppr, slotKey
+		wc, pr, poolSessionID, err2 = e.acquireContinuation(ctx, websocketContinuation{
+			responseID: prevRespID, accountID: account.ID(), apiKey: apiKey, identity: websocketClientIdentity(headers),
+			model: gjson.GetBytes(wsBody, "model").String(), url: wsURL, proxyURL: effectiveProxyURL(account, proxyOverride),
+		})
+		if err2 != nil {
+			return nil, err2
 		}
 	}
 	baseKey := strings.TrimSpace(poolRouteKey)
@@ -241,18 +246,21 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 			e.manager.DiscardConnection(wc)
 		}
 		wc.session.RemovePendingRequest(pr.RequestID)
+		e.manager.releaseUnusedChatCapacity(wc)
 		return nil, err
 	}
 	sendErr := e.sendRequest(ctx, wc, wsBody, pr.RequestID, effectiveProxyURL(account, proxyOverride))
+	if sendErr != nil && gjson.GetBytes(wsBody, "previous_response_id").String() != "" {
+		wc.session.RemovePendingRequest(pr.RequestID)
+		e.manager.DiscardConnection(wc)
+		return nil, &proxy.ResponsesContinuationLostError{Reason: "original_connection_send_failed"}
+	}
 	for retries := 0; shouldRetryWebsocketSendError(sendErr) && retries < 2; retries++ {
 		wc.session.RemovePendingRequest(pr.RequestID)
 		e.manager.DiscardConnection(wc)
 
-		// 短暂退避，避免瞬间重连风暴
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(time.Duration(retries+1) * 200 * time.Millisecond):
+		if err := waitWebsocketSendRetry(ctx, retries); err != nil {
+			return nil, err
 		}
 
 		reacquireStart := time.Now()
@@ -281,6 +289,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 		sessionID:   poolSessionID,
 		manager:     e.manager,
 		apiKey:      apiKey,
+		model:       gjson.GetBytes(wsBody, "model").String(),
 		readErrChan: make(chan error, 1),
 	}, nil
 }
@@ -457,6 +466,7 @@ func (e *Executor) sendRequest(ctx context.Context, wc *WsConnection, body []byt
 
 // WsResponse WebSocket 响应包装器
 type WsResponse struct {
+	model       string
 	conn        *WsConnection
 	pendingReq  *PendingRequest
 	sessionID   string
@@ -537,7 +547,9 @@ func (r *WsResponse) handleMessage(payload []byte, callback func(data []byte) bo
 			r.markConnBroken()
 		}
 		// 把错误内容作为 SSE 数据写给下游，让客户端看到完整错误 JSON。
-		callback(errEvent)
+		if !callback(errEvent) {
+			r.markConnBroken()
+		}
 		// 错误即终止：结束流(等价于 response.failed)。
 		return io.EOF
 	}
@@ -545,29 +557,29 @@ func (r *WsResponse) handleMessage(payload []byte, callback func(data []byte) bo
 	// 标准化完成事件类型
 	payload = normalizeCompletionEvent(payload)
 
+	// 终态先记录绑定与完成状态，再交给下游。
+	eventType := gjson.GetBytes(payload, "type").String()
+	terminal := isReadLeaseTerminal(payload)
+	if eventType == "response.completed" || eventType == "response.incomplete" {
+		r.bindCompletedResponse(gjson.GetBytes(payload, "response.id").String())
+	}
+	if terminal {
+		// 下游读到终态即可取消请求；提前标记，避免取消回调误销毁已完成连接。
+		r.markStreamCompleted()
+	}
 	// 调用回调
 	if !callback(payload) {
 		// 下游写入失败(broken pipe / 客户端断开)：响应流在非终止边界被截断，
 		// 上游仍会在这条连接上继续推送本响应的剩余帧。连接必须销毁，
 		// 归还池中复用会把残留帧串给下一个请求(issue #308)。
-		r.markConnBroken()
+		if !terminal {
+			r.markConnBroken()
+		}
 		return io.EOF
 	}
 
 	// 检查是否是终止事件
-	eventType := gjson.GetBytes(payload, "type").String()
-	if eventType == "response.completed" || eventType == "response.failed" {
-		// 续链亲和：记录本响应由哪条连接产出，后续带 previous_response_id 的
-		// 请求可回到原连接（上游无服务端存储时上下文只存活在连接内）。
-		if eventType == "response.completed" && r.manager != nil && r.conn != nil {
-			if respID := gjson.GetBytes(payload, "response.id").String(); respID != "" {
-				accountID := int64(0)
-				if r.conn.session != nil {
-					accountID = r.conn.session.AccountID
-				}
-				r.manager.BindResponseConn(respID, r.conn, r.sessionID, accountID, r.apiKey)
-			}
-		}
+	if terminal {
 		return io.EOF
 	}
 
@@ -656,6 +668,9 @@ func (r *WsResponse) markConnBroken() {
 	r.mu.Lock()
 	r.connBroken = true
 	r.mu.Unlock()
+	if r.manager != nil && r.conn != nil {
+		r.manager.DiscardConnection(r.conn)
+	}
 }
 
 // markStreamCompleted 标记读流已消费到明确的终止边界（幂等，受 mu 保护）。
@@ -691,7 +706,11 @@ func (r *WsResponse) Close() error {
 		if !r.connBroken && r.streamCompleted && !r.shouldDiscardOneShotConn() {
 			r.manager.ReleaseConnection(r.conn)
 		} else {
-			r.manager.DiscardConnection(r.conn)
+			reason := closeUnconsumed
+			if !r.connBroken && r.streamCompleted {
+				reason = closeOneShotComplete
+			}
+			r.manager.discardConnectionFor(r.conn, reason)
 		}
 	}
 
@@ -702,13 +721,10 @@ func (r *WsResponse) Close() error {
 // 这类连接的池键每请求唯一，归还池后不可能再被按键复用，只会占用账号连接名额
 // 直到空闲超时；唯一的保留价值是 response_id 续链亲和（上游无服务端存储时，
 // previous_response_id 的上下文只存活在产出响应的那条连接里），因此有存活绑定时
-// 仍归还池。CODEX_WS_STATELESS_ONESHOT 模式显式承诺用完即毁，无条件销毁。
+// 仍归还池；一次性模式只禁止通用槽位复用，不应破坏已经产生的续链。
 func (r *WsResponse) shouldDiscardOneShotConn() bool {
 	if r.conn == nil || r.conn.session == nil || !proxy.IsStatelessWebsocketSessionID(r.conn.session.ID) {
 		return false
-	}
-	if statelessOneShotEnabled() {
-		return true
 	}
 	return r.manager == nil || !r.manager.hasLiveResponseBinding(r.conn)
 }

@@ -55,11 +55,8 @@ func isBusyOverflowSessionKey(sessionKey string) bool {
 	return strings.Contains(sessionKey, busyOverflowKeyInfix)
 }
 
-// statelessConnectionSlots 返回无状态连接槽位数（系统设置 codex_ws_stateless_slots，
-// 热更新生效，RuntimeSettings 已钳 1~32；0 值兜底回内置常量，issue #522）。
+// statelessConnectionSlots 返回账号空白连接预算及通用池扫描窗口（系统设置 codex_ws_stateless_slots，
+// 热更新生效，范围 0~32；0 表示不保留空白连接、不扫描通用池）。
 func statelessConnectionSlots() int {
-	if v := proxy.CurrentRuntimeSettings().CodexWSStatelessSlots; v > 0 {
-		return v
-	}
-	return StatelessConnectionSlots
+	return proxy.CurrentRuntimeSettings().CodexWSStatelessSlots
 }

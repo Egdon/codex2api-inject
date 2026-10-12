@@ -220,9 +220,15 @@ func TestSchedulerQueueOverloadResponsesWebSocket(t *testing.T) {
 	if json.Unmarshal(payload, &event) != nil || event["type"] != "error" || !strings.Contains(string(payload), schedulerQueueFullMessage) {
 		t.Fatalf("WS overload frame = %s", payload)
 	}
-	_, _, err = conn.ReadMessage()
-	if !websocket.IsCloseError(err, websocket.CloseTryAgainLater) {
-		t.Fatalf("WS overload close = %v", err)
+	if float64(http.StatusServiceUnavailable) != event["status"] {
+		t.Fatalf("WS overload status = %v", event["status"])
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "response.create", "model": "gpt-5.5", "input": "retry"}); err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err = conn.ReadMessage()
+	if err != nil || !strings.Contains(string(payload), schedulerQueueFullMessage) {
+		t.Fatalf("WS overload prevented another turn: %s %v", payload, err)
 	}
 }
 

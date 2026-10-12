@@ -77,9 +77,8 @@ func TestEvictExpiredRotatesIdleOverAgeConnection(t *testing.T) {
 	}
 }
 
-// TestPingIdleConnectionsSkipsOverAgeConnection 验证保活不给到龄连接续命：
-// Pong 会刷新 lastUsed 让连接永不空闲过期，若继续 Ping，开保活的实例上所有
-// 连接最终都会撞上游 60 分钟寿命上限。
+// TestPingIdleConnectionsSkipsOverAgeConnection 验证到龄连接不再保活，
+// 由清理器轮转，避免撞上游 60 分钟寿命上限。
 func TestPingIdleConnectionsSkipsOverAgeConnection(t *testing.T) {
 	m := NewManager()
 	t.Cleanup(m.Stop)

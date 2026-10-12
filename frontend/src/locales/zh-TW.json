@@ -549,6 +549,8 @@
     "hrefClickHint": "點擊開啟跳轉位址（未設定時開啟 api-base）；Alt/Option+點擊 設定自訂連結"
   },
   "settings": {
+    "codexWSDownstreamKeepaliveSlots": "聊天續鏈連線保留數",
+    "codexWSDownstreamKeepaliveSlotsDesc": "每個帳號在回覆完成、等待下一輪輸入時保留的聊天連線上限，所有 API Key 共用。超額時回收最久未使用的連線，不中斷進行中的回覆。設為 0 時每次回覆後關閉；閒置 30 分鐘也會關閉，後續輸入可使用預設保留 45 分鐘的上下文重連。預設 8，範圍 0–32，儲存後生效。",
     "showUpstreamModelMismatch": "顯示上游模型不一致",
     "showUpstreamModelMismatchDesc": "開啟後，用量記錄會標示上游回應模型與請求模型不一致的情況，並提供對應篩選。關閉後只隱藏這些標記，仍會繼續記錄。",
     "codexUnifiedClientIdentity": "維護請求統一用戶端身分",

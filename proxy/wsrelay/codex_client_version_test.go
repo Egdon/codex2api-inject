@@ -69,9 +69,28 @@ func TestNativeWebsocketFailedDialRecordsActualSource(t *testing.T) {
 		return nil, errors.New("synthetic dial failure")
 	}
 	account := &auth.Account{DBID: 1, AccountID: "test-account", AccessToken: "test-token"}
-	_, err := manager.createConnection(ctx, account, "ws://native.invalid/responses", "session", http.Header{}, "")
+	_, err := manager.createConnection(ctx, connectionDialRequest{account: account, url: "ws://native.invalid/responses", sessionKey: "session", headers: http.Header{}})
 	if err == nil || calls != 1 || proxy.UpstreamSourceFromContext(ctx) != proxy.UpstreamSourceCodex {
 		t.Fatalf("failed dial attribution: calls=%d source=%q err=%v", calls, proxy.UpstreamSourceFromContext(ctx), err)
+	}
+}
+
+func TestNativeWebsocketInvalidProxyDoesNotFabricateDispatch(t *testing.T) {
+	manager := NewManager()
+	t.Cleanup(manager.Stop)
+	ctx := proxy.ContextWithUpstreamTrace(context.Background(), nil)
+	proxy.RecordWebsocketUpstreamDispatch(ctx, &auth.Account{DBID: 2, UpstreamType: auth.UpstreamAntigravity}, "")
+	calls := 0
+	manager.dialer.NetDialContext = func(context.Context, string, string) (net.Conn, error) {
+		calls++
+		return nil, errors.New("unexpected dial")
+	}
+	_, err := manager.createConnection(ctx, connectionDialRequest{
+		account: &auth.Account{DBID: 1, AccessToken: "synthetic"}, url: "ws://native.invalid/responses",
+		sessionKey: "session", headers: http.Header{}, proxyOverride: "://invalid-proxy",
+	})
+	if err == nil || calls != 0 || proxy.UpstreamSourceFromContext(ctx) != proxy.UpstreamSourceOther {
+		t.Fatalf("local proxy error changed actual source: calls=%d source=%q err=%v", calls, proxy.UpstreamSourceFromContext(ctx), err)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,7 +114,7 @@ const (
 // 相同而仍聚集在账号存在期附近。全程只依赖账号加入时间和种子，不引入 time.Now，因此
 // 保持"同种子恒定、无需落库"的性质。
 func codexIdentityUnixMilli(account *auth.Account, seed string) int64 {
-	base := atomic.LoadInt64(&account.AddedAt) / int64(time.Millisecond)
+	base := account.AddedAt.Load() / int64(time.Millisecond)
 	if base <= 0 {
 		base = codexIdentityFallbackEpochMilli
 	}

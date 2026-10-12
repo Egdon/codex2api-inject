@@ -25,6 +25,11 @@ const (
 	codexRequestKindCompaction = "compaction"
 )
 
+// IsCodexWebsocketPrewarmRequest 识别客户端明确声明的预热请求。
+func IsCodexWebsocketPrewarmRequest(headers http.Header, body []byte) bool {
+	return extractCodexRequestKind(headers, body) == codexRequestKindPrewarm
+}
+
 // ResolveCodexWebsocketTransportSessionKey returns the local-only connection
 // pool lane for one explicit Codex session. A Codex session tree shares
 // session-id while child agents have independent thread-id values. The shared
