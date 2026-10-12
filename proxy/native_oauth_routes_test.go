@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -162,10 +161,10 @@ func TestNativeOAuthRoutesWithLegacyCredentials(t *testing.T) {
 			t.Fatal("native upstream did not receive the request")
 		}
 		deadline := time.Now().Add(time.Second)
-		for atomic.LoadInt64(&account.ActiveRequests) != 0 && time.Now().Before(deadline) {
+		for account.ActiveRequests.Load() != 0 && time.Now().Before(deadline) {
 			time.Sleep(time.Millisecond)
 		}
-		if active := atomic.LoadInt64(&account.ActiveRequests); active != 0 {
+		if active := account.ActiveRequests.Load(); active != 0 {
 			t.Fatalf("account concurrency was not released: %d", active)
 		}
 		select {
@@ -239,7 +238,7 @@ func TestNativeOAuthRoutesWithLegacyCredentials(t *testing.T) {
 		}
 		assertNativeAttempt(t, "responses", true)
 	})
-	if dispatched := atomic.LoadInt64(&account.TotalRequests); dispatched != int64(len(tests)+1) {
+	if dispatched := account.TotalRequests.Load(); dispatched != int64(len(tests)+1) {
 		t.Fatalf("logical dispatches = %d, want %d", dispatched, len(tests)+1)
 	}
 }

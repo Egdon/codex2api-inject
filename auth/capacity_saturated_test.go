@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,8 +12,8 @@ func TestCapacitySaturatedCandidateSummary(t *testing.T) {
 		return &Account{DBID: id, AccessToken: "token", Status: StatusReady, PlanType: "plus", AccountID: "acct"}
 	}
 	occupy := func(acc *Account) {
-		atomic.StoreInt64(&acc.ActiveRequests, 1)
-		atomic.StoreInt64(&acc.OccupiedRequests, 1)
+		acc.ActiveRequests.Store(1)
+		acc.OccupiedRequests.Store(1)
 	}
 
 	t.Run("empty", func(t *testing.T) {

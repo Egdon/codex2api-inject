@@ -19,6 +19,9 @@ type BoundedRuntimeReader interface {
 	GetRuntimeBounded(context.Context, string, string, int64) ([]byte, bool, error)
 }
 
+// ErrRuntimeSnapshotTooLarge 表示后端值在反序列化前超过读取上限。
+var ErrRuntimeSnapshotTooLarge = errors.New("runtime snapshot exceeds byte limit")
+
 type AuthSnapshotWriter interface {
 	SetAuthSnapshot(context.Context, string, string, json.RawMessage, time.Duration) error
 }
@@ -73,7 +76,7 @@ func (tc *redisTokenCache) GetRuntimeBounded(ctx context.Context, namespace, key
 		return nil, false, err
 	}
 	if int64(len(raw)) > maxBytes {
-		return nil, false, errors.New("runtime snapshot exceeds byte limit")
+		return nil, false, ErrRuntimeSnapshotTooLarge
 	}
 	return raw, len(raw) > 0, nil
 }

@@ -10,6 +10,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import APIKeyConcurrencyBadge, { useAPIKeyConcurrency } from "../components/APIKeyConcurrencyBadge";
 import APIKeyTokenUsagePanel from "../components/APIKeyTokenUsagePanel";
 import APIKeyModelRequestLimitsEditor from "../components/APIKeyModelRequestLimitsEditor";
 import APIKeyModelRequestUsageCard from "../components/APIKeyModelRequestUsage";
@@ -405,6 +406,7 @@ export default function APIKeys() {
     },
     load: loadKeys,
   });
+  const concurrency = useAPIKeyConcurrency();
   const keys = data.keys;
   const groups = data.groups;
   const modelOptions = data.modelOptions;
@@ -1548,6 +1550,10 @@ export default function APIKeys() {
                                   <span className="truncate text-sm font-semibold text-foreground">
                                     {keyRow.name}
                                   </span>
+                                  <APIKeyConcurrencyBadge
+                                    current={concurrency?.[String(keyRow.id)] ?? (concurrency ? 0 : undefined)}
+                                    limit={keyRow.limits?.max_concurrency}
+                                  />
                                   {isNew ? (
                                     <Badge
                                       variant="outline"
@@ -1752,6 +1758,10 @@ export default function APIKeys() {
                                       <span className="truncate">
                                         {keyRow.name}
                                       </span>
+                                      <APIKeyConcurrencyBadge
+                                        current={concurrency?.[String(keyRow.id)] ?? (concurrency ? 0 : undefined)}
+                                        limit={keyRow.limits?.max_concurrency}
+                                      />
                                       {isNew ? (
                                         <Badge
                                           variant="outline"

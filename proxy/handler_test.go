@@ -1167,10 +1167,10 @@ func TestResponsesWebSocketSuccessPreservesNewerUsageLimitCooldown(t *testing.T)
 	}
 
 	deadline := time.Now().Add(time.Second)
-	for atomic.LoadInt64(&account.ActiveRequests) != 0 && time.Now().Before(deadline) {
+	for account.ActiveRequests.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if got := atomic.LoadInt64(&account.ActiveRequests); got != 0 {
+	if got := account.ActiveRequests.Load(); got != 0 {
 		t.Fatalf("ActiveRequests = %d after completed response, want 0", got)
 	}
 	if !account.HasActiveCooldown() || account.IsAvailable() {
@@ -1491,16 +1491,16 @@ func TestResponsesWebSocketFallsBackToHTTPWhenUpstreamMessageTooBig(t *testing.T
 		t.Fatalf("HTTP fallback account = %q, want same leased WS account %d", httpAccountID, wsAccountID)
 	}
 	deadline := time.Now().Add(time.Second)
-	for atomic.LoadInt64(&primary.ActiveRequests) != 0 && time.Now().Before(deadline) {
+	for primary.ActiveRequests.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := atomic.LoadInt64(&primary.ActiveRequests); got != 0 {
+	if got := primary.ActiveRequests.Load(); got != 0 {
 		t.Fatalf("primary ActiveRequests after fallback = %d, want 0", got)
 	}
-	if got := atomic.LoadInt64(&primary.TotalRequests); got != 1 {
+	if got := primary.TotalRequests.Load(); got != 1 {
 		t.Fatalf("primary TotalRequests = %d, want one logical dispatch", got)
 	}
-	if got := atomic.LoadInt64(&secondary.TotalRequests); got != 0 {
+	if got := secondary.TotalRequests.Load(); got != 0 {
 		t.Fatalf("secondary TotalRequests = %d, want no fallback redispatch", got)
 	}
 }
@@ -1612,13 +1612,13 @@ func TestResponsesHTTPIngressFallsBackToHTTPWhenForcedWebsocketMessageTooBig(t *
 	if httpAccountID != fmt.Sprint(wsAccountID) {
 		t.Fatalf("HTTP fallback account = %q, want same leased WS account %d", httpAccountID, wsAccountID)
 	}
-	if got := atomic.LoadInt64(&primary.ActiveRequests); got != 0 {
+	if got := primary.ActiveRequests.Load(); got != 0 {
 		t.Fatalf("primary ActiveRequests after fallback = %d, want 0", got)
 	}
-	if got := atomic.LoadInt64(&primary.TotalRequests); got != 1 {
+	if got := primary.TotalRequests.Load(); got != 1 {
 		t.Fatalf("primary TotalRequests = %d, want one logical dispatch", got)
 	}
-	if got := atomic.LoadInt64(&secondary.TotalRequests); got != 0 {
+	if got := secondary.TotalRequests.Load(); got != 0 {
 		t.Fatalf("secondary TotalRequests = %d, want no fallback redispatch", got)
 	}
 }
@@ -1803,10 +1803,10 @@ func TestResponsesHTTPIngressRetainsAccountWhenWebsocketRequestReturnsMessageToo
 	if got := <-httpAccountIDs; got != "1" {
 		t.Fatalf("HTTP fallback account = %q, want retained account 1", got)
 	}
-	if got := atomic.LoadInt64(&account.TotalRequests); got != 1 {
+	if got := account.TotalRequests.Load(); got != 1 {
 		t.Fatalf("TotalRequests = %d, want one logical dispatch", got)
 	}
-	if got := atomic.LoadInt64(&account.ActiveRequests); got != 0 {
+	if got := account.ActiveRequests.Load(); got != 0 {
 		t.Fatalf("ActiveRequests after fallback = %d, want 0", got)
 	}
 }
@@ -1916,13 +1916,13 @@ func TestCompatibilityEndpointsRetainAccountForWebsocketMessageTooBigHTTPFallbac
 			if httpAccountID != fmt.Sprint(wsAccountID) {
 				t.Fatalf("HTTP fallback account = %q, want same leased WS account %d", httpAccountID, wsAccountID)
 			}
-			if got := atomic.LoadInt64(&primary.ActiveRequests); got != 0 {
+			if got := primary.ActiveRequests.Load(); got != 0 {
 				t.Fatalf("primary ActiveRequests after fallback = %d, want 0", got)
 			}
-			if got := atomic.LoadInt64(&primary.TotalRequests); got != 1 {
+			if got := primary.TotalRequests.Load(); got != 1 {
 				t.Fatalf("primary TotalRequests = %d, want one logical dispatch", got)
 			}
-			if got := atomic.LoadInt64(&secondary.TotalRequests); got != 0 {
+			if got := secondary.TotalRequests.Load(); got != 0 {
 				t.Fatalf("secondary TotalRequests = %d, want no fallback redispatch", got)
 			}
 		})
@@ -2087,7 +2087,7 @@ func TestResponsesDoesNotFallbackOrPenalizeAfterWebSocketContent(t *testing.T) {
 	if failureStreak != 0 || recentResults != 0 {
 		t.Fatalf("1009 changed account health: FailureStreak=%d RecentResultsCnt=%d", failureStreak, recentResults)
 	}
-	if got := atomic.LoadInt64(&account.ActiveRequests); got != 0 {
+	if got := account.ActiveRequests.Load(); got != 0 {
 		t.Fatalf("ActiveRequests after non-fallback 1009 = %d, want 0", got)
 	}
 }
@@ -2278,8 +2278,8 @@ func TestConcurrencySaturatedPoolReturnsDistinctError(t *testing.T) {
 	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 1, TestModel: "gpt-5.5"})
 	account := &auth.Account{DBID: 1, AccessToken: "at-1", PlanType: "plus", AccountID: "acct-1", Status: auth.StatusReady}
 	store.AddAccount(account)
-	atomic.StoreInt64(&account.ActiveRequests, 1)
-	atomic.StoreInt64(&account.OccupiedRequests, 1)
+	account.ActiveRequests.Store(1)
+	account.OccupiedRequests.Store(1)
 	handler := NewHandler(store, nil, nil, nil)
 
 	tests := []struct {
@@ -2685,7 +2685,7 @@ func TestResponsesCompactReadCancellationDoesNotPenalizeAccount(t *testing.T) {
 	if account.FailureStreak != 0 || account.LastFailureKind != "" {
 		t.Fatalf("downstream cancellation penalized account: streak=%d kind=%q", account.FailureStreak, account.LastFailureKind)
 	}
-	if got := atomic.LoadInt64(&account.ActiveRequests); got != 0 {
+	if got := account.ActiveRequests.Load(); got != 0 {
 		t.Fatalf("ActiveRequests after cancellation = %d, want 0", got)
 	}
 }

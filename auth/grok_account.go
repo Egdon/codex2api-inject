@@ -1391,7 +1391,7 @@ func (s *Store) refreshGrokAccount(ctx context.Context, acc *Account, forceRefre
 				if !(acc.Status == StatusCooldown && time.Now().Before(acc.CooldownUtil)) {
 					acc.Status = StatusReady
 				}
-				acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+				acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 				acc.mu.Unlock()
 				s.invalidateRoutingSchedulers()
 				s.fastSchedulerUpdate(acc)
@@ -1495,7 +1495,7 @@ func (s *Store) refreshGrokAccount(ctx context.Context, acc *Account, forceRefre
 	if acc.HealthTier != HealthTierBanned {
 		acc.HealthTier = HealthTierHealthy
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.invalidateRoutingSchedulers()
 	s.fastSchedulerUpdate(acc)
@@ -1712,7 +1712,7 @@ func (s *Store) ApplyGrokConfig(dbID int64, baseURL, apiKey string, models []str
 	if acc.Status != StatusError {
 		acc.HealthTier = HealthTierHealthy
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.invalidateRoutingSchedulers()
 	s.fastSchedulerUpdate(acc)

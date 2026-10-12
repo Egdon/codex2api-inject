@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 
 	"github.com/codex2api/auth"
@@ -15,8 +14,8 @@ func TestGetAccountLiveStateReturnsVisibleInflightCounts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := auth.NewStore(nil, nil, nil)
 	account := &auth.Account{DBID: 42, AccessToken: "token"}
-	atomic.StoreInt64(&account.ActiveRequests, 3)
-	atomic.StoreInt64(&account.OccupiedRequests, 5)
+	account.ActiveRequests.Store(3)
+	account.OccupiedRequests.Store(5)
 	store.AddAccount(account)
 	store.SetSessionSlotBufferEnabled(true)
 	// AddAccount recomputes scheduler state; pin the maintained caps afterwards

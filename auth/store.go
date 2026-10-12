@@ -410,17 +410,18 @@ type Account struct {
 	RecentResultsIdx int       // 环形缓冲区写入位置
 	RecentResultsCnt int       // 已记录数量（最大 20）
 
-	// 高并发调度指标（原子操作，无需锁）
-	ActiveRequests int64 // 当前正在执行的请求数
+	// 高并发调度指标（原子操作，无需锁）。用 atomic.Int64 而非裸 int64:
+	// 32 位平台(arm/386)只有类型化原子保证 8 字节对齐,裸字段在结构体中段会 panic。
+	ActiveRequests atomic.Int64 // 当前正在执行的请求数
 	// OccupiedRequests 包含当前请求和成功结束后为原会话保留的缓冲槽。
 	// 调度准入读取它；管理端仍分别展示真实在途与含缓冲占用。
-	OccupiedRequests int64
-	TotalRequests    int64 // 累计总请求数
-	LastUsedAt       int64 // 最后使用时间（UnixNano）
-	Disabled         int32 // 原子标志，1 = 立即不可调度（401 时瞬间置位，无需等锁）
-	AddedAt          int64 // 加入号池的时间（UnixNano），用于过期清理
-	Locked           int32 // 原子标志，1 = 锁定，自动清理跳过此账号
-	DispatchPaused   int32 // 原子标志，1 = 禁用调度选择，不影响刷新/探针/清理
+	OccupiedRequests atomic.Int64
+	TotalRequests    atomic.Int64 // 累计总请求数
+	LastUsedAt       atomic.Int64 // 最后使用时间（UnixNano）
+	Disabled         int32        // 原子标志，1 = 立即不可调度（401 时瞬间置位，无需等锁）
+	AddedAt          atomic.Int64 // 加入号池的时间（UnixNano），用于过期清理
+	Locked           int32        // 原子标志，1 = 锁定，自动清理跳过此账号
+	DispatchPaused   int32        // 原子标志，1 = 禁用调度选择，不影响刷新/探针/清理
 
 	// per-account 调度配置（nil = 跟随默认）
 	ScoreBiasOverride       *int64
@@ -1141,7 +1142,7 @@ func (a *Account) schedulerBreakdownLocked(now time.Time) SchedulerBreakdown {
 	}
 
 	// 经过验证的账号（累计请求 > 10 次）优先调度
-	if !premium5hLimited && atomic.LoadInt64(&a.TotalRequests) > 10 {
+	if !premium5hLimited && a.TotalRequests.Load() > 10 {
 		breakdown.ProvenBonus = 20
 	}
 
@@ -2281,7 +2282,7 @@ func (a *Account) GetAccountListRuntimeSnapshot() AccountListRuntimeSnapshot {
 		LastUnauthorizedAt:      a.LastUnauthorizedAt,
 		LastRateLimitedAt:       a.LastRateLimitedAt,
 		LastTimeoutAt:           a.LastTimeoutAt,
-		ActiveRequests:          atomic.LoadInt64(&a.ActiveRequests),
+		ActiveRequests:          a.ActiveRequests.Load(),
 		OccupiedRequests:        accountOccupiedRequests(a),
 		DynamicConcurrencyLimit: a.DynamicConcurrencyLimit,
 		Reset5hAt:               a.Reset5hAt,
@@ -3488,7 +3489,7 @@ func (a *Account) FinishRecoveryProbe() {
 
 // GetActiveRequests 获取当前并发数
 func (a *Account) GetActiveRequests() int64 {
-	return atomic.LoadInt64(&a.ActiveRequests)
+	return a.ActiveRequests.Load()
 }
 
 // GetOccupiedRequests returns admission pressure including buffered session
@@ -3499,12 +3500,12 @@ func (a *Account) GetOccupiedRequests() int64 {
 
 // GetTotalRequests 获取累计请求数
 func (a *Account) GetTotalRequests() int64 {
-	return atomic.LoadInt64(&a.TotalRequests)
+	return a.TotalRequests.Load()
 }
 
 // GetLastUsedAt 获取最后使用时间
 func (a *Account) GetLastUsedAt() time.Time {
-	nano := atomic.LoadInt64(&a.LastUsedAt)
+	nano := a.LastUsedAt.Load()
 	if nano == 0 {
 		return time.Time{}
 	}
@@ -3520,8 +3521,8 @@ type Store struct {
 	accountsByID                       map[int64]*Account // DBID -> Account 索引，与 accounts 同步维护，供 O(1) 查找
 	accountSnapshot                    atomic.Pointer[accountListSnapshot]
 	globalProxy                        string
-	maxConcurrency                     int64        // 每账号最大并发数
-	testConcurrency                    int64        // 批量测试并发数
+	maxConcurrency                     atomic.Int64 // 每账号最大并发数
+	testConcurrency                    atomic.Int64 // 批量测试并发数
 	testModel                          atomic.Value // 测试连接使用的模型（string）
 	testContent                        atomic.Value // 测试连接使用的输入内容（string）
 	db                                 *database.DB
@@ -3556,13 +3557,13 @@ type Store struct {
 	lazyMode                           atomic.Bool
 	codexOAuthKeepalive                atomic.Bool
 	autoCleanupBatch                   atomic.Bool
-	maxRetries                         int64 // 请求失败最大重试次数（换号重试）
-	maxRateLimitRetries                int64 // 429 最大换号重试次数
-	backgroundRefreshInterval          int64 // 后台刷新/探针巡检间隔（ns）
-	usageProbeMaxAge                   int64 // 用量探针快照最大缓存时长（ns）
-	usageProbeConcurrency              int64 // 用量探针并行度
+	maxRetries                         atomic.Int64 // 请求失败最大重试次数（换号重试）
+	maxRateLimitRetries                atomic.Int64 // 429 最大换号重试次数
+	backgroundRefreshInterval          atomic.Int64 // 后台刷新/探针巡检间隔（ns）
+	usageProbeMaxAge                   atomic.Int64 // 用量探针快照最大缓存时长（ns）
+	usageProbeConcurrency              atomic.Int64 // 用量探针并行度
 	usageProbeResponsesFallbackEnabled atomic.Bool
-	recoveryProbeInterval              int64 // 恢复探测最小间隔（ns）
+	recoveryProbeInterval              atomic.Int64 // 恢复探测最小间隔（ns）
 	backgroundRefreshWakeCh            chan struct{}
 	// 到点即探：限流冷却 / 5h·7d 窗口重置的倒计时归零那一刻，精确唤醒一次 wham 探针，
 	// 让用量进度条随官方窗口翻新立即刷新，而不是干等下一个巡检周期。
@@ -3571,7 +3572,7 @@ type Store struct {
 	// armedBoundaryAt 记录当前已武装的最近边界（UnixNano，0=未武装），
 	// 供 wakeBoundaryProbe 判断「新边界是否更早、值不值得打扰」。
 	boundaryProbeWakeCh chan struct{}
-	armedBoundaryAt     int64
+	armedBoundaryAt     atomic.Int64
 	lazyRefreshInFlight sync.Map
 	stopCh              chan struct{}
 	stopOnce            sync.Once
@@ -3587,7 +3588,7 @@ type Store struct {
 	proxyPoolSet         map[string]struct{}
 	managedProxySet      map[string]struct{} // proxies 表中的全部 URL（含禁用/测挂）
 	proxyPoolEnabled     bool                // 代理池是否开启
-	proxyRoundRobin      uint64              // 轮询计数器
+	proxyRoundRobin      atomic.Uint64       // 轮询计数器
 
 	// Fast scheduler POC（默认关闭，通过环境变量启用）
 	fastScheduler            atomic.Pointer[FastScheduler]
@@ -3604,26 +3605,27 @@ type Store struct {
 	schedulerOutboxStarted   atomic.Bool
 	dispatchReconcileStateMu sync.Mutex
 	dispatchReconcileDone    chan struct{}
-	dispatchReconciledAt     int64
+	dispatchReconciledAt     atomic.Int64
 
 	// Codex 上游 WebSocket 相关（默认全部关闭，不影响现有 HTTP 路径）
 	codexForceWebsocket atomic.Bool // 强制 Codex 上游走 WebSocket（复用连接池）
 	// codexRequestCompression HTTP /responses 请求体 zstd 压缩，默认开启（对齐真实客户端）。
 	// 与上面几项 WS 设置正交：WS 走 permessage-deflate，本项只作用于 HTTP 路径。
-	codexRequestCompression     atomic.Bool
-	codexWSKeepaliveEnabled     atomic.Bool  // 启用上游 WS 空闲连接保活（仅 Ping）
-	codexWSKeepaliveIntervalSec atomic.Int64 // WS 保活 Ping 间隔（秒），默认 60
-	codexWSHideUpstreamErrors   atomic.Bool  // 隐藏上游 WS 原始错误，默认开启
-	codexWSSilentRetryEnabled   atomic.Bool  // 首包前上游 WS 错误静默换号重试，默认开启
-	codexWSSilentMaxRetries     atomic.Int64 // WS 静默换号最大重试次数，默认 2
-	codexWSSizeRouterEnabled    atomic.Bool  // 1009 自学习体积路由，默认开启
-	codexWSBusyMaxWaitSec       atomic.Int64 // busy session 等待上限（秒），默认 30（issue #413）
-	codexWSBusyOverflowEnabled  atomic.Bool  // busy session 溢出到同账号兄弟连接，默认关闭
-	codexWSBusyPatienceSec      atomic.Int64 // 触发溢出前的短等待（秒），默认 2
-	codexWSStatelessSlots       atomic.Int64 // 无状态请求每 (账号, cacheKey) 的连接槽位数，默认 8（issue #522）
-	overflowAutoCompactEnabled  atomic.Bool  // 上下文超窗自动摘要重试（实验性，默认关闭，issue #415）
-	compactViaResponsesEnabled  atomic.Bool  // /v1/responses/compact 改写为 /responses body-signal 压缩，默认关闭
-	firstTokenExcludesWsAcquire atomic.Bool  // 落库 first_token_ms 扣除 WS 取连耗时，默认关闭
+	codexRequestCompression         atomic.Bool
+	codexWSKeepaliveEnabled         atomic.Bool  // 启用上游 WS 空闲连接保活（仅 Ping）
+	codexWSKeepaliveIntervalSec     atomic.Int64 // WS 保活 Ping 间隔（秒），默认 60
+	codexWSHideUpstreamErrors       atomic.Bool  // 隐藏上游 WS 原始错误，默认开启
+	codexWSSilentRetryEnabled       atomic.Bool  // 首包前上游 WS 错误静默换号重试，默认开启
+	codexWSSilentMaxRetries         atomic.Int64 // WS 静默换号最大重试次数，默认 2
+	codexWSSizeRouterEnabled        atomic.Bool  // 1009 自学习体积路由，默认开启
+	codexWSBusyMaxWaitSec           atomic.Int64 // busy session 等待上限（秒），默认 30（issue #413）
+	codexWSBusyOverflowEnabled      atomic.Bool  // busy session 溢出到同账号兄弟连接，默认关闭
+	codexWSBusyPatienceSec          atomic.Int64 // 触发溢出前的短等待（秒），默认 2
+	codexWSStatelessSlots           atomic.Int64 // 每账号空白上游 WS 槽位预算，默认 8
+	codexWSDownstreamKeepaliveSlots atomic.Int64
+	overflowAutoCompactEnabled      atomic.Bool // 上下文超窗自动摘要重试（实验性，默认关闭，issue #415）
+	compactViaResponsesEnabled      atomic.Bool // /v1/responses/compact 改写为 /responses body-signal 压缩，默认关闭
+	firstTokenExcludesWsAcquire     atomic.Bool // 落库 first_token_ms 扣除 WS 取连耗时，默认关闭
 
 	// 前置元数据 SSE 事件立即透传下游（旧版兼容，默认关闭，issue #425）
 	codexPreflightSSEPassthroughEnabled atomic.Bool
@@ -3660,7 +3662,7 @@ type Store struct {
 	claudeDefaultTimezone         atomic.Value // string: 导入 Claude 账号时的默认 IANA 时区
 	claudeSecurityConfig          atomic.Value // ClaudeSecurityConfig: ClaudeCode 出站安全策略
 	claudeClientPolicy            atomic.Value // ClaudeClientPolicy: 全局 Claude Code 平台/版本策略快照
-	claudeSessionWindowLimit      int64        // Claude 账号默认并发会话窗口数（0=用全局 maxConcurrency）
+	claudeSessionWindowLimit      atomic.Int64 // Claude 账号默认并发会话窗口数（0=用全局 maxConcurrency）
 	claudeCLIVersionSyncDisabled  atomic.Bool  // Claude CLI 版本自动同步是否关闭（零值=开启）
 	claudeCLIVersionSyncIntervalH atomic.Int64 // Claude CLI 版本同步间隔小时（0=默认 12）
 	claudeFirstTokenTimeoutSec    atomic.Int64 // Claude 路径首字超时秒（0=跟随全局）
@@ -3913,7 +3915,7 @@ func (s *Store) applyCachedAccountCooldown(acc *Account, record runtimeCooldownR
 		return
 	}
 	reason := normalizeCooldownReason(record.Reason)
-	baseLimit := atomic.LoadInt64(&s.maxConcurrency)
+	baseLimit := s.maxConcurrency.Load()
 	acc.mu.Lock()
 	current := runtimeCooldownRecord{Reason: acc.CooldownReason, ResetAt: acc.CooldownUtil}
 	if acc.isTransientRateLimitCooldownLocked() {
@@ -4211,6 +4213,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 			CodexWSBusyAcquireMaxWaitSec:       30,
 			CodexWSBusyPatienceSec:             2,
 			CodexWSStatelessSlots:              8,
+			CodexWSDownstreamKeepaliveSlots:    database.DefaultCodexWSDownstreamKeepaliveSlots,
 			CodexContinueMaxRounds:             8,
 			AutoPause5hGuardBandPercent:        defaultAutoPause5hGuardBandPercent,
 			AutoPause5hGuardConcurrency:        defaultAutoPause5hGuardConcurrency,
@@ -4221,8 +4224,6 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	s := &Store{
 		globalProxy:                settings.ProxyURL,
-		maxConcurrency:             int64(settings.MaxConcurrency),
-		testConcurrency:            int64(settings.TestConcurrency),
 		db:                         db,
 		tokenCache:                 tc,
 		backgroundRefreshWakeCh:    make(chan struct{}, 1),
@@ -4238,6 +4239,8 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 		promptFilterNewAPIBindings: make(map[int64]database.PromptFilterNewAPIBinding),
 		oauthRefreshLocks:          make(map[string]*oauthRefreshLocalLock),
 	}
+	s.maxConcurrency.Store(int64(settings.MaxConcurrency))
+	s.testConcurrency.Store(int64(settings.TestConcurrency))
 	s.codexRequestCompression.Store(settings.CodexRequestCompression)
 	s.availability.Store(newAvailabilityHub())
 	s.publishAccountSnapshot(nil)
@@ -4265,12 +4268,12 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	if retries <= 0 {
 		retries = 2 // 默认重试 2 次
 	}
-	atomic.StoreInt64(&s.maxRetries, retries)
+	s.maxRetries.Store(retries)
 	rateLimitRetries := int64(settings.MaxRateLimitRetries)
 	if rateLimitRetries < 0 {
 		rateLimitRetries = 0
 	}
-	atomic.StoreInt64(&s.maxRateLimitRetries, rateLimitRetries)
+	s.maxRateLimitRetries.Store(rateLimitRetries)
 	s.allowRemoteMigration.Store(settings.AllowRemoteMigration)
 	s.schedulerMode.Store(settings.SchedulerMode)
 	s.SetAffinityMode(settings.AffinityMode)
@@ -4331,6 +4334,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	s.codexWSBusyOverflowEnabled.Store(settings.CodexWSBusyOverflowEnabled)
 	s.codexWSBusyPatienceSec.Store(int64(database.NormalizeCodexWSBusyPatienceSec(settings.CodexWSBusyPatienceSec)))
 	s.codexWSStatelessSlots.Store(int64(database.NormalizeCodexWSStatelessSlots(settings.CodexWSStatelessSlots)))
+	s.SetCodexWSDownstreamKeepaliveSlots(settings.CodexWSDownstreamKeepaliveSlots)
 	s.overflowAutoCompactEnabled.Store(settings.OverflowAutoCompactEnabled)
 	s.compactViaResponsesEnabled.Store(settings.CompactViaResponsesEnabled)
 	s.codexPreflightSSEPassthroughEnabled.Store(settings.CodexPreflightSSEPassthroughEnabled)
@@ -4414,7 +4418,7 @@ func (s *Store) recomputeAllAccountSchedulerState() {
 	if s == nil {
 		return
 	}
-	baseLimit := atomic.LoadInt64(&s.maxConcurrency)
+	baseLimit := s.maxConcurrency.Load()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, acc := range s.accounts {
@@ -4779,7 +4783,7 @@ func (s *Store) GithubProxyURL() string {
 	return ""
 }
 
-// SetCodexWSStatelessSlots 设置无状态请求每 (账号, cacheKey) 的连接槽位数。
+// SetCodexWSStatelessSlots 设置每个账号的空白上游 WS 连接槽位预算。
 func (s *Store) SetCodexWSStatelessSlots(slots int) {
 	if s == nil {
 		return
@@ -4787,7 +4791,7 @@ func (s *Store) SetCodexWSStatelessSlots(slots int) {
 	s.codexWSStatelessSlots.Store(int64(database.NormalizeCodexWSStatelessSlots(slots)))
 }
 
-// CodexWSStatelessSlots 返回无状态请求每 (账号, cacheKey) 的连接槽位数。
+// CodexWSStatelessSlots 返回每个账号的空白上游 WS 连接槽位预算。
 func (s *Store) CodexWSStatelessSlots() int {
 	if s == nil {
 		return 8
@@ -4883,7 +4887,7 @@ func (s *Store) NextProxy() string {
 	if !enabled || len(pool) == 0 {
 		return s.GetProxyURL() // fallback 全局单代理
 	}
-	idx := atomic.AddUint64(&s.proxyRoundRobin, 1)
+	idx := s.proxyRoundRobin.Add(1)
 	return pool[idx%uint64(len(pool))]
 }
 
@@ -5298,7 +5302,7 @@ func (s *Store) SetBackgroundRefreshInterval(d time.Duration) {
 	if d <= 0 {
 		d = defaultBackgroundRefreshInterval
 	}
-	atomic.StoreInt64(&s.backgroundRefreshInterval, int64(d))
+	s.backgroundRefreshInterval.Store(int64(d))
 	select {
 	case s.backgroundRefreshWakeCh <- struct{}{}:
 	default:
@@ -5307,7 +5311,7 @@ func (s *Store) SetBackgroundRefreshInterval(d time.Duration) {
 
 // GetBackgroundRefreshInterval 获取后台刷新/探针巡检间隔。
 func (s *Store) GetBackgroundRefreshInterval() time.Duration {
-	d := time.Duration(atomic.LoadInt64(&s.backgroundRefreshInterval))
+	d := time.Duration(s.backgroundRefreshInterval.Load())
 	if d <= 0 {
 		return defaultBackgroundRefreshInterval
 	}
@@ -5319,12 +5323,12 @@ func (s *Store) SetUsageProbeMaxAge(d time.Duration) {
 	if d <= 0 {
 		d = defaultUsageProbeMaxAge
 	}
-	atomic.StoreInt64(&s.usageProbeMaxAge, int64(d))
+	s.usageProbeMaxAge.Store(int64(d))
 }
 
 // GetUsageProbeMaxAge 获取用量探针最大缓存时长。
 func (s *Store) GetUsageProbeMaxAge() time.Duration {
-	d := time.Duration(atomic.LoadInt64(&s.usageProbeMaxAge))
+	d := time.Duration(s.usageProbeMaxAge.Load())
 	if d <= 0 {
 		return defaultUsageProbeMaxAge
 	}
@@ -5339,12 +5343,12 @@ func (s *Store) SetUsageProbeConcurrency(n int) {
 	if n > 128 {
 		n = 128
 	}
-	atomic.StoreInt64(&s.usageProbeConcurrency, int64(n))
+	s.usageProbeConcurrency.Store(int64(n))
 }
 
 // GetUsageProbeConcurrency 获取用量探针并行度。
 func (s *Store) GetUsageProbeConcurrency() int {
-	n := int(atomic.LoadInt64(&s.usageProbeConcurrency))
+	n := int(s.usageProbeConcurrency.Load())
 	if n <= 0 {
 		return defaultUsageProbeConcurrency
 	}
@@ -5377,12 +5381,12 @@ func (s *Store) SetRecoveryProbeInterval(d time.Duration) {
 	if d <= 0 {
 		d = defaultRecoveryProbeInterval
 	}
-	atomic.StoreInt64(&s.recoveryProbeInterval, int64(d))
+	s.recoveryProbeInterval.Store(int64(d))
 }
 
 // GetRecoveryProbeInterval 获取恢复探测最小间隔。
 func (s *Store) GetRecoveryProbeInterval() time.Duration {
-	d := time.Duration(atomic.LoadInt64(&s.recoveryProbeInterval))
+	d := time.Duration(s.recoveryProbeInterval.Load())
 	if d <= 0 {
 		return defaultRecoveryProbeInterval
 	}
@@ -5594,7 +5598,6 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		CustomHeaders:                row.GetCredentialStringMap("custom_headers"),
 		UpstreamRequestIDHeader:      row.GetCredential(UpstreamRequestIDHeaderCredentialKey),
 		HealthTier:                   HealthTierWarm,
-		AddedAt:                      row.CreatedAt.UnixNano(),
 		UpstreamType:                 upstreamType,
 		AntigravityProjectID:         strings.TrimSpace(row.GetCredential("project_id")),
 		BaseURL:                      strings.TrimRight(strings.TrimSpace(baseURL), "/"),
@@ -5614,6 +5617,7 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		ClaudeClientVersionOverride:  claudeClientVersionOverride,
 		claudeSessionWindow:          claudeSessionWindowForRow(upstreamType, s.ClaudeSessionWindowLimit()),
 	}
+	account.AddedAt.Store(row.CreatedAt.UnixNano())
 	if strings.EqualFold(strings.TrimSpace(upstreamType), UpstreamClaude) {
 		if observedRaw := strings.TrimSpace(row.GetCredential(ClaudeUsageProbeAtCredentialKey)); observedRaw != "" {
 			if observedAt, parseErr := time.Parse(time.RFC3339, observedRaw); parseErr == nil {
@@ -5887,7 +5891,7 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		account.RestoreModelCooldown(cooldown.Model, cooldown.Reason, cooldown.ResetAt, cooldown.UpdatedAt)
 	}
 	account.mu.Lock()
-	account.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	account.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	account.mu.Unlock()
 	if s.db != nil {
 		if snapshot, err := s.db.LoadDaybreakSnapshot(ctx, row.ID); err == nil {
@@ -5988,10 +5992,10 @@ func (s *Store) ReconcileDispatchState(ctx context.Context) (bool, error) {
 
 func (s *Store) reconcileDispatchState(ctx context.Context) (bool, error) {
 	now := time.Now()
-	if last := atomic.LoadInt64(&s.dispatchReconciledAt); last > 0 && now.Sub(time.Unix(0, last)) < dispatchStateReconcileInterval {
+	if last := s.dispatchReconciledAt.Load(); last > 0 && now.Sub(time.Unix(0, last)) < dispatchStateReconcileInterval {
 		return false, nil
 	}
-	atomic.StoreInt64(&s.dispatchReconciledAt, now.UnixNano())
+	s.dispatchReconciledAt.Store(now.UnixNano())
 
 	rows, err := s.db.ListActive(ctx)
 	if err != nil {
@@ -6048,7 +6052,7 @@ func (s *Store) reconcileDispatchState(ctx context.Context) (bool, error) {
 				acc.setAllowedAPIKeyIDsLocked(allowedAPIKeyIDs)
 				acc.recomputeEffectiveAutoPause(s)
 				acc.recomputeEffectiveGroupBaseConcurrency(s)
-				acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+				acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 			}
 			acc.mu.Unlock()
 			if accountMetadataChanged {
@@ -6133,7 +6137,7 @@ func (s *Store) TriggerDispatchStateReconcileAsync() <-chan struct{} {
 	// instantly-closed channel, and no throwaway goroutine is spawned. The
 	// check sits after ownership acquisition so callers racing an in-flight
 	// run still coalesce onto its completion channel above.
-	if last := atomic.LoadInt64(&s.dispatchReconciledAt); last > 0 && time.Since(time.Unix(0, last)) < dispatchStateReconcileInterval {
+	if last := s.dispatchReconciledAt.Load(); last > 0 && time.Since(time.Unix(0, last)) < dispatchStateReconcileInterval {
 		s.finishDispatchStateReconcile(done)
 		return nil
 	}
@@ -6489,8 +6493,8 @@ func (s *Store) tryAcquireAccountWithFailure(acc *Account, limit int64, updateSc
 		s.markDispatchCountLimitCooldown(acc, reservation.ResetAt, updateSchedulerOnLimit)
 		return false, accountAcquireFailureDispatchLimit
 	}
-	atomic.AddInt64(&acc.TotalRequests, 1)
-	atomic.StoreInt64(&acc.LastUsedAt, now.UnixNano())
+	acc.TotalRequests.Add(1)
+	acc.LastUsedAt.Store(now.UnixNano())
 	if reservation.HitLimit {
 		s.markDispatchCountLimitCooldown(acc, reservation.ResetAt, updateSchedulerOnLimit)
 	}
@@ -6511,8 +6515,8 @@ func accountOccupiedRequests(acc *Account) int64 {
 	if acc == nil {
 		return 0
 	}
-	active := atomic.LoadInt64(&acc.ActiveRequests)
-	occupied := atomic.LoadInt64(&acc.OccupiedRequests)
+	active := acc.ActiveRequests.Load()
+	occupied := acc.OccupiedRequests.Load()
 	if active > occupied {
 		return active
 	}
@@ -6528,12 +6532,12 @@ func reserveOccupiedAccountSlot(acc *Account, limit int64) bool {
 		return false
 	}
 	for {
-		occupied := atomic.LoadInt64(&acc.OccupiedRequests)
-		if occupied >= limit || atomic.LoadInt64(&acc.ActiveRequests) >= limit {
+		occupied := acc.OccupiedRequests.Load()
+		if occupied >= limit || acc.ActiveRequests.Load() >= limit {
 			return false
 		}
-		if atomic.CompareAndSwapInt64(&acc.OccupiedRequests, occupied, occupied+1) {
-			atomic.AddInt64(&acc.ActiveRequests, 1)
+		if acc.OccupiedRequests.CompareAndSwap(occupied, occupied+1) {
+			acc.ActiveRequests.Add(1)
 			if accountDispatchBlocked(acc) {
 				releaseOccupiedAccountSlot(acc)
 				return false
@@ -6552,27 +6556,27 @@ func releaseOccupiedAccountSlot(acc *Account) bool {
 	return activeReleased || occupiedReleased
 }
 
-func atomicDecrementIfPositive(counter *int64) bool {
+func atomicDecrementIfPositive(counter *atomic.Int64) bool {
 	if counter == nil {
 		return false
 	}
 	for {
-		current := atomic.LoadInt64(counter)
+		current := counter.Load()
 		if current <= 0 {
 			return false
 		}
-		if atomic.CompareAndSwapInt64(counter, current, current-1) {
+		if counter.CompareAndSwap(current, current-1) {
 			return true
 		}
 	}
 }
 
-func atomicSubtractFloorZero(counter *int64, delta int64) {
+func atomicSubtractFloorZero(counter *atomic.Int64, delta int64) {
 	if counter == nil || delta <= 0 {
 		return
 	}
 	for {
-		current := atomic.LoadInt64(counter)
+		current := counter.Load()
 		if current <= 0 {
 			return
 		}
@@ -6580,7 +6584,7 @@ func atomicSubtractFloorZero(counter *int64, delta int64) {
 		if next < 0 {
 			next = 0
 		}
-		if atomic.CompareAndSwapInt64(counter, current, next) {
+		if counter.CompareAndSwap(current, next) {
 			return
 		}
 	}
@@ -6655,7 +6659,7 @@ func (s *Store) NextExcludingWithDispatch(apiKeyID int64, exclude map[int64]bool
 		bestDispatchScore := -math.MaxFloat64
 		var bestLoad int64 = math.MaxInt64
 		var bestLimit int64
-		maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+		maxConcurrency := s.maxConcurrency.Load()
 
 		accounts := s.accountSnapshotAccounts()
 		scanned += len(accounts)
@@ -6850,7 +6854,7 @@ func (s *Store) nextExcludingWithFilterLazy(apiKeyID int64, exclude map[int64]bo
 		bestPriority := -1
 		bestDispatchScore := -math.MaxFloat64
 		var bestLoad int64 = math.MaxInt64
-		maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+		maxConcurrency := s.maxConcurrency.Load()
 
 		for _, acc := range s.accountSnapshotAccounts() {
 			if exclude != nil && exclude[acc.DBID] {
@@ -7257,7 +7261,7 @@ func (s *Store) nextAccountForFreshAffinityWithDispatch(key string, apiKeyID int
 		limit             int64
 		weight            uint64
 	}
-	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+	maxConcurrency := s.maxConcurrency.Load()
 
 	accounts := s.accountSnapshotAccounts()
 	candidates := make([]affinityCandidate, 0, len(accounts))
@@ -7516,7 +7520,7 @@ func (s *Store) takeByIDModeWithCapacity(id int64, apiKeyID int64, exclude map[i
 		return nil, false
 	}
 
-	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+	maxConcurrency := s.maxConcurrency.Load()
 	now := time.Now()
 	if s.GetLazyMode() && !continuationEligible {
 		if s.tryReclaimSessionSlot(target, sessionKey, true) {
@@ -7589,7 +7593,7 @@ func (s *Store) hasDispatchCandidateWithDispatch(apiKeyID int64, exclude map[int
 	}
 	filter = s.withUsableEgressFilter(filter)
 
-	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+	maxConcurrency := s.maxConcurrency.Load()
 	for _, acc := range s.accountSnapshotAccounts() {
 		if acc == nil {
 			continue
@@ -7712,7 +7716,7 @@ func (s *Store) CapacitySaturatedCandidateSummary(apiKeyID int64, exclude map[in
 		return summary
 	}
 	filter = s.withUsableEgressFilter(filter)
-	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+	maxConcurrency := s.maxConcurrency.Load()
 	saturated := 0
 	for _, acc := range s.accountSnapshotAccounts() {
 		if acc == nil || (exclude != nil && exclude[acc.DBID]) {
@@ -7781,7 +7785,7 @@ func (s *Store) hasContinuationCandidateWithDispatch(key string, apiKeyID int64,
 		}
 	}
 
-	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+	maxConcurrency := s.maxConcurrency.Load()
 	if continuationEligible {
 		_, _, limit, _, available := acc.fastSchedulerSnapshotForContinuation(maxConcurrency, time.Now())
 		return available && limit > 0
@@ -8154,7 +8158,7 @@ func (s *Store) tryReclaimSessionSlot(acc *Account, sessionKey string, updateSch
 			if len(bySession) == 0 {
 				delete(s.sessionSlotReservations, acc.DBID)
 			}
-			atomic.AddInt64(&acc.ActiveRequests, 1)
+			acc.ActiveRequests.Add(1)
 			reclaimed = true
 		}
 	}
@@ -8178,8 +8182,8 @@ func (s *Store) tryReclaimSessionSlot(acc *Account, sessionKey string, updateSch
 		s.markDispatchCountLimitCooldown(acc, dispatchReservation.ResetAt, updateSchedulerOnLimit)
 		return false
 	}
-	atomic.AddInt64(&acc.TotalRequests, 1)
-	atomic.StoreInt64(&acc.LastUsedAt, now.UnixNano())
+	acc.TotalRequests.Add(1)
+	acc.LastUsedAt.Store(now.UnixNano())
 	if dispatchReservation.HitLimit {
 		s.markDispatchCountLimitCooldown(acc, dispatchReservation.ResetAt, updateSchedulerOnLimit)
 	}
@@ -8199,7 +8203,7 @@ func (s *Store) Release(acc *Account) {
 
 // SetMaxConcurrency 动态更新每账号并发上限
 func (s *Store) SetMaxConcurrency(n int) {
-	atomic.StoreInt64(&s.maxConcurrency, int64(n))
+	s.maxConcurrency.Store(int64(n))
 	// Update existing scheduler's base limit in-place before full rebuild.
 	if scheduler := s.getFastScheduler(); scheduler != nil {
 		scheduler.SetBaseLimit(int64(n))
@@ -8210,7 +8214,7 @@ func (s *Store) SetMaxConcurrency(n int) {
 
 // GetMaxConcurrency 获取当前每账号并发上限
 func (s *Store) GetMaxConcurrency() int {
-	return int(atomic.LoadInt64(&s.maxConcurrency))
+	return int(s.maxConcurrency.Load())
 }
 
 // SetMaxRetries 动态更新最大重试次数
@@ -8218,23 +8222,23 @@ func (s *Store) SetMaxRetries(n int) {
 	if n < 0 {
 		n = 0
 	}
-	atomic.StoreInt64(&s.maxRetries, int64(n))
+	s.maxRetries.Store(int64(n))
 }
 
 // GetMaxRetries 获取当前最大重试次数
 func (s *Store) GetMaxRetries() int {
-	return int(atomic.LoadInt64(&s.maxRetries))
+	return int(s.maxRetries.Load())
 }
 
 func (s *Store) SetMaxRateLimitRetries(n int) {
 	if n < 0 {
 		n = 0
 	}
-	atomic.StoreInt64(&s.maxRateLimitRetries, int64(n))
+	s.maxRateLimitRetries.Store(int64(n))
 }
 
 func (s *Store) GetMaxRateLimitRetries() int {
-	return int(atomic.LoadInt64(&s.maxRateLimitRetries))
+	return int(s.maxRateLimitRetries.Load())
 }
 
 // normalizeRetryIntervalMS 把重试间隔限制在 0-30000ms(0 = 立即重试)。
@@ -8359,12 +8363,12 @@ func (s *Store) GetTestContent() string {
 
 // SetTestConcurrency 动态更新批量测试并发数
 func (s *Store) SetTestConcurrency(n int) {
-	atomic.StoreInt64(&s.testConcurrency, int64(n))
+	s.testConcurrency.Store(int64(n))
 }
 
 // GetTestConcurrency 获取当前批量测试并发数
 func (s *Store) GetTestConcurrency() int {
-	return int(atomic.LoadInt64(&s.testConcurrency))
+	return int(s.testConcurrency.Load())
 }
 
 // GetBackgroundRefreshIntervalMinutes 获取后台巡检间隔（分钟）。
@@ -8816,7 +8820,7 @@ func (s *Store) SetIgnoreUsageLimitStatus(enabled bool) {
 	for _, acc := range s.accountSnapshotAccounts() {
 		acc.mu.Lock()
 		acc.recomputeEffectiveIgnoreUsageLimitStatus(enabled)
-		acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 		acc.mu.Unlock()
 		s.fastSchedulerUpdate(acc)
 	}
@@ -9057,7 +9061,7 @@ func (s *Store) recomputeAllGroupBaseConcurrency() {
 	if s == nil {
 		return
 	}
-	baseLimit := atomic.LoadInt64(&s.maxConcurrency)
+	baseLimit := s.maxConcurrency.Load()
 	for _, acc := range s.accountSnapshotAccounts() {
 		if acc == nil {
 			continue
@@ -9098,14 +9102,14 @@ func (s *Store) AddAccounts(accounts []*Account) {
 	now := time.Now().UnixNano()
 	added := make([]*Account, 0, len(accounts))
 	ignoreUsageLimit := s.IgnoreUsageLimitStatus()
-	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+	maxConcurrency := s.maxConcurrency.Load()
 	for _, acc := range accounts {
 		if acc == nil {
 			continue
 		}
 		// 记录加入时间（用于过期清理）
-		if atomic.LoadInt64(&acc.AddedAt) == 0 {
-			atomic.StoreInt64(&acc.AddedAt, now)
+		if acc.AddedAt.Load() == 0 {
+			acc.AddedAt.Store(now)
 		}
 		acc.mu.Lock()
 		acc.grokRuntimeSink = s
@@ -9213,7 +9217,7 @@ func (s *Store) ApplyAccountSchedulerOverrides(dbID int64, scoreBiasOverride, ba
 	if skipWarmTier != nil {
 		acc.SkipWarmTier = *skipWarmTier
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.invalidateRoutingSchedulers()
 	s.fastSchedulerUpdate(acc)
@@ -9236,7 +9240,7 @@ func (s *Store) ApplyAccountSchedulerOverridePatch(dbID int64, scoreBiasSet bool
 	if skipWarmTier != nil {
 		acc.SkipWarmTier = *skipWarmTier
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.invalidateRoutingSchedulers()
 	s.fastSchedulerUpdate(acc)
@@ -9273,7 +9277,7 @@ func (s *Store) ApplyAccountIgnoreUsageLimitStatus(dbID int64, override *bool) b
 		acc.IgnoreUsageLimitStatusOverride = &value
 	}
 	acc.recomputeEffectiveIgnoreUsageLimitStatus(s.IgnoreUsageLimitStatus())
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	return true
@@ -9299,7 +9303,7 @@ func (s *Store) ApplyAccountQuotaAutoPauseConfig(dbID int64, threshold5h, thresh
 		acc.AutoPause7dDisabled = *disabled7d
 	}
 	acc.recomputeEffectiveAutoPause(s)
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	return true
@@ -9314,7 +9318,7 @@ func (s *Store) ApplyAccountKeepConcurrencyOnDegrade(dbID int64, enabled bool) b
 
 	acc.mu.Lock()
 	acc.KeepConcurrencyOnDegrade = enabled
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	return true
@@ -9354,7 +9358,7 @@ func (s *Store) ApplyAccountGroups(dbID int64, groupIDs []int64) bool {
 	acc.GroupIDs = cloneInt64Slice(groupIDs)
 	acc.recomputeEffectiveGroupBaseConcurrency(s)
 	acc.recomputeEffectiveAutoPause(s)
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.invalidateRoutingSchedulers()
 	s.fastSchedulerUpdate(acc)
@@ -9380,7 +9384,7 @@ func (s *Store) UpdateAccountCredit(dbID int64, creditEnabled, creditSkipUsageWi
 	if creditSkipUsageWindow != nil {
 		acc.CreditSkipUsageWindow = *creditSkipUsageWindow
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	return nil
@@ -9392,7 +9396,7 @@ func (s *Store) ApplyAccountGroupMemberships(memberships map[int64][]int64) {
 		acc.GroupIDs = cloneInt64Slice(memberships[acc.DBID])
 		acc.recomputeEffectiveGroupBaseConcurrency(s)
 		acc.recomputeEffectiveAutoPause(s)
-		acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 		acc.mu.Unlock()
 		s.fastSchedulerUpdate(acc)
 	}
@@ -9810,7 +9814,7 @@ func (s *Store) applyOpenAIResponsesConfig(ctx context.Context, row *database.Ac
 	} else if acc.Status != StatusError {
 		acc.HealthTier = HealthTierHealthy
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	if identityChanged {
 		atomic.StoreInt32(&acc.Disabled, 0)
@@ -10011,7 +10015,7 @@ func (s *Store) markCooldownUntil(acc *Account, until time.Time, reason string, 
 			acc.HealthTier = HealthTierRisky
 		}
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 
 	if updateScheduler {
@@ -10074,7 +10078,7 @@ func (s *Store) markCooldown(acc *Account, duration time.Duration, reason string
 	if errorMsg != "" {
 		acc.ErrorMsg = errorMsg
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	until := now.Add(duration)
 	acc.setCooldownUntilLocked(until, reason)
 	acc.mu.Unlock()
@@ -10191,7 +10195,7 @@ func (s *Store) MarkModelCooldownWithBackoff(acc *Account, model string, duratio
 	} else if acc.HealthTier != HealthTierBanned {
 		acc.HealthTier = HealthTierRisky
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	s.setCachedModelCooldown(acc.DBID, cooldown)
@@ -10223,7 +10227,7 @@ func (s *Store) MarkModelCooldownUntil(acc *Account, model, reason string, reset
 	if acc.healthTierLocked() == HealthTierHealthy {
 		acc.HealthTier = HealthTierWarm
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	s.setCachedModelCooldown(acc.DBID, cooldown)
@@ -10397,7 +10401,7 @@ func (s *Store) MarkError(acc *Account, errorMsg string) {
 	if acc.HealthTier != HealthTierBanned {
 		acc.HealthTier = HealthTierRisky
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	s.deleteCachedAccountCooldown(acc.DBID)
@@ -10443,7 +10447,7 @@ func (s *Store) ClearCooldown(acc *Account) {
 	} else if wasError && acc.HealthTier != HealthTierBanned {
 		acc.HealthTier = HealthTierWarm
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	s.deleteCachedAccountCooldown(acc.DBID)
@@ -10510,7 +10514,7 @@ func (s *Store) ClearUsageLimitCooldownSince(acc *Account, observedAt time.Time)
 	if acc.HealthTier != HealthTierBanned {
 		acc.HealthTier = HealthTierWarm
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 
 	s.fastSchedulerUpdate(acc)
@@ -10579,7 +10583,7 @@ func (s *Store) confirmResponsesAvailable(acc *Account, requestStartedAt time.Ti
 	if acc.HealthTier != HealthTierBanned {
 		acc.HealthTier = HealthTierWarm
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 
 	s.fastSchedulerUpdate(acc)
@@ -10632,7 +10636,7 @@ func (s *Store) RecordManualTestSuccess(acc *Account, latency time.Duration) {
 	} else if acc.HealthTier == "" {
 		acc.HealthTier = HealthTierHealthy
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	s.deleteCachedAccountCooldown(acc.DBID)
@@ -10665,7 +10669,7 @@ func (s *Store) ReportRequestSuccess(acc *Account, latency time.Duration) {
 	if acc.HealthTier == "" {
 		acc.HealthTier = HealthTierHealthy
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 }
@@ -10734,7 +10738,7 @@ func (s *Store) ReportRequestFailure(acc *Account, kind string, latency time.Dur
 		}
 	}
 
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 }
@@ -10782,7 +10786,7 @@ func (s *Store) UpdateAccountSubscriptionExpiresAt(acc *Account, expiresAt time.
 	changed := acc.SubscriptionExpiresAt.IsZero() || !acc.SubscriptionExpiresAt.Equal(expiresAt)
 	if changed {
 		acc.SubscriptionExpiresAt = expiresAt
-		acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	}
 	acc.mu.Unlock()
 	if changed {
@@ -10860,7 +10864,7 @@ func (s *Store) ClearStaleSubscriptionExpiresAt(acc *Account) bool {
 		acc.subscriptionMeta.Error = ""
 		acc.subscriptionMeta.GraceUntil = time.Time{}
 		meta = acc.subscriptionMeta
-		acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	}
 	acc.mu.Unlock()
 	if !stale {
@@ -10889,7 +10893,7 @@ func (s *Store) UpdateAccountPlanType(acc *Account, planType string) bool {
 	changed := acc.PlanType != plan
 	if changed {
 		acc.PlanType = plan
-		acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	}
 	acc.mu.Unlock()
 	if changed {
@@ -10995,7 +10999,7 @@ func (s *Store) ApplyUsageLimitMetadata(acc *Account, planType string, resetAt t
 		fields["codex_7d_reset_at"] = resetAt.Format(time.RFC3339)
 		fields["codex_usage_updated_at"] = now.Format(time.RFC3339)
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	if planChanged {
 		s.invalidateRoutingSchedulers()
@@ -11144,7 +11148,7 @@ func (s *Store) WakeBoundaryProbe(at time.Time) {
 		if !at.After(time.Now()) {
 			return // 边界已过，交给常规巡检/探针即可
 		}
-		armed := atomic.LoadInt64(&s.armedBoundaryAt)
+		armed := s.armedBoundaryAt.Load()
 		if armed != 0 && at.UnixNano() >= armed {
 			return // 已有更早或同刻的唤醒计划，定时器到点后会重新扫描接管更晚的边界
 		}
@@ -11178,10 +11182,10 @@ func (s *Store) armNextBoundaryProbe(timer *time.Timer) {
 		}
 	}
 	if next.IsZero() {
-		atomic.StoreInt64(&s.armedBoundaryAt, 0)
+		s.armedBoundaryAt.Store(0)
 		return
 	}
-	atomic.StoreInt64(&s.armedBoundaryAt, next.UnixNano())
+	s.armedBoundaryAt.Store(next.UnixNano())
 	d := time.Until(next) + probeBoundaryLag
 	if d < 0 {
 		d = probeBoundaryLag
@@ -11263,7 +11267,7 @@ func (s *Store) CleanFullUsageAccounts(ctx context.Context) int {
 		}
 
 		// 跳过正在处理请求的账号
-		if atomic.LoadInt64(&acc.ActiveRequests) > 0 {
+		if acc.ActiveRequests.Load() > 0 {
 			continue
 		}
 
@@ -11320,7 +11324,7 @@ func (s *Store) CleanExpiredAccounts(ctx context.Context, maxAge time.Duration) 
 		if atomic.LoadInt32(&acc.Locked) == 1 {
 			continue
 		}
-		addedAt := atomic.LoadInt64(&acc.AddedAt)
+		addedAt := acc.AddedAt.Load()
 		if addedAt == 0 {
 			skipNoAddedAt++
 			continue
@@ -11329,12 +11333,12 @@ func (s *Store) CleanExpiredAccounts(ctx context.Context, maxAge time.Duration) 
 			skipNotExpired++
 			continue
 		}
-		if atomic.LoadInt64(&acc.ActiveRequests) > 0 {
+		if acc.ActiveRequests.Load() > 0 {
 			skipActive++
 			continue
 		}
 		// 成功请求超过 10 次的账号保留，不做过期清理
-		if atomic.LoadInt64(&acc.TotalRequests) > 10 {
+		if acc.TotalRequests.Load() > 10 {
 			skipProven++
 			continue
 		}
@@ -11552,7 +11556,7 @@ func (s *Store) parallelRecoveryProbe(ctx context.Context) {
 							account.CooldownUtil = time.Time{}
 							account.CooldownReason = ""
 						}
-						account.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+						account.recomputeSchedulerLocked(s.maxConcurrency.Load())
 						log.Printf("[账号 %d] 恢复探测成功！已从 banned 升级到 warm", account.DBID)
 					}
 					account.mu.Unlock()
@@ -12013,7 +12017,7 @@ func (s *Store) publishAntigravityRuntimeRow(acc *Account, row *database.Account
 			acc.HealthTier = HealthTierWarm
 		}
 	}
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 	atomic.StoreInt32(&acc.Disabled, 0)
 	if row.Enabled {
@@ -12266,7 +12270,7 @@ func (s *Store) propagateSharedOAuthCredentials(
 		}
 		sibling.SubscriptionExpiresAt = sourceSubscriptionExpiresAt
 		sibling.subscriptionMeta = sourceSubscriptionMeta
-		sibling.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+		sibling.recomputeSchedulerLocked(s.maxConcurrency.Load())
 		sibling.mu.Unlock()
 		s.fastSchedulerUpdate(sibling)
 

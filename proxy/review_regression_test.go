@@ -277,8 +277,11 @@ func newReviewWSClient(t *testing.T, execute func(context.Context, *auth.Account
 
 func TestReviewWSHTTPFallbackMissingContextReleasesLease(t *testing.T) {
 	resetResponseCacheForTest()
-	conn, account := newReviewWSClient(t, func(context.Context, *auth.Account, []byte, string, string, string, *DeviceProfileConfig, http.Header, string) (*http.Response, error) {
-		return nil, errors.New("websocket: close 1009 (message too big)")
+	conn, account := newReviewWSClient(t, func(_ context.Context, _ *auth.Account, body []byte, _, _, _ string, _ *DeviceProfileConfig, _ http.Header, _ string) (*http.Response, error) {
+		if gjson.GetBytes(body, "previous_response_id").Exists() {
+			return nil, errors.New("websocket: close 1009 (message too big)")
+		}
+		return nativeWSResponse("fresh"), nil
 	})
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"gpt-5.5","previous_response_id":"missing","input":[{"type":"message","role":"user","content":"next"}]}`)); err != nil {
 		t.Fatal(err)
@@ -288,13 +291,13 @@ func TestReviewWSHTTPFallbackMissingContextReleasesLease(t *testing.T) {
 	if err != nil || gjson.GetBytes(body, "error.code").String() != "response_context_unavailable" {
 		t.Fatalf("missing fail-closed error: %s %v", body, err)
 	}
-	_, _, err = conn.ReadMessage()
-	if !websocket.IsCloseError(err, websocket.ClosePolicyViolation) || account.GetActiveRequests() != 0 {
-		t.Fatalf("fallback lease leaked: %d, %v", account.GetActiveRequests(), err)
+	if int64(http.StatusConflict) != gjson.GetBytes(body, "status").Int() || int64(0) != account.GetActiveRequests() {
+		t.Fatalf("fallback status or lease invalid: %s, active=%d", body, account.GetActiveRequests())
 	}
 	if GetResponseCacheStats().KnownUnavailableErrors != 1 {
 		t.Fatal("WS failure was not counted")
 	}
+	assertNativeWSSuccess(t, nativeWSTurn(t, conn, `{"input":[{"role":"user","content":"fresh history"}]}`))
 }
 
 func TestReviewWSStoreFalseSkipsAlwaysCache(t *testing.T) {

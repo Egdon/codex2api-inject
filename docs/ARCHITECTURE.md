@@ -528,14 +528,14 @@ L1 受 4,096 条、16 MiB 逻辑 JSON 字节和单条 64 KiB 预算限制；大�
 
 #### Responses 上下文缓存
 
-`previous_response_id` 连续请求使用一层每进程独立的有界 L1。完成响应时先按完整 call/output 组保留尾部最多 200 个 raw item，再写入 L1；默认总量 64 MiB、单条准入 8 MiB、最多 2,000 条、绝对 TTL 10 分钟。LRU 同时受条数和逻辑字节预算约束，命中不会延长绝对 TTL。
+`previous_response_id` 连续请求使用一层每进程独立的有界 L1。完成响应时先按完整 call/output 组保留尾部最多 200 个 raw item，再写入 L1；默认总量 64 MiB、单条准入 8 MiB、最多 2,000 条、绝对 TTL 45 分钟。LRU 同时受条数和逻辑字节预算约束，命中不会延长绝对 TTL。
 
 ```text
 完成响应
    │
    ├─ pair-safe 尾部裁剪（最多 200 items）
    │
-   ├─ 本进程 L1（64 MiB total / 8 MiB entry / 2,000 entries / 10m）
+   ├─ 本进程 L1（64 MiB total / 8 MiB entry / 2,000 entries / 45m）
    │
    └─ Redis 共享 response context（仅 Redis 模式）
 

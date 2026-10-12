@@ -85,6 +85,9 @@ func runSystemSettingsIgnoresRetiredColumnsAfterRestart(t *testing.T, driver, ds
 	if err != nil || settings == nil || settings.CodexUnifiedClientIdentityEnabled || !settings.ShowUpstreamModelMismatch {
 		t.Fatalf("new upstream setting defaults = %+v, %v", settings, err)
 	}
+	if settings.CodexWSDownstreamKeepaliveSlots != 8 {
+		t.Fatalf("new downstream keepalive default=%d", settings.CodexWSDownstreamKeepaliveSlots)
+	}
 	settings.SiteName, settings.MaxConcurrency = "Before upgrade", 4
 	settings.CodexUnifiedClientIdentityEnabled, settings.ShowUpstreamModelMismatch = true, false
 	settings.PromptFilterCustomPatterns, settings.PromptFilterReviewAPIKey = `[{"id":"fork-fixture"}]`, "fork-fixture-key"
@@ -231,6 +234,10 @@ func runSystemSettingsIgnoresRetiredColumnsAfterRestart(t *testing.T, driver, ds
 			if err != nil || len(rows) != 1 || rows[0].UpstreamSource != source || rows[0].TotalTokens != 11 {
 				t.Fatalf("historical usage source %q changed: %+v %v", source, rows, err)
 			}
+			pageLogs, err := db.ListUsageLogsByTimeRangePaged(ctx, filter)
+			if err != nil || pageLogs.Total != 1 || len(pageLogs.Logs) != 1 || pageLogs.Logs[0].UpstreamSource != source {
+				t.Fatalf("optimized historical page %q changed: %+v %v", source, pageLogs, err)
+			}
 			page, err := db.ListQualityTests(ctx, 1, 20, QualityTestFilter{AccountID: historyID, UpstreamSource: filterSource})
 			if err != nil || page.Total != 1 || page.Jobs[0].ID != jobID || page.Jobs[0].UpstreamSource != source {
 				t.Fatalf("historical quality source %q changed: %+v %v", source, page, err)
@@ -247,7 +254,7 @@ func runSystemSettingsIgnoresRetiredColumnsAfterRestart(t *testing.T, driver, ds
 	if !db.DrainBackgroundTasks(10 * time.Second) {
 		t.Fatal("background migration did not drain before schema downgrade")
 	}
-	for _, column := range []string{"codex_unified_client_identity_enabled", "show_upstream_model_mismatch"} {
+	for _, column := range []string{"codex_unified_client_identity_enabled", "show_upstream_model_mismatch", "codex_ws_downstream_keepalive_slots"} {
 		if _, err := db.conn.ExecContext(ctx, `ALTER TABLE system_settings DROP COLUMN `+column); err != nil {
 			t.Fatal(err)
 		}
@@ -279,6 +286,22 @@ func runSystemSettingsIgnoresRetiredColumnsAfterRestart(t *testing.T, driver, ds
 	}
 	restart()
 	settings = checkSettings(false, true)
+	if settings.CodexWSDownstreamKeepaliveSlots != 8 {
+		t.Fatalf("upgraded downstream keepalive default=%d", settings.CodexWSDownstreamKeepaliveSlots)
+	}
+	for _, slots := range []int{0, 32, 8} {
+		settings.CodexWSDownstreamKeepaliveSlots = slots
+		settings.CodexWSStatelessSlots = slots
+		if err := db.UpdateSystemSettings(ctx, settings); err != nil {
+			t.Fatal(err)
+		}
+		restart()
+		settings = checkSettings(false, true)
+		if settings.CodexWSDownstreamKeepaliveSlots != slots || settings.CodexWSStatelessSlots != slots {
+			t.Fatalf("connection retention budgets changed: chat=%d stateless=%d want=%d", settings.CodexWSDownstreamKeepaliveSlots, settings.CodexWSStatelessSlots, slots)
+		}
+		checkPreserved()
+	}
 	if settings.SiteName != "Before upgrade" || settings.MaxConcurrency != 4 {
 		t.Fatalf("read after upgrade = %+v", settings)
 	}

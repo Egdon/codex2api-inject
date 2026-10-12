@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.0.8 - 2026-10-10
+
+### Features
+
+- **API keys show their live request concurrency (#776, @bxb1337).** The API Keys page displays a badge beside each active key with its current request count and configured limit, or `∞` for an unlimited key. Idle badges are hidden. `GET /api/admin/keys-concurrency` reads an in-memory snapshot from the current process; the page refreshes it every five seconds, pauses while hidden and keeps the last snapshot on a temporary failure. Unlimited keys are now counted too, without changing their admission policy. Counts are per instance, not cluster-wide.
+
+- **Idle chat connections and blank WebSocket connections have separate retention budgets (#780, @bxb1337).** The new `codex_ws_downstream_keepalive_slots` setting retains up to 8 idle chat upstream connections per account by default (range 0–32), independently of the existing `codex_ws_stateless_slots` blank-connection budget. Request concurrency still follows the account and API-key limits; physical connection retention is no longer capped by the account request-concurrency limit or allowed to block a new chat dial. Excess idle chat connections are closed in LRU order without interrupting dialing or in-flight requests. Ordinary chat connections also expire after 30 minutes without business activity; Ping/Pong does not extend that time. Both retention settings can be changed live, and setting chat retention to 0 closes upstream connections after output completes so later turns use context recovery.
+
+### Fixes
+
+- **Native Responses WebSocket tool continuations recover complete context after an upstream connection is lost (#780, @bxb1337).** Healthy continuations keep `previous_response_id` on the original compatible connection and wait cancelably when it is busy. Successful native `store:false` responses now save full replay snapshots in local memory and, in Redis mode, the shared backend, isolated by database, API key, permissions, stable session, execution lane and `stream_id`. A lost connection or an explicitly rejected old response ID can trigger one full-context replay before any content or tool call has been delivered. Encrypted reasoning and compaction items require the original account, credential generation and compatibility domain; incomplete snapshots and snapshots exceeding item or reconstruction limits are rejected whole rather than silently losing ancestors. Snapshots exceeding local admission budgets can still be served from Redis within the reconstruction limit. A shared commit barrier coordinates snapshot readers on other instances. Missing or incompatible context returns an error frame with `status:409` and `code:previous_response_not_found`; unavailable shared storage returns a recoverable 503 when local context cannot serve the request. These errors, queue saturation and API-key concurrency rejection keep the healthy downstream WebSocket open. Response-context absolute TTL increases from 10 to 45 minutes; existing byte and entry budgets still apply, and physical upstream sockets remain local to each instance.
+
+- **Usage pages and the public key-usage portal do less I/O on slow SQLite storage (#778, reported by @HanYC666).** Wide joined log rows are fetched only after indexed page selection, with a separate count and an ID tie-breaker for equal timestamps. Per-key last-used lookups use the index instead of scanning the entire history, and report windows, rankings and filter options share grouped scans. Stats breakdowns likewise share one aggregation. `GET /api/admin/keys?view=lite` skips window-cost and last-used enrichment for callers that only need key metadata; the default endpoint remains complete. Historical totals, filters, quota enforcement and billing semantics are preserved, with no new tables or indexes.
+
+- **Self-built 32-bit servers no longer panic on unaligned 64-bit atomic operations (#778, reported by @HanYC666).** Account and scheduler counters, usage-log batching, proxy-pool state, rate limiting and API-key concurrency use aligned typed atomics. Prompt-risk decay also avoids converting nanosecond durations to a 32-bit `int`, and a source guard rejects legacy 64-bit atomic operations on struct fields. Official release packages and Docker images retain their existing platform set; ARM32 remains a source-build target.
+
+- **Mobile usage-log cards fit long model names and User-Agents (#779, @bxb1337).** The log list explicitly uses one grid column, cards and badges stay within the viewport, long model names wrap, and metrics use one column on narrow screens and two at the `sm` breakpoint.
+
+- **Daybreak account badges use consistent sizing and placement (#777, @bxb1337).** Badges share the account page's rounded-rectangle style and appear after concurrency badges and before credit information on mobile cards.
+
+- **Backend and frontend build dependencies receive security updates (frontend fixes in #776 and #777, @bxb1337).** The Go toolchain and Docker builder move to 1.26.9, `golang.org/x/net` to v0.60.0 with related Go module updates, and the npm lockfile upgrades `source-map-js` to 1.2.2. Source builds require Go 1.26.9 or newer.
+
 ## v3.0.7 - 2026-10-05
 
 ### Features

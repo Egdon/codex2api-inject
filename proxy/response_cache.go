@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,7 +30,7 @@ import (
 // 造成跨用户上下文泄露。owner 不匹配一律按缓存未命中处理。
 
 const (
-	responseCacheTTL        = 10 * time.Minute
+	responseCacheTTL        = 45 * time.Minute
 	responseCacheMaxBytes   = 64 << 20
 	responseCacheMaxEntry   = 8 << 20
 	responseCacheMaxItems   = 2000 // 缓存条目上限，防止内存膨胀
@@ -63,13 +64,14 @@ func responseCacheStoreKey(owner, responseID string) string {
 }
 
 type responseCacheEntry struct {
-	key       string
-	serial    uint64
-	items     []json.RawMessage
-	blobs     []*sharedResponseContextItem
-	bytes     int64
-	expiresAt time.Time
-	element   *list.Element
+	key              string
+	serial           uint64
+	items            []json.RawMessage
+	blobs            []*sharedResponseContextItem
+	bytes            int64
+	expiresAt        time.Time
+	element          *list.Element
+	nativeProvenance *nativeWSReplayProvenance
 }
 
 type responseCacheConfig struct {
@@ -178,11 +180,12 @@ const (
 )
 
 type responseCacheLookupResult struct {
-	Items    []json.RawMessage
-	Kind     responseCacheLookupKind
-	Source   responseCacheLookupSource
-	Promoted bool
-	Err      error
+	Items            []json.RawMessage
+	Kind             responseCacheLookupKind
+	Source           responseCacheLookupSource
+	Promoted         bool
+	Err              error
+	nativeProvenance *nativeWSReplayProvenance
 	// 记账辅助位：由 lookupResponseCacheResult 填写，getResponseCacheResult
 	// 在单一临界区内据此更新全部计数器，保证快照不变量任意瞬间成立。
 	remoteMiss     bool
@@ -375,6 +378,16 @@ func admitResponseCacheWithTicket(storeKey string, items []json.RawMessage) ([]j
 	respCache.entrySerial++
 	serial := respCache.entrySerial
 
+	native := strings.HasPrefix(storeKey, nativeWSCachePrefix)
+	if native && (len(items) > respCache.config.maxItems || responseContextLogicalBytes(items) > respCache.config.reconstructMaxBytes) {
+		if existing := respCache.store[storeKey]; existing != nil {
+			respCache.removeEntryLocked(existing, responseCacheRemovalReplace)
+		}
+		respCache.setMarkerLocked(storeKey, responseCacheLookupKnownOversize, time.Now().Add(respCache.config.ttl))
+		respCache.stats.OversizeSkips++
+		respCache.stats.OversizeRejections++
+		return nil, false, true, serial
+	}
 	items = trimResponseContextTail(items, respCache.config.maxItems)
 	items, hashes, normalized := respCache.normalizeResponseContextItemsLocked(items)
 	var entryBytes int64

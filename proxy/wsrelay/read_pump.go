@@ -139,10 +139,7 @@ func (wc *WsConnection) installControlHandlers() {
 			)
 		})
 		wc.conn.SetPongHandler(func(appData string) error {
-			if wc.session != nil {
-				wc.session.HandlePong()
-			}
-			wc.Touch()
+			// Pong 只证明传输层存活，不能延长用户聊天的业务空闲窗口。
 			wc.touchInbound()
 			wc.notifyProbePong(appData)
 			return nil
@@ -203,11 +200,10 @@ func (wc *WsConnection) runReadPump() {
 		}
 		if captured.idleSniff {
 			// 空闲期帧从不投递给任何后续租约（帧在无租约时刻开始，归属已定），
-			// 只在"丢弃续命"与"销毁连接"之间裁决。
+			// 只在"丢弃元数据"与"销毁连接"之间裁决，不延长业务空闲窗口。
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			if isIdleDroppableMetadataFrame(eventType) {
 				wc.endIdleSniff()
-				wc.Touch()
 				wc.touchInbound()
 				continue
 			}
@@ -363,7 +359,7 @@ func (wc *WsConnection) enqueueBusinessFrameForCapturedLease(messageType int, pa
 
 func isReadLeaseTerminal(payload []byte) bool {
 	switch gjson.GetBytes(payload, "type").String() {
-	case "response.completed", "response.failed", "response.done", "error":
+	case "response.completed", "response.incomplete", "response.failed", "response.done", "error":
 		return true
 	default:
 		return false
@@ -448,6 +444,7 @@ func (wc *WsConnection) finalizeReadPumpFailure(state *wsReadState) {
 		state.mu.Lock()
 		readerErr := state.readerErr
 		state.mu.Unlock()
+		wc.recordReadClose(readerErr)
 		idle := time.Duration(0)
 		if ts := wc.lastUsed.Load(); ts > 0 {
 			idle = time.Since(time.Unix(0, ts)).Round(time.Millisecond)

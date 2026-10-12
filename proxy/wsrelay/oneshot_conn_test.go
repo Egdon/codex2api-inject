@@ -13,6 +13,7 @@ func newPooledConn(t *testing.T, manager *Manager, accountID int64, sessionID, p
 	session := NewSession(accountID, manager)
 	session.ID = sessionID
 	session.SetConnected(true)
+	session.markUserContext()
 	conn := &WsConnection{session: session, URL: "wss://example.test/responses", PoolKey: poolKey}
 	conn.SetState(StateConnected)
 	conn.lastUsed.Store(lastUsed.UnixNano())
@@ -41,7 +42,7 @@ func TestSortIdleForEvictionPrefersOneShotConns(t *testing.T) {
 	}
 }
 
-func TestTrimIdleAccountConnectionsEvictsOneShotFirst(t *testing.T) {
+func TestTrimIdleChatConnectionsEvictsOldestFirst(t *testing.T) {
 	manager := NewManager()
 	t.Cleanup(manager.Stop)
 
@@ -56,18 +57,18 @@ func TestTrimIdleAccountConnectionsEvictsOneShotFirst(t *testing.T) {
 
 	manager.trimIdleAccountConnections(1, 2, nil)
 
-	if _, ok := manager.connections.Load(oneShotKey); ok {
-		t.Fatal("expected one-shot connection to be evicted first under capacity pressure")
+	if _, ok := manager.connections.Load(oneShotKey); !ok {
+		t.Fatal("newest one-shot chat should remain retained")
 	}
-	if _, ok := manager.connections.Load(slotOldKey); !ok {
-		t.Fatal("expected LRU slot connection to survive while one-shot conn exists")
+	if _, ok := manager.connections.Load(slotOldKey); ok {
+		t.Fatal("oldest chat should be evicted regardless of its pool key")
 	}
 	if _, ok := manager.connections.Load(slotMidKey); !ok {
 		t.Fatal("expected newer slot connection to survive")
 	}
 }
 
-func TestEnsureAccountConnectionCapacityEvictsOneShotFirst(t *testing.T) {
+func TestChatInferenceReservationDoesNotConsumeIdleRetention(t *testing.T) {
 	manager := NewManager()
 	t.Cleanup(manager.Stop)
 
@@ -78,12 +79,12 @@ func TestEnsureAccountConnectionCapacityEvictsOneShotFirst(t *testing.T) {
 	newPooledConn(t, manager, 1, "det-key#0", slotKey, now.Add(-2*time.Minute))
 	newPooledConn(t, manager, 1, "stateless-11111111-aaaa-bbbb-cccc-000000000003", oneShotKey, now)
 
-	// count=2, pending=1, limit=3：需腾出 1 个槽位，应先逐出一次性连接。
-	if !manager.ensureAccountConnectionCapacity(1, 3, "", 1) {
-		t.Fatal("expected capacity reservation to succeed after evicting one-shot conn")
+	// 两条空闲连接未超保留上限，新增推理不要求它们让位。
+	if !manager.ensureAccountConnectionCapacity(connectionCapacityRequest{accountID: 1, limit: 3, extraPending: 1}) {
+		t.Fatal("inference should start without evicting retained idle connections")
 	}
-	if _, ok := manager.connections.Load(oneShotKey); ok {
-		t.Fatal("expected one-shot connection to be evicted first")
+	if _, ok := manager.connections.Load(oneShotKey); !ok {
+		t.Fatal("inference admission should not consume idle retention")
 	}
 	if _, ok := manager.connections.Load(slotKey); !ok {
 		t.Fatal("expected reusable slot connection to survive")

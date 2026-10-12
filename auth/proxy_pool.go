@@ -39,9 +39,9 @@ type ProxyEntry struct {
 	Latency        time.Duration
 	SuccessRate    float64
 	Weight         int64
-	ActiveConns    int64
-	TotalRequests  int64
-	FailedRequests int64
+	ActiveConns    atomic.Int64
+	TotalRequests  atomic.Int64
+	FailedRequests atomic.Int64
 	Status         ProxyHealthStatus
 	IsolatedAt     time.Time
 	ConsecutiveFailures int
@@ -82,7 +82,7 @@ type ProxyPool struct {
 
 	mu              sync.RWMutex
 	strategy        ProxySelectionStrategy
-	roundRobinIdx   uint64
+	roundRobinIdx   atomic.Uint64
 	checkInterval   time.Duration
 	timeout         time.Duration
 	isolationThreshold int
@@ -261,7 +261,7 @@ func (p *ProxyPool) selectRoundRobin() *ProxyEntry {
 	if len(p.healthy) == 0 {
 		return nil
 	}
-	idx := atomic.AddUint64(&p.roundRobinIdx, 1) % uint64(len(p.healthy))
+	idx := p.roundRobinIdx.Add(1) % uint64(len(p.healthy))
 	return p.healthy[idx]
 }
 
@@ -312,7 +312,7 @@ func (p *ProxyPool) selectLeastConnections() *ProxyEntry {
 	var minConns int64 = math.MaxInt64
 
 	for _, entry := range p.healthy {
-		conns := atomic.LoadInt64(&entry.ActiveConns)
+		conns := entry.ActiveConns.Load()
 		// 考虑成功率作为调节因子，需要在锁外读取
 		entry.mu.RLock()
 		successRate := entry.SuccessRate
@@ -343,11 +343,11 @@ func (p *ProxyPool) MarkSuccess(url string) {
 	}
 
 	entry.mu.Lock()
-	atomic.AddInt64(&entry.TotalRequests, 1)
+	entry.TotalRequests.Add(1)
 	entry.ConsecutiveFailures = 0
 
 	// 更新成功率（指数移动平均）
-	if entry.TotalRequests == 1 {
+	if entry.TotalRequests.Load() == 1 {
 		entry.SuccessRate = 1.0
 	} else {
 		entry.SuccessRate = entry.SuccessRate*0.9 + 0.1
@@ -364,8 +364,8 @@ func (p *ProxyPool) MarkSuccess(url string) {
 
 	// 在锁内更新 stats
 	if stats, ok := p.stats[url]; ok {
-		stats.TotalRequests = atomic.LoadInt64(&entry.TotalRequests)
-		stats.FailedRequests = atomic.LoadInt64(&entry.FailedRequests)
+		stats.TotalRequests = entry.TotalRequests.Load()
+		stats.FailedRequests = entry.FailedRequests.Load()
 		stats.SuccessRate = entry.SuccessRate
 		stats.Status = p.statusString(entry.Status)
 		stats.ConsecutiveFailures = entry.ConsecutiveFailures
@@ -387,12 +387,12 @@ func (p *ProxyPool) MarkFailure(url string) {
 	}
 
 	entry.mu.Lock()
-	atomic.AddInt64(&entry.TotalRequests, 1)
-	atomic.AddInt64(&entry.FailedRequests, 1)
+	entry.TotalRequests.Add(1)
+	entry.FailedRequests.Add(1)
 	entry.ConsecutiveFailures++
 
 	// 更新成功率
-	if entry.TotalRequests == 1 {
+	if entry.TotalRequests.Load() == 1 {
 		entry.SuccessRate = 0.0
 	} else {
 		entry.SuccessRate = entry.SuccessRate*0.9
@@ -410,8 +410,8 @@ func (p *ProxyPool) MarkFailure(url string) {
 
 	// 在锁内更新 stats
 	if stats, ok := p.stats[url]; ok {
-		stats.TotalRequests = atomic.LoadInt64(&entry.TotalRequests)
-		stats.FailedRequests = atomic.LoadInt64(&entry.FailedRequests)
+		stats.TotalRequests = entry.TotalRequests.Load()
+		stats.FailedRequests = entry.FailedRequests.Load()
 		stats.SuccessRate = entry.SuccessRate
 		stats.Status = p.statusString(entry.Status)
 		stats.ConsecutiveFailures = entry.ConsecutiveFailures
@@ -453,7 +453,7 @@ func (p *ProxyPool) AcquireConnection(url string) bool {
 		return false
 	}
 
-	atomic.AddInt64(&entry.ActiveConns, 1)
+	entry.ActiveConns.Add(1)
 	return true
 }
 
@@ -468,8 +468,8 @@ func (p *ProxyPool) ReleaseConnection(url string) {
 	}
 
 	// 防止计数器减到负数
-	if atomic.LoadInt64(&entry.ActiveConns) > 0 {
-		atomic.AddInt64(&entry.ActiveConns, -1)
+	if entry.ActiveConns.Load() > 0 {
+		entry.ActiveConns.Add(-1)
 	}
 }
 
@@ -710,9 +710,9 @@ func (p *ProxyPool) GetStats() map[string]*ProxyStats {
 				LatencyMs:           float64(entry.Latency.Milliseconds()),
 				SuccessRate:         entry.SuccessRate,
 				Weight:              entry.Weight,
-				ActiveConns:         atomic.LoadInt64(&entry.ActiveConns),
-				TotalRequests:       atomic.LoadInt64(&entry.TotalRequests),
-				FailedRequests:      atomic.LoadInt64(&entry.FailedRequests),
+				ActiveConns:         entry.ActiveConns.Load(),
+				TotalRequests:       entry.TotalRequests.Load(),
+				FailedRequests:      entry.FailedRequests.Load(),
 				Status:              p.statusString(entry.Status),
 				ConsecutiveFailures: entry.ConsecutiveFailures,
 			}

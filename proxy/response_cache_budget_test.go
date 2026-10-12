@@ -53,8 +53,8 @@ func TestResponseCacheDefaultBudget(t *testing.T) {
 	if config.maxEntries != 2000 {
 		t.Fatalf("maxEntries = %d, want 2000", config.maxEntries)
 	}
-	if config.ttl != 10*time.Minute {
-		t.Fatalf("ttl = %s, want 10m", config.ttl)
+	if config.ttl != 45*time.Minute {
+		t.Fatalf("ttl = %s, want 45m", config.ttl)
 	}
 	if config.maxItems != 200 {
 		t.Fatalf("maxItems = %d, want 200", config.maxItems)

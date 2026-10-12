@@ -331,7 +331,7 @@ func (s *Store) finishCodexRefresh(ctx context.Context, acc *Account, warning st
 		}
 	}
 	acc.ErrorMsg = warning
-	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	at, expiry, id := acc.AccessToken, acc.ExpiresAt, acc.DBID
 	acc.mu.Unlock()
 	if s.tokenCache != nil && time.Until(expiry) > 5*time.Minute {

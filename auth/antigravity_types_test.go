@@ -134,11 +134,10 @@ func TestUnauthorizedAntigravityAccountRemainsDispatchable(t *testing.T) {
 	}
 	tokenCache := cache.NewMemory(4)
 	defer tokenCache.Close()
-	store := &Store{
-		accounts:       []*Account{account},
-		maxConcurrency: 2,
-		tokenCache:     tokenCache,
-	}
+	store := (&Store{
+		accounts:   []*Account{account},
+		tokenCache: tokenCache,
+	}).withMaxConcurrency(2)
 	store.SetFastSchedulerEnabled(true)
 	store.setCachedAccountCooldown(account.DBID, "unauthorized", account.CooldownUtil)
 
@@ -195,11 +194,10 @@ func TestAntigravityRateLimitCooldownRemainsFenced(t *testing.T) {
 	}
 	tokenCache := cache.NewMemory(4)
 	defer tokenCache.Close()
-	store := &Store{
-		accounts:       []*Account{account},
-		maxConcurrency: 2,
-		tokenCache:     tokenCache,
-	}
+	store := (&Store{
+		accounts:   []*Account{account},
+		tokenCache: tokenCache,
+	}).withMaxConcurrency(2)
 	store.SetFastSchedulerEnabled(true)
 	store.setCachedAccountCooldown(account.DBID, "rate_limited", account.CooldownUtil)
 
@@ -296,7 +294,7 @@ func TestRefreshAntigravityAccountClearsUnauthorizedCooldown(t *testing.T) {
 		HealthTier:     HealthTierBanned,
 	}
 	atomic.StoreInt32(&account.Disabled, 1)
-	store := &Store{accounts: []*Account{account}, maxConcurrency: 2}
+	store := (&Store{accounts: []*Account{account}}).withMaxConcurrency(2)
 	store.ClearCooldown(account)
 	if atomic.LoadInt32(&account.Disabled) != 0 {
 		t.Fatal("ClearCooldown left Disabled set")

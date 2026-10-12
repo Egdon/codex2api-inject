@@ -696,7 +696,7 @@ export default function ImageStudio() {
     setLoading(true)
     try {
       const [keysRes] = await Promise.all([
-        api.getAPIKeys(),
+        api.getAPIKeys({ view: 'lite' }),
         loadTemplates(),
         loadJobs(),
       ])

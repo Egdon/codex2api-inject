@@ -249,7 +249,7 @@ func (s *Store) BuildFastScheduler() *FastScheduler {
 	if s == nil {
 		return NewFastScheduler(1, "round_robin")
 	}
-	scheduler := NewFastScheduler(atomic.LoadInt64(&s.maxConcurrency), s.GetSchedulerMode())
+	scheduler := NewFastScheduler(s.maxConcurrency.Load(), s.GetSchedulerMode())
 	s.configureFastScheduler(scheduler)
 
 	s.mu.RLock()
@@ -837,7 +837,7 @@ func (a *Account) fastSchedulerSnapshotForSpark(baseLimit int64, now time.Time) 
 
 	tier := a.healthTierLocked()
 	score := a.DispatchScore
-	proven := atomic.LoadInt64(&a.TotalRequests) > 10
+	proven := a.TotalRequests.Load() > 10
 	if score == 0 && a.SchedulerScore != 0 {
 		score = a.SchedulerScore
 	}
@@ -878,7 +878,7 @@ func (a *Account) fastSchedulerSnapshotWithUsageOverride(baseLimit int64, now ti
 	tier := a.healthTierLocked()
 	score := a.DispatchScore
 	limit := a.DynamicConcurrencyLimit
-	proven := atomic.LoadInt64(&a.TotalRequests) > 10
+	proven := a.TotalRequests.Load() > 10
 
 	if score == 0 && a.SchedulerScore != 0 {
 		score = a.SchedulerScore
@@ -932,7 +932,7 @@ func tryAcquireAccount(acc *Account, limit int64) bool {
 	if !reserveOccupiedAccountSlot(acc, limit) {
 		return false
 	}
-	atomic.AddInt64(&acc.TotalRequests, 1)
-	atomic.StoreInt64(&acc.LastUsedAt, time.Now().UnixNano())
+	acc.TotalRequests.Add(1)
+	acc.LastUsedAt.Store(time.Now().UnixNano())
 	return true
 }

@@ -26,6 +26,9 @@ type websocketContinuation struct {
 	accountID  int64
 	apiKey     string
 	identity   string
+	model      string
+	url        string
+	proxyURL   string
 }
 
 func (e *Executor) acquireClientContinuation(input websocketContinuation) (*WsConnection, *PendingRequest, string) {
