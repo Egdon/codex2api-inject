@@ -30,6 +30,8 @@ const (
 	antigravityImportedVerifiedEmailKey = "antigravity_import_verified_email"
 	antigravityAccessDeniedError        = "Antigravity access denied by Google"
 	antigravityNoUsableEgressError      = "Antigravity 没有可用代理出口"
+	// antigravityManualRefreshTimeout 是管理端单号同步(换票+项目+权限+配额)的上限。
+	antigravityManualRefreshTimeout = 90 * time.Second
 )
 
 type antigravityImportRequest struct {
@@ -1828,7 +1830,7 @@ func (h *Handler) RefreshAntigravityAccount(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "无效的账号 ID")
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), antigravityManualRefreshTimeout)
 	defer cancel()
 	item := h.refreshAntigravityAccount(ctx, id)
 	if !item.OK {
@@ -1869,6 +1871,42 @@ func (h *Handler) BatchRefreshAntigravityAccounts(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"success": success, "failed": len(ids) - success, "items": items})
+}
+
+// isAntigravityAccountID 判断账号是否为 Antigravity 账号。禁用的 Antigravity 账号
+// 不在运行时池里，运行时查不到时回落到数据库行。
+func (h *Handler) isAntigravityAccountID(ctx context.Context, id int64) bool {
+	if h == nil || id <= 0 {
+		return false
+	}
+	if h.store != nil {
+		if account := h.store.FindByID(id); account != nil {
+			return account.IsAntigravityAPI()
+		}
+	}
+	if h.db == nil {
+		return false
+	}
+	row, err := h.db.GetAccountByID(ctx, id)
+	if err != nil || row == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(row.GetCredential("upstream_type")), auth.UpstreamAntigravity)
+}
+
+// syncAntigravityAccountByID 是通用刷新入口(单号刷新、批量刷新)里的 Antigravity
+// 分支：走控制面完整同步，失败原因原样作为错误返回。
+func (h *Handler) syncAntigravityAccountByID(ctx context.Context, id int64) error {
+	syncCtx, cancel := context.WithTimeout(ctx, antigravityManualRefreshTimeout)
+	defer cancel()
+	item := h.refreshAntigravityAccount(syncCtx, id)
+	if item.OK {
+		return nil
+	}
+	if message := strings.TrimSpace(item.Error); message != "" {
+		return errors.New(message)
+	}
+	return errors.New("Antigravity 同步失败")
 }
 
 func (h *Handler) refreshAntigravityAccount(ctx context.Context, id int64) antigravityRefreshItem {

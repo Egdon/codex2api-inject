@@ -74,6 +74,7 @@ type AccountStatusSource = {
   status?: string | null
   openai_responses_api?: boolean
   grok_api?: boolean
+  antigravity_api?: boolean
   claude_api?: boolean
   claude_usage_probe_at?: string | null
   claude_usage_probe_error?: string | null
@@ -95,7 +96,9 @@ export function isUnsampledQuotaAccount(account: AccountStatusSource): boolean {
     status === 'unauthorized' ||
     status === 'error' ||
     account.openai_responses_api ||
-    account.grok_api
+    account.grok_api ||
+    // Antigravity 的额度来自控制面配额快照,没有 5h/7d 采样窗口(与后端口径一致)。
+    account.antigravity_api
   ) {
     return false
   }

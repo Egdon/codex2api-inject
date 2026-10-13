@@ -309,7 +309,7 @@ func TestAntigravityResponsesConvertsFunctionDeclarations(t *testing.T) {
 	schema := declaration["parametersJsonSchema"].(map[string]any)
 	properties := schema["properties"].(map[string]any)
 	query := properties["query"].(map[string]any)
-	if schema["type"] != "OBJECT" || query["type"] != "STRING" {
+	if schema["type"] != "object" || query["type"] != "string" {
 		t.Fatalf("parametersJsonSchema = %#v", schema)
 	}
 	if _, ok := schema["additionalProperties"]; ok {
@@ -1776,7 +1776,7 @@ func TestResponsesToGeminiInternalSupportsCustomToolCall(t *testing.T) {
 	}
 	schema := declaration["parametersJsonSchema"].(map[string]any)
 	input, ok := schema["properties"].(map[string]any)["input"].(map[string]any)
-	if !ok || input["type"] != "STRING" {
+	if !ok || input["type"] != "string" {
 		t.Fatalf("custom tool must expose a single string input: %#v", schema)
 	}
 	if required := schema["required"].([]any); len(required) != 1 || required[0] != "input" {

@@ -28,6 +28,7 @@ func TestPostgresBPSRetirementDatabase(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	runBPSRetirementDatabaseCases(t, db)
+	t.Run("source_hourly_rollup", func(t *testing.T) { runSourceFilterWithHourlyRollup(t, db) })
 }
 
 func TestNormalizeHistoricalUpstreamSource(t *testing.T) {

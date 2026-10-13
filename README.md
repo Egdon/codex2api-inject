@@ -35,6 +35,16 @@ Run it as a full **PostgreSQL + Redis** production stack or as a single-containe
 ## Sponsors
 
 <p align="center">
+  <a href="https://proxylane.dev/?r=r4zpan9djwesjumv0vamthoz&amp;utm_source=codex2api&amp;utm_medium=partnership&amp;utm_campaign=codex2api_sponsor_202610&amp;utm_content=github_readme"><img src="assets/proxylane-banner.png" alt="ProxyLane 住宅代理：首单七折 CODEX2API30" width="100%"></a>
+</p>
+
+<p align="center">
+  <b><a href="https://proxylane.dev/?r=r4zpan9djwesjumv0vamthoz&amp;utm_source=codex2api&amp;utm_medium=partnership&amp;utm_campaign=codex2api_sponsor_202610&amp;utm_content=github_readme">ProxyLane</a></b> 提供住宅代理，支持 HTTP / HTTPS / SOCKS5，提供中文界面及 USDT 付款。<br>
+  免费 3GB 测试流量，限前 50 名，兑换码：<code>CODEX2API3GB</code>。<br>
+  首次购买使用优惠码 <code>CODEX2API30</code> 享七折优惠。
+</p>
+
+<p align="center">
   <a href="https://www.ipwo.net/?ref=githubcodex2api"><img src="assets/ipwo-banner.webp" alt="IPWO 住宅代理" width="100%"></a>
 </p>
 

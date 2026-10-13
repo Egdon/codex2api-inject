@@ -7014,6 +7014,11 @@ func (h *Handler) BatchRefreshAccounts(c *gin.Context) {
 }
 
 func (h *Handler) refreshAccountByID(ctx context.Context, id int64) error {
+	// Antigravity 没有 Codex 式的 AT 刷新：单号/批量刷新统一走控制面同步，
+	// 同时刷新凭据、项目、权限与配额快照。
+	if h.isAntigravityAccountID(ctx, id) {
+		return h.syncAntigravityAccountByID(ctx, id)
+	}
 	return h.refreshAccountByIDWithProbe(ctx, id, true)
 }
 

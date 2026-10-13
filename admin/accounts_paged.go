@@ -68,6 +68,7 @@ type accountListSnapshotItem struct {
 	PlanType            string
 	GrokAuthKind        string
 	GrokPlanCategory    string
+	AntigravityAuthKind string
 	Email               string
 	EmailDomain         string
 	Tags                []string
@@ -572,7 +573,9 @@ func isAccountListDeletePath(method, path string) bool {
 			"/api/admin/accounts/clean-rate-limited",
 			"/api/admin/accounts/clean-error",
 			"/api/admin/accounts/grok/clean-banned",
-			"/api/admin/accounts/grok/clean-error":
+			"/api/admin/accounts/grok/clean-error",
+			"/api/admin/accounts/antigravity/clean-banned",
+			"/api/admin/accounts/antigravity/clean-error":
 			return true
 		}
 		return false
@@ -725,12 +728,20 @@ func (h *Handler) buildAccountListSnapshotItem(row *database.AccountRow, request
 	if isAntigravity {
 		status, _ = antigravityPersistedStatus(row)
 	}
+	antigravityAuthKind := ""
+	if isAntigravity {
+		if strings.TrimSpace(row.GetCredential("api_key")) != "" {
+			antigravityAuthKind = auth.AntigravityAuthKindAPIKey
+		} else {
+			antigravityAuthKind = auth.AntigravityAuthKindOAuth
+		}
+	}
 	item := &accountListSnapshotItem{
 		Row: row, ID: row.ID, Status: status, CooldownReason: row.CooldownReason,
 		Enabled: row.Enabled, Locked: row.Locked, PlanType: planType, GrokAuthKind: grokAuthKind,
 		Email: email, EmailDomain: accountEmailDomain(email), Tags: append([]string(nil), row.Tags...),
 		SchedulerPriority: valueOrZero(accountSchedulerPriority(row)), OpenAIResponses: isOpenAIResponses,
-		Antigravity: isAntigravity, Claude: isClaude,
+		Antigravity: isAntigravity, AntigravityAuthKind: antigravityAuthKind, Claude: isClaude,
 		ClaudeAuthKind:      claudeAuthKindForRow(row, isClaude),
 		ClaudeUsageProbeAt:  row.GetCredential(auth.ClaudeUsageProbeAtCredentialKey),
 		ClaudeUsageProbeErr: row.GetCredential(auth.ClaudeUsageProbeErrorCredentialKey),
@@ -785,6 +796,13 @@ func (h *Handler) buildAccountListSnapshotItem(row *database.AccountRow, request
 			}
 		}
 	}
+	if isAntigravity {
+		// Antigravity 没有 5h/7d 用量窗口；把控制面配额快照里最紧的桶折算成已用百分比，
+		// 让列表的 usage 排序与调度排序键同一口径。
+		if used, ok := auth.AntigravityQuotaUsedPercent(row.GetCredential("antigravity_quota")); ok {
+			item.UsagePercent7d, item.UsagePercent7dOK = used, true
+		}
+	}
 	if isGrok && row.GrokPlanDisplay != nil {
 		item.PlanType = row.GrokPlanDisplay.Plan
 		item.GrokPlanCategory = "other"
@@ -821,7 +839,7 @@ func (h *Handler) buildAccountListSnapshotItem(row *database.AccountRow, request
 			strings.Join(row.GetCredentialStringSlice("models"), " "), row.GetCredential("base_url"),
 			item.PlanType, item.GrokPlanCategory, row.ErrorMessage, row.ProxyURL, strings.Join(groupLabels, " "))
 	} else if isAntigravity {
-		searchParts = append(searchParts, item.PlanType, row.GetCredential("project_id"), row.GetCredential("antigravity_sync_error"), strings.Join(groupLabels, " "))
+		searchParts = append(searchParts, item.PlanType, row.GetCredential("project_id"), row.GetCredential("antigravity_sync_error"), row.ProxyURL, strings.Join(groupLabels, " "))
 	} else if isClaude {
 		searchParts = append(searchParts,
 			strings.Join(row.GetCredentialStringSlice("models"), " "), row.GetCredential("base_url"),
@@ -1126,6 +1144,11 @@ func accountListItemMatches(item *accountListSnapshotItem, query accountPageQuer
 		} else if channel == database.UpstreamChannelClaude {
 			// Claude 渠道:oauth=可刷新 OAuth 凭据,setup_token=长效 Setup Token。
 			if item.ClaudeAuthKind != query.AuthKind {
+				return false
+			}
+		} else if channel == database.UpstreamChannelAntigravity {
+			// Antigravity 渠道:oauth=Google OAuth 凭据,api_key=Gemini API Key。
+			if item.AntigravityAuthKind != query.AuthKind {
 				return false
 			}
 		} else if item.OpenAIResponses != (query.AuthKind == auth.GrokAuthKindAPIKey) {
@@ -1461,6 +1484,13 @@ func summarizeAccountList(items []*accountListSnapshotItem, channel string) (acc
 				summary.APIKey++
 			} else if item.ClaudeAuthKind == auth.ClaudeAuthKindSetupToken {
 				summary.SetupToken++
+			} else {
+				summary.OAuth++
+			}
+		}
+		if item.Antigravity {
+			if item.AntigravityAuthKind == auth.AntigravityAuthKindAPIKey {
+				summary.APIKey++
 			} else {
 				summary.OAuth++
 			}

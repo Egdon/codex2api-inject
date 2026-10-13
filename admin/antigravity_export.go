@@ -177,10 +177,17 @@ func parseAntigravityExportIDSet(raw string, present bool) (map[int64]bool, erro
 	return ids, nil
 }
 
-// ExportAntigravityAccounts downloads one JSON credential document or a ZIP
-// containing one JSON member per selected account. The response contains live
-// secrets and must never be cached, embedded, or logged.
+// ExportAntigravityAccounts downloads Antigravity credentials. format=json (the
+// default) returns one JSON file: a single credential document for one account
+// or a JSON array for several, both accepted by the importer as-is. format=zip
+// keeps the one-file-per-account archive. The response contains live secrets
+// and must never be cached, embedded, or logged.
 func (h *Handler) ExportAntigravityAccounts(c *gin.Context) {
+	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "json")))
+	if format != "json" && format != "zip" {
+		writeError(c, http.StatusBadRequest, "format must be json or zip")
+		return
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 	rows, err := h.db.ListActive(ctx)
@@ -207,14 +214,19 @@ func (h *Handler) ExportAntigravityAccounts(c *gin.Context) {
 		writeError(c, http.StatusNotFound, "no exportable Antigravity accounts")
 		return
 	}
-	if len(entries) == 1 {
-		encoded, err := marshalAntigravityExportEntry(entries[0])
+	if format == "json" {
+		var encoded []byte
+		if len(entries) == 1 {
+			encoded, err = marshalAntigravityExportEntry(entries[0])
+		} else {
+			encoded, err = json.MarshalIndent(entries, "", "  ")
+		}
 		if err != nil {
 			writeInternalError(c, err)
 			return
 		}
-		writeSecretDownloadHeaders(c, antigravityExportDownloadName(1, "json"))
-		c.Header("X-Export-Count", "1")
+		writeSecretDownloadHeaders(c, antigravityExportDownloadName(len(entries), "json"))
+		c.Header("X-Export-Count", strconv.Itoa(len(entries)))
 		c.Data(http.StatusOK, "application/json; charset=utf-8", encoded)
 		return
 	}

@@ -42,6 +42,12 @@ test("Claude usage probe without quota headers still counts as sampled", () => {
   assert.equal(getAccountStatusBadgeStatus(sampled), "active");
 });
 
+test("Antigravity accounts never show as unsampled", () => {
+  const antigravity = { status: "active", antigravity_api: true };
+  assert.equal(isUnsampledQuotaAccount(antigravity), false);
+  assert.equal(getAccountStatusBadgeStatus(antigravity), "active");
+});
+
 test("Claude probe failures remain unsampled and are not eligible for OpenAI billing", () => {
   const failed = {
     status: "active",

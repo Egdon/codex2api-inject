@@ -86,7 +86,7 @@ func TestAntigravityApplyGeminiDeclarationSchemaUsesParametersJsonSchema(t *test
 		t.Fatal("parameters must be removed")
 	}
 	schema, ok := decl["parametersJsonSchema"].(map[string]any)
-	if !ok || schema["type"] != "OBJECT" {
+	if !ok || schema["type"] != "object" {
 		t.Fatalf("schema = %#v", decl)
 	}
 }

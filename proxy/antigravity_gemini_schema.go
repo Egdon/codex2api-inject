@@ -38,7 +38,7 @@ func antigravityFinalizeToolSchema(schema map[string]any) map[string]any {
 	antigravityEnsureArrayItemSchemas(schema)
 	antigravityEnsureEmptyToolSchemaPlaceholder(schema)
 	if _, ok := schema["type"]; !ok {
-		schema["type"] = "OBJECT"
+		schema["type"] = "object"
 	}
 	if _, ok := schema["properties"]; !ok {
 		schema["properties"] = map[string]any{}
@@ -103,7 +103,7 @@ func antigravityEnsureEmptyToolSchemaPlaceholder(schema map[string]any) {
 	schema["properties"] = props
 	schema["required"] = []any{"reason"}
 	if _, ok := schema["type"]; !ok {
-		schema["type"] = "OBJECT"
+		schema["type"] = "object"
 	}
 }
 
