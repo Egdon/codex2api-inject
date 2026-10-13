@@ -18,7 +18,11 @@ test('extracted page retains one minimal selection map and the fork batch contro
 
 test('new actions and existing actions share a synchronous operation fence', () => {
   for (const marker of ['const handleBatchUpdate', 'const handleBatchResetStatus', 'const handleBatchTest', 'const handleBatchSync', 'const handleCleanAbnormal']) {
-    const body = extractBalancedBody(page, marker)
+    const start = page.indexOf(marker)
+    assert.notEqual(start, -1)
+    const arrow = page.indexOf('=>', start)
+    assert.notEqual(arrow, -1)
+    const body = extractBalancedBody(page.slice(arrow), '=>')
     assert.match(body, /onBatchBusyChange\(true\)/)
     assert.match(body, /onBatchBusyChange\(false\)/)
   }
