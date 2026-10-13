@@ -24,7 +24,11 @@ func runSourceFilterWithHourlyRollup(t *testing.T, db *DB) {
 	}
 	db.FlushUsageLogs()
 	when := time.Now().UTC().Truncate(time.Hour).Add(-4 * time.Hour)
-	if _, err := db.conn.ExecContext(ctx, `UPDATE usage_logs SET created_at=$1 WHERE account_id=$2`, when, id); err != nil {
+	var timestamp any = when
+	if db.isSQLite() {
+		timestamp = sqliteTimeParam(when)
+	}
+	if _, err := db.conn.ExecContext(ctx, `UPDATE usage_logs SET created_at=$1 WHERE account_id=$2`, timestamp, id); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.RebuildUsageHourlyRollup(ctx); err != nil {
