@@ -1,59 +1,44 @@
-import { ANTIGRAVITY_DEFAULT_MODELS } from "../lib/antigravityModels";
-import {
-  antigravitySelectionSummary,
-  isAntigravitySelectionAccount,
-  reconcileAntigravitySelection,
-  setAntigravitySelection,
-  type AntigravitySelection,
-} from "../lib/antigravitySelection";
+import { antigravitySelectionSummary, isAntigravitySelectionAccount, reconcileAntigravitySelection, setAntigravitySelection, type AntigravitySelection } from "../lib/antigravitySelection";
 import { AntigravityBatchActions } from "../components/AntigravityBatchActions";
-import { AntigravityCooldownDetails, AntigravityCooldownSummary } from "../components/AntigravityCooldownDetails";
+import { AntigravityCooldownDetails } from "../components/AntigravityCooldownDetails";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  CheckCircle2,
-  CircleGauge,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Download,
-  ExternalLink,
-  FileJson,
   FlaskConical,
   FolderOpen,
-  KeyRound,
+  Layers,
   Link2,
   Loader2,
-  Pencil,
+  Lock,
+  MoreHorizontal,
   Plus,
   Power,
   PowerOff,
+  RefreshCw,
+  RotateCcw,
   RotateCw,
   Search,
-  ShieldCheck,
-  ShieldQuestion,
-  ShieldX,
-  TriangleAlert,
+  SlidersHorizontal,
   Trash2,
+  Unlock,
   Upload,
   X,
-  Zap,
 } from "lucide-react";
 import { api } from "../api";
 import type { ProxyRow } from "../api";
-import { ProxyField } from "../components/ProxyField";
 import type {
   AccountGroup,
+  AccountHealthBucket,
   AccountListSummary,
+  AccountOperationSelector,
+  AccountPageStatsItem,
   AccountRow,
-  AntigravityAuthKind,
   AntigravityAccountState,
-  AntigravityImportItem,
-  AntigravityImportResponse,
-  AntigravityModelQuota,
-  AntigravityOAuthStartResponse,
-  AntigravityOAuthStatusResponse,
-  AntigravityPermissionsSnapshot,
-  AntigravityQuotaSnapshot,
-  UpdateAntigravityAccountRequest,
 } from "../types";
 import AccountGroupFilterSelect, {
   EMPTY_ACCOUNT_GROUP_FILTER,
@@ -61,931 +46,138 @@ import AccountGroupFilterSelect, {
   pruneAccountGroupFilter,
   type AccountGroupFilterValue,
 } from "../components/AccountGroupFilterSelect";
-import AccountGroupMultiSelect from "../components/AccountGroupMultiSelect";
-import AccountProxyBadge from "../components/AccountProxyBadge";
+import { AccountGroupManagerModal } from "../components/AccountGroupManagerModal";
+import AccountDetailSheet from "../components/AccountDetailSheet";
 import AccountProxyQuickEditor from "../components/AccountProxyQuickEditor";
-import {
-  buildProxyBindingContext,
-  type ProxyBindingContext,
-} from "../lib/accountProxyBinding";
+import AccountUsageModal from "../components/AccountUsageModal";
 import ChannelLogo from "../components/ChannelLogo";
 import ColumnSettingsMenu from "../components/ColumnSettingsMenu";
-import ModelLogo from "../components/ModelLogo";
 import { CompactStat } from "../components/CompactStat";
-import Modal from "../components/Modal";
-import TestConnectionModal from "../components/TestConnectionModal";
+import {
+  HeaderActionMenu,
+  type HeaderActionMenuSection,
+} from "../components/HeaderActionMenu";
+import OperationProgressToast from "../components/OperationProgressToast";
+import OperationResultsModal from "../components/OperationResultsModal";
 import PageHeader from "../components/PageHeader";
 import Pagination from "../components/Pagination";
 import StateShell from "../components/StateShell";
-import StatusBadge from "../components/StatusBadge";
-import { Badge } from "@/components/ui/badge";
+import TestConnectionModal from "../components/TestConnectionModal";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
   Table,
   TableBody,
-  TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
 import { useConfirmDialog } from "../hooks/useConfirmDialog";
+import { useAccountTableColumns } from "../hooks/useAccountTableColumns";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useOperationProgress } from "../hooks/useOperationProgress";
 import {
   DEFAULT_PAGE_SIZE_OPTIONS,
   usePersistedPageSize,
 } from "../hooks/usePersistedPageSize";
-import { useAccountTableColumns } from "../hooks/useAccountTableColumns";
-import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useToast } from "../hooks/useToast";
+import {
+  buildProxyBindingContext,
+  type ProxyBindingContext,
+} from "../lib/accountProxyBinding";
+import {
+  isLargePoolSortDisabled,
+  resolveDisabledAccountSorts,
+} from "../lib/accountListSort";
+import { accountLabel, isAntigravityAPIKeyAccount } from "../lib/antigravityQuota";
 import { cn } from "@/lib/utils";
 import { getErrorMessage } from "../utils/error";
-import { formatBeijingTime, formatRelativeTime } from "../utils/time";
+import {
+  ANTIGRAVITY_TABLE_COLUMNS,
+  AntigravityAccountCard,
+  AntigravityAccountRow,
+  type AntigravityRowBusyAction,
+  type AntigravityRowProps,
+} from "./antigravity/AntigravityAccountRow";
+import AntigravityBatchModelsModal from "./antigravity/AntigravityBatchModelsModal";
+import AntigravityEditModal from "./antigravity/AntigravityEditModal";
+import AntigravityAddModal from "./antigravity/AntigravityAddModal";
+import AntigravityImportModal from "./antigravity/AntigravityImportModal";
+import AntigravityOAuthModal from "./antigravity/AntigravityOAuthModal";
+import AntigravityQuotaDetailModal from "./antigravity/AntigravityQuotaDetailModal";
+import { AntigravityQuotaOverview } from "./antigravity/AntigravityQuotaCells";
+import { AntigravityProviderPanel } from "./antigravity/AntigravityStatePanel";
 
-type StatusFilter = "all" | "active" | "disabled" | "error";
-type ImportMode = "single" | "files";
-type BusyAction = "refresh" | "quota" | "toggle" | "delete";
-type OAuthModalStatus = "idle" | "starting" | "waiting" | "processing" | "completed" | "failed" | "cancelled";
+type StatusFilter = "all" | "active" | "rate_limited" | "abnormal" | "disabled" | "locked";
+type AuthFilter = "all" | "oauth" | "api_key";
+type SortKey = "updated_at" | "usage" | "today" | "requests" | "created_at" | "group";
+type SortDir = "asc" | "desc";
+type BatchOperation = "sync" | "test" | "delete" | "update" | "reset" | "clean";
 
-const ANTIGRAVITY_TABLE_COLUMNS = [
-  "project", "permission", "quota", "proxy", "status", "updatedAt",
-] as const;
-
-function parseModelList(value: string): string[] {
-  return Array.from(
-    new Set(
-      value
-        .split(/[\n,]/)
-        .map((model) => model.trim())
-        .filter(Boolean),
-    ),
-  );
-}
-
-function editDraftFromAccount(account: AccountRow): EditDraft {
-  const authKind: AntigravityAuthKind =
-    account.antigravity_auth_kind === "api_key" ? "api_key" : "oauth";
-  return {
-    name: account.name ?? "",
-    authKind,
-    authJson: "",
-    apiKey: "",
-    models: (account.models?.length
-      ? account.models
-      : authKind === "api_key"
-        ? ANTIGRAVITY_DEFAULT_MODELS
-        : []
-    ).join("\n"),
-    modelMapping: account.model_mapping ?? "",
-    proxyUrl: account.proxy_url ?? "",
-    groupIds: account.group_ids ?? [],
-  };
-}
-
-function importItemSourceLabel(item: AntigravityImportItem): string {
-  const suffix = item.sub_index && item.sub_index > 0 ? `.${item.sub_index}` : "";
-  return `#${item.index}${suffix}`;
-}
-
-function importItemDisplayLabel(item: AntigravityImportItem): string {
-  const source = importItemSourceLabel(item);
-  return item.email ? `${item.email} (${source})` : source;
-}
-
-interface CredentialFile {
-  name: string;
-  content: string;
-}
-
-interface ImportDraft {
-  name: string;
-  authKind: AntigravityAuthKind;
-  authJson: string;
-  apiKey: string;
-  models: string;
-  modelMapping: string;
-  proxyUrl: string;
-  groupIds: number[];
-  // importFileProxies 只控制"文件内代理是否注册进代理表"。该渠道的导入一直会采用
-  // 文件里的 proxy_url，关掉它只是让那些代理停在账号绑定上、不进代理池。
-  importFileProxies: boolean;
-}
-
-interface EditDraft {
-  name: string;
-  authKind: AntigravityAuthKind;
-  authJson: string;
-  apiKey: string;
-  models: string;
-  modelMapping: string;
-  proxyUrl: string;
-  groupIds: number[];
-}
-
-interface OAuthDraft {
-  name: string;
-  proxyUrl: string;
-  groupIds: number[];
-}
-
-const EMPTY_IMPORT_DRAFT: ImportDraft = {
-  name: "",
-  authKind: "oauth",
-  authJson: "",
-  apiKey: "",
-  models: ANTIGRAVITY_DEFAULT_MODELS.join("\n"),
-  modelMapping: "",
-  proxyUrl: "",
-  groupIds: [],
-  importFileProxies: false,
+const DEFAULT_SORT: SortKey = "updated_at";
+const SORT_DEFAULT_DIR: Record<SortKey, SortDir> = {
+  updated_at: "desc",
+  usage: "desc",
+  today: "desc",
+  requests: "desc",
+  created_at: "desc",
+  group: "asc",
 };
 
-const EMPTY_OAUTH_DRAFT: OAuthDraft = {
-  name: "",
-  proxyUrl: "",
-  groupIds: [],
-};
+// 列配置 v2:项目与权限合并成"订阅与权限"一列并新增今日/请求列,换新 key 避免旧配置错位。
+const COLUMNS_STORAGE_KEY = "codex2api:antigravity-accounts:columns-v2";
 
-function accountLabel(account: AccountRow): string {
-  return account.name || account.email || `#${account.id}`;
-}
-
-function identityProjectID(account: AccountRow): string {
-  return account.project_id || account.antigravity_project_id || "";
-}
-
-function identityAvatarURL(account: AccountRow): string {
-  return account.avatar_url || account.antigravity_avatar_url || "";
-}
-
-function identityVerified(account: AccountRow): boolean {
-  return account.verified_email ?? account.antigravity_verified_email ?? false;
-}
-
-function toRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
-
-function normalizeFraction(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  const fraction = value > 1 && value <= 100 ? value / 100 : value;
-  return Math.min(1, Math.max(0, fraction));
-}
-
-function quotaRemaining(info: AntigravityModelQuota): number | null {
-  const record = toRecord(info);
-  return normalizeFraction(
-    record.remaining_fraction ?? record.remainingFraction ?? record.percentage,
+const filterPillClass =
+  "inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/60 bg-background/70 px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const segmentGroupClass =
+  "flex h-8 max-w-full shrink-0 items-center gap-0.5 overflow-x-auto rounded-lg border border-border bg-muted/30 p-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+const segmentButtonClass = (active: boolean) =>
+  cn(
+    "flex h-6 shrink-0 items-center whitespace-nowrap rounded-md px-2 text-xs font-medium transition-colors",
+    active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
   );
+
+function downloadAntigravityBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
-function quotaResetTime(info: AntigravityModelQuota): string {
-  const record = toRecord(info);
-  return firstString(record, ["reset_time", "resetTime"]);
-}
-
-function quotaDisplayName(model: string, info: AntigravityModelQuota): string {
-  const record = toRecord(info);
-  return firstString(record, ["display_name", "displayName"]) || model;
-}
-
-function modelQuotaEntries(
-  quota?: AntigravityQuotaSnapshot,
-): Array<[string, AntigravityModelQuota]> {
-  if (!quota?.models) return [];
-  if (Array.isArray(quota.models)) {
-    return quota.models.map((info, index) => {
-      const record = toRecord(info);
-      const model =
-        firstString(record, ["model", "model_id", "modelId", "name", "id"]) ||
-        `model-${index + 1}`;
-      return [model, info];
-    });
-  }
-  return Object.entries(quota.models);
-}
-
-function sortedModelQuotaEntries(
-  quota?: AntigravityQuotaSnapshot,
-): Array<[string, AntigravityModelQuota]> {
-  return modelQuotaEntries(quota).sort(([leftName, left], [rightName, right]) => {
-    if (Boolean(left.recommended) !== Boolean(right.recommended)) {
-      return left.recommended ? -1 : 1;
-    }
-    return quotaDisplayName(leftName, left).localeCompare(
-      quotaDisplayName(rightName, right),
-    );
-  });
-}
-
-function quotaUpdatedAt(quota?: AntigravityQuotaSnapshot): string {
-  const record = toRecord(quota);
-  return firstString(record, ["updated_at", "updatedAt"]);
-}
-
-function quotaGroups(
-  quota?: AntigravityQuotaSnapshot,
-): NonNullable<AntigravityQuotaSnapshot["quota_groups"]> {
-  const record = toRecord(quota);
-  const groups = record.quota_groups ?? record.quotaGroups ?? record.groups;
-  return Array.isArray(groups)
-    ? (groups as NonNullable<AntigravityQuotaSnapshot["quota_groups"]>)
-    : [];
-}
-
-function subscriptionTier(account: AccountRow): string {
-  const quota = toRecord(account.antigravity_quota);
-  return (
-    firstString(quota, ["subscription_tier", "subscriptionTier"]) ||
-    account.plan_type ||
-    ""
-  );
-}
-
-function permissionAllowed(
-  permissions?: AntigravityPermissionsSnapshot,
-): boolean | null {
-  if (!permissions) return null;
-  const record = toRecord(permissions);
-  const value = record.allowed ?? record.allow_access ?? record.allowAccess;
-  return typeof value === "boolean" ? value : null;
-}
-
-function tierLabel(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const record = toRecord(value);
-  const label = firstString(record, [
-    "display_name",
-    "displayName",
-    "name",
-    "label",
-    "tier",
-    "id",
-    "key",
-    "reason_code",
-  ]);
-  if (label) return label;
-  if (!value) return "";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function resolveGroups(account: AccountRow, groups: AccountGroup[]): AccountGroup[] {
-  const ids = account.group_ids ?? [];
-  if (ids.length === 0) return [];
-  const byID = new Map(groups.map((group) => [group.id, group]));
-  return ids.map((id) => byID.get(id)).filter(Boolean) as AccountGroup[];
-}
-
-function quotaTone(fraction: number | null): string {
-  if (fraction == null) return "bg-muted-foreground";
-  if (fraction <= 0.1) return "bg-red-500";
-  if (fraction <= 0.35) return "bg-amber-500";
-  return "bg-emerald-500";
-}
-
-function formatPercent(fraction: number | null): string {
-  if (fraction == null) return "-";
-  return `${Math.round(fraction * 100)}%`;
-}
-
-function AccountAvatar({ account, size = 36 }: { account: AccountRow; size?: number }) {
-  const [failed, setFailed] = useState(false);
-  const avatar = identityAvatarURL(account);
-  if (avatar && !failed) {
-    return (
-      <img
-        src={avatar}
-        alt=""
-        width={size}
-        height={size}
-        referrerPolicy="no-referrer"
-        className="shrink-0 rounded-full border border-border bg-background object-cover"
-        style={{ width: size, height: size }}
-        onError={() => setFailed(true)}
-      />
-    );
-  }
-  return (
-    <span
-      className="inline-flex shrink-0 items-center justify-center rounded-full border border-border bg-background"
-      style={{ width: size, height: size }}
-    >
-      <ChannelLogo channel="antigravity" size={Math.round(size * 0.58)} />
-    </span>
-  );
-}
-
-const warningURLPattern = /https?:\/\/[^\s;]+/;
-
-function firstWarningURL(text?: string): string | null {
-  if (!text) return null;
-  const match = text.match(warningURLPattern);
-  return match ? match[0] : null;
-}
-
-// 权限列里的操作入口:同步 warning 会带出 Google 的一次性操作链接
-// (TOS 申诉表单 / 账号验证),直接渲染成可点击入口,免得去详情页
-// 复制长 URL。
-function SyncWarningAction({ warning }: { warning?: string }) {
-  const { t } = useTranslation();
-  const url = firstWarningURL(warning);
-  if (!url) return null;
-  const label = /appeal/i.test(warning ?? "")
-    ? t("antigravity.submitAppeal")
-    : t("antigravity.verifyAccount");
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="mt-1 inline-flex max-w-[180px] items-center gap-1 text-[11px] font-medium text-primary hover:underline"
-    >
-      <ExternalLink className="size-3 shrink-0" aria-hidden />
-      <span className="truncate">{label}</span>
-    </a>
-  );
-}
-
-// 详情页 warning 横幅:URL 转成可点击链接,展示文本截短避免长链接刷屏。
-function LinkifiedWarning({ text }: { text: string }) {
-  const parts = text.split(/(https?:\/\/[^\s;]+)/g);
-  return (
-    <span className="break-words">
-      {parts.map((part, index) => {
-        if (!/^https?:\/\//.test(part)) {
-          return part;
-        }
-        const display = part.length > 64 ? part.slice(0, 61) + "…" : part;
-        return (
-          <a
-            key={index}
-            href={part}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium underline underline-offset-2"
-          >
-            {display}
-          </a>
-        );
-      })}
-    </span>
-  );
-}
-
-function PermissionBadge({ permissions }: { permissions?: AntigravityPermissionsSnapshot }) {
-  const { t } = useTranslation();
-  const allowed = permissionAllowed(permissions);
-  if (allowed == null) {
-    return (
-      <Badge variant="outline" className="gap-1 text-muted-foreground">
-        <ShieldQuestion className="size-3" />
-        {t("antigravity.permissionUnknown")}
-      </Badge>
-    );
-  }
-  if (allowed) {
-    return (
-      <Badge className="gap-1 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
-        <ShieldCheck className="size-3" />
-        {t("antigravity.permissionAllowed")}
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="destructive" className="gap-1">
-      <ShieldX className="size-3" />
-      {t("antigravity.permissionBlocked")}
-    </Badge>
-  );
-}
-
-// AntigravityAuthKindChip 凭据形态小徽章(与 Grok 页同款配色:OAuth 紫 / API Key 天蓝)。
-function AntigravityAuthKindChip({ account }: { account: AccountRow }) {
-  const { t } = useTranslation();
-  const isAPIKey = account.antigravity_auth_kind === "api_key";
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset",
-        isAPIKey
-          ? "bg-sky-500/10 text-sky-700 ring-sky-600/20 dark:bg-sky-500/20 dark:text-sky-300 dark:ring-sky-400/20"
-          : "bg-violet-500/10 text-violet-700 ring-violet-600/20 dark:bg-violet-500/20 dark:text-violet-300 dark:ring-violet-400/20",
-      )}
-    >
-      {isAPIKey ? <KeyRound className="size-2.5" /> : <FileJson className="size-2.5" />}
-      {isAPIKey ? t("antigravity.authKindApiKey") : t("antigravity.authKindOAuth")}
-    </span>
-  );
-}
-
-function GroupChips({ account, groups }: { account: AccountRow; groups: AccountGroup[] }) {
-  const resolved = resolveGroups(account, groups);
-  if (resolved.length === 0) return null;
-  return (
-    <div className="mt-1 flex flex-wrap gap-1">
-      {resolved.slice(0, 3).map((group) => (
-        <span
-          key={group.id}
-          className="inline-flex max-w-28 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-          title={group.description || group.name}
-        >
-          <span
-            className="size-1.5 shrink-0 rounded-full"
-            style={{ backgroundColor: group.color || "#2563eb" }}
-          />
-          <span className="truncate">{group.name}</span>
-        </span>
-      ))}
-      {resolved.length > 3 ? (
-        <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-          +{resolved.length - 3}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-function AccountMetadataFields({
-  proxyUrl,
-  onProxyUrlChange,
-  proxies = [],
-  groupIds,
-  onGroupIdsChange,
-  groups,
-  onCreateGroup,
+function AntigravityAccounts({
+  headerSlot,
+  showOperationResults = false,
 }: {
-  proxyUrl: string;
-  onProxyUrlChange: (value: string) => void;
-  proxies?: ProxyRow[];
-  groupIds: number[];
-  onGroupIdsChange: (value: number[]) => void;
-  groups: AccountGroup[];
-  onCreateGroup: (name: string) => Promise<number | null>;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {/* 代理字段与其他三个渠道同构:手填 + 测试 + 从代理池选择(含关联提示)。 */}
-      <ProxyField
-        className="space-y-1.5"
-        value={proxyUrl}
-        onChange={onProxyUrlChange}
-        proxies={proxies}
-        label={t("antigravity.proxyUrl")}
-        placeholder={t("antigravity.proxyUrlPlaceholder")}
-      />
-      <div className="space-y-1.5">
-        <span className="text-xs font-semibold text-muted-foreground">
-          {t("accounts.groupsLabel")}
-        </span>
-        <AccountGroupMultiSelect
-          groups={groups}
-          value={groupIds}
-          onChange={onGroupIdsChange}
-          placeholder={t("accounts.groupsPlaceholder")}
-          emptyLabel={t("accounts.groupsNone")}
-          emptyHint={t("accounts.groupsSelectHint")}
-          selectedLabel={t("accounts.groupsSelected", { count: groupIds.length })}
-          onCreateGroup={onCreateGroup}
-          createLabel={t("accounts.groupCreate")}
-          createPlaceholder={t("accounts.groupNamePlaceholder")}
-          creatingLabel={t("accounts.groupCreating")}
-          createEmptyHint={t("accounts.groupCreateInlineEmptyHint")}
-        />
-      </div>
-    </div>
-  );
-}
-
-function SelectionCheckbox({
-  checked,
-  indeterminate = false,
-  disabled,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  indeterminate?: boolean;
-  disabled: boolean;
-  label: string;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <input
-      ref={(element) => { if (element) element.indeterminate = indeterminate; }}
-      type="checkbox"
-      className="size-4 shrink-0 cursor-pointer accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-      checked={checked}
-      aria-checked={indeterminate ? "mixed" : checked}
-      aria-label={label}
-      disabled={disabled}
-      onClick={(event) => event.stopPropagation()}
-      onChange={(event) => onChange(event.target.checked)}
-    />
-  );
-}
-
-function CompactQuota({ account, onOpen }: { account: AccountRow; onOpen: () => void }) {
-  const { t } = useTranslation();
-  const entries = modelQuotaEntries(account.antigravity_quota);
-  const remaining = entries
-    .map(([, info]) => quotaRemaining(info))
-    .filter((value): value is number => value != null);
-  if (entries.length === 0) {
-    return (
-      <button
-        type="button"
-        onClick={onOpen}
-        className="text-left text-xs text-muted-foreground hover:text-foreground"
-      >
-        {t("antigravity.quotaNotSynced")}
-      </button>
-    );
-  }
-  const lowest = remaining.length > 0 ? Math.min(...remaining) : null;
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group min-w-[150px] text-left"
-      title={t("antigravity.quotaMinimumHint")}
-    >
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="font-semibold text-foreground">
-          {t("antigravity.modelsCount", { count: entries.length })}
-        </span>
-        <span className="font-mono font-semibold tabular-nums text-muted-foreground group-hover:text-foreground">
-          {formatPercent(lowest)}
-        </span>
-      </div>
-      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn("h-full rounded-full", quotaTone(lowest))}
-          style={{ width: `${Math.max(2, (lowest ?? 0) * 100)}%` }}
-        />
-      </div>
-      <div className="mt-1 text-[10px] text-muted-foreground">
-        {t("antigravity.lowestRemaining")}
-      </div>
-    </button>
-  );
-}
-
-function QuotaDetail({ account }: { account: AccountRow }) {
-  const { t } = useTranslation();
-  const models = sortedModelQuotaEntries(account.antigravity_quota);
-  const groups = quotaGroups(account.antigravity_quota);
-  const permissions = account.antigravity_permissions;
-  const allowed = permissionAllowed(permissions);
-  const permissionRecord = toRecord(permissions);
-  const currentTier = tierLabel(
-    permissionRecord.current_tier ?? permissionRecord.currentTier,
-  );
-  const paidTier = tierLabel(permissionRecord.paid_tier ?? permissionRecord.paidTier);
-  const allowedTiersRaw = permissionRecord.allowed_tiers ?? permissionRecord.allowedTiers;
-  const ineligibleTiersRaw =
-    permissionRecord.ineligible_tiers ?? permissionRecord.ineligibleTiers;
-  const allowedTiers = Array.isArray(allowedTiersRaw)
-    ? allowedTiersRaw.map(tierLabel).filter(Boolean)
-    : [];
-  const ineligibleTiers = Array.isArray(ineligibleTiersRaw)
-    ? ineligibleTiersRaw.map(tierLabel).filter(Boolean)
-    : [];
-  const reason = firstString(permissionRecord, ["reason"]);
-  const updatedAt = quotaUpdatedAt(account.antigravity_quota);
-
-  return (
-    <div className="space-y-6">
-      {account.antigravity_sync_warning ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          <LinkifiedWarning text={account.antigravity_sync_warning} />
-        </div>
-      ) : null}
-      <section className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <div className="text-[11px] font-semibold uppercase text-muted-foreground">
-            {t("antigravity.projectId")}
-          </div>
-          <div className="mt-1 break-all font-mono text-sm text-foreground">
-            {identityProjectID(account) || "-"}
-          </div>
-        </div>
-        <div>
-          <div className="text-[11px] font-semibold uppercase text-muted-foreground">
-            {t("antigravity.subscriptionTier")}
-          </div>
-          <div className="mt-1 text-sm font-semibold text-foreground">
-            {subscriptionTier(account) || currentTier || "-"}
-          </div>
-        </div>
-      </section>
-
-      <section className="border-t border-border pt-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">
-              {t("antigravity.permissionsTitle")}
-            </h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {allowed === false && reason
-                ? reason
-                : t("antigravity.permissionsDescription")}
-            </p>
-          </div>
-          <PermissionBadge permissions={permissions} />
-        </div>
-        {(currentTier || paidTier) && (
-          <div className="mt-3 flex flex-wrap gap-2 text-xs">
-            {currentTier ? (
-              <Badge variant="outline">
-                {t("antigravity.currentTier")}: {currentTier}
-              </Badge>
-            ) : null}
-            {paidTier ? (
-              <Badge variant="outline">
-                {t("antigravity.paidTier")}: {paidTier}
-              </Badge>
-            ) : null}
-          </div>
-        )}
-        {allowedTiers.length > 0 ? (
-          <div className="mt-3">
-            <div className="text-[11px] font-semibold uppercase text-muted-foreground">
-              {t("antigravity.allowedTiers")}
-            </div>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {allowedTiers.map((tier, index) => (
-                <Badge key={`${tier}-${index}`} variant="outline">
-                  {tier}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {ineligibleTiers.length > 0 ? (
-          <div className="mt-3">
-            <div className="text-[11px] font-semibold uppercase text-muted-foreground">
-              {t("antigravity.ineligibleTiers")}
-            </div>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {ineligibleTiers.map((tier, index) => (
-                <Badge key={`${tier}-${index}`} variant="outline" className="text-muted-foreground">
-                  {tier}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </section>
-
-      <section className="border-t border-border pt-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">
-              {t("antigravity.modelQuotaTitle")}
-            </h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {updatedAt
-                ? t("antigravity.updatedAt", {
-                    time: formatRelativeTime(updatedAt, { variant: "compact" }),
-                  })
-                : t("antigravity.quotaNotSynced")}
-            </p>
-          </div>
-          <Badge variant="secondary">
-            {t("antigravity.modelsCount", { count: models.length })}
-          </Badge>
-        </div>
-        {models.length === 0 ? (
-          <div className="mt-4 rounded-lg border border-dashed border-border p-5 text-center text-sm text-muted-foreground">
-            {t("antigravity.quotaNotSynced")}
-          </div>
-        ) : (
-          <div className="mt-3 divide-y divide-border rounded-lg border border-border">
-            {models.map(([model, info]) => {
-              const fraction = quotaRemaining(info);
-              const resetAt = quotaResetTime(info);
-              return (
-                <div
-                  key={model}
-                  className="grid gap-2 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_180px] sm:items-center"
-                >
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <ModelLogo model={model} size={18} variant="plain" />
-                      <span className="truncate text-sm font-semibold text-foreground">
-                        {quotaDisplayName(model, info)}
-                      </span>
-                      {info.recommended ? (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {t("antigravity.recommended")}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                      {info.supports_images ? <span>{t("antigravity.images")}</span> : null}
-                      {info.supports_thinking ? <span>{t("antigravity.thinking")}</span> : null}
-                      {info.max_output_tokens ? (
-                        <span>
-                          {t("antigravity.maxOutput", {
-                            count: info.max_output_tokens,
-                          })}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">
-                        {resetAt
-                          ? t("antigravity.resetAt", {
-                              time: formatBeijingTime(resetAt),
-                            })
-                          : t("antigravity.resetUnknown")}
-                      </span>
-                      <span className="font-mono font-semibold tabular-nums text-foreground">
-                        {formatPercent(fraction)}
-                      </span>
-                    </div>
-                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className={cn("h-full rounded-full", quotaTone(fraction))}
-                        style={{ width: `${Math.max(2, (fraction ?? 0) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {groups.length > 0 ? (
-        <section className="border-t border-border pt-4">
-          <h3 className="text-sm font-semibold text-foreground">
-            {t("antigravity.groupQuotaTitle")}
-          </h3>
-          <div className="mt-3 space-y-3">
-            {groups.map((group, groupIndex) => (
-              <div key={`${group.display_name}-${groupIndex}`} className="rounded-lg border border-border p-3">
-                <div className="text-sm font-semibold text-foreground">
-                  {group.display_name || t("antigravity.unnamedQuotaGroup")}
-                </div>
-                {group.description ? (
-                  <div className="mt-0.5 text-xs text-muted-foreground">
-                    {group.description}
-                  </div>
-                ) : null}
-                <div className="mt-3 space-y-2">
-                  {(group.buckets ?? []).map((bucket) => {
-                    const fraction = normalizeFraction(bucket.remaining_fraction);
-                    return (
-                      <div
-                        key={bucket.bucket_id}
-                        className="grid gap-1.5 sm:grid-cols-[minmax(0,1fr)_180px] sm:items-center"
-                      >
-                        <div className="min-w-0 text-xs">
-                          <span className="font-medium text-foreground">
-                            {bucket.display_name || bucket.bucket_id}
-                          </span>
-                          <span className="ml-2 text-muted-foreground">{bucket.window}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-                            <div
-                              className={cn("h-full rounded-full", quotaTone(fraction))}
-                              style={{ width: `${Math.max(2, (fraction ?? 0) * 100)}%` }}
-                            />
-                          </div>
-                          <span className="w-10 text-right font-mono text-xs font-semibold tabular-nums">
-                            {formatPercent(fraction)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-function AntigravityManagementState({
-  state,
-  loading,
-  error,
-  action,
-  onSync,
-  onProbe,
-}: {
-  state: AntigravityAccountState | null;
-  loading: boolean;
-  error: string | null;
-  action: "sync" | "probe" | null;
-  onSync: () => void;
-  onProbe: () => void;
-}) {
-  const { t } = useTranslation();
-  const latest = state?.capabilities?.[0];
-  return (
-    <section className="space-y-3 rounded-xl border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold">{t("antigravity.stateTitle")}</h3>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {t("antigravity.stateDescription")}
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Button variant="outline" size="xs" disabled={loading || action !== null} onClick={onSync}>
-            <RotateCw className={cn("size-3", action === "sync" && "animate-spin")} />
-            {action === "sync" ? t("antigravity.stateSyncing") : t("antigravity.stateSync")}
-          </Button>
-          <Button variant="outline" size="xs" disabled={loading || action !== null} onClick={onProbe}>
-            <FlaskConical className={cn("size-3", action === "probe" && "animate-pulse")} />
-            {action === "probe" ? t("antigravity.capabilityProbing") : t("antigravity.capabilityProbe")}
-          </Button>
-        </div>
-      </div>
-      {loading ? (
-        <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" />{t("antigravity.stateLoading")}
-        </div>
-      ) : null}
-      {error ? <div className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</div> : null}
-      {state ? (
-        <>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {[
-              [t("antigravity.stateCredential"), state.credential_kind === "api_key" ? t("antigravity.authKindApiKey") : t("antigravity.authKindOAuth")],
-              [t("antigravity.stateIdentity"), state.identity.status],
-              [t("antigravity.stateCatalog"), `${state.catalog.models.length} · ${state.catalog.source}`],
-              [t("antigravity.stateVerification"), state.catalog.verified ? t("antigravity.verified") : t("antigravity.unverified")],
-            ].map(([label, value]) => (
-              <div key={label} className="min-w-0 rounded-lg bg-muted/35 px-2.5 py-2">
-                <div className="text-[10px] text-muted-foreground">{label}</div>
-                <div className="mt-0.5 truncate text-xs font-semibold" title={value}>{value}</div>
-              </div>
-            ))}
-          </div>
-          <div className="rounded-lg border border-border px-3 py-2 text-xs">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold">{t("antigravity.capabilityTitle")}</span>
-              <Badge variant={latest?.verified ? "default" : "outline"}>
-                {latest?.verified ? t("antigravity.verified") : t("antigravity.notProbed")}
-              </Badge>
-            </div>
-            <div className="mt-1 text-[11px] text-muted-foreground">
-              {latest
-                ? `${latest.protocol} · ${latest.model_id} · ${latest.status}${latest.http_status ? ` · HTTP ${latest.http_status}` : ""}`
-                : t("antigravity.capabilityEmpty")}
-            </div>
-          </div>
-          {state.warnings.length > 0 ? (
-            <div className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
-              {state.warnings.map((warning) => <div key={warning}>{warning}</div>)}
-            </div>
-          ) : null}
-        </>
-      ) : null}
-    </section>
-  );
-}
-
-function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
+  headerSlot?: ReactNode;
+  showOperationResults?: boolean;
+} = {}) {
   const { t } = useTranslation();
   const isTableViewport = useMediaQuery("(min-width: 768px)");
   const { columns: visibleColumns, toggleColumn, resetColumns } = useAccountTableColumns(
-    "codex2api:antigravity-accounts:visible-columns",
+    COLUMNS_STORAGE_KEY,
     ANTIGRAVITY_TABLE_COLUMNS,
   );
   const { showToast } = useToast();
   const { confirm, confirmDialog } = useConfirmDialog();
+  const {
+    operationProgress,
+    operationResults,
+    runStreamingOperation,
+    closeOperationProgress,
+    closeOperationResults,
+  } = useOperationProgress(showOperationResults);
   const requestAbortRef = useRef<AbortController | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // ---------- 列表数据 ----------
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [selectedAccountsById, setSelectedAccountsById] = useState<AntigravitySelection>(() => new Map());
-  const [batchBusy, setBatchBusy] = useState(false);
+  const [forkBatchBusy, setBatchBusy] = useState(false);
   const batchBusyRef = useRef(false);
   const deletedSelectionIdsRef = useRef(new Set<number>());
   const selectedAccounts = useMemo(() => Array.from(selectedAccountsById.values()), [selectedAccountsById]);
@@ -1037,7 +229,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
     setSelectedAccountsById((current) =>
       reconcileAntigravitySelection(current, accounts, batchBusyRef.current),
     );
-  }, [accounts, batchBusy]);
+  }, [accounts, forkBatchBusy]);
   const [allGroups, setAllGroups] = useState<AccountGroup[]>([]);
   const antigravityGroups = useMemo(
     () => allGroups.filter((group) => group.channel === "antigravity"),
@@ -1045,9 +237,11 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
   );
   const [serverSummary, setServerSummary] = useState<AccountListSummary | null>(null);
   const [totalAccounts, setTotalAccounts] = useState(0);
+  const [disabledSorts, setDisabledSorts] = useState<string[] | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [loadedPage, setLoadedPage] = useState(0);
   const [pageSize, setPageSize] = usePersistedPageSize(
     "antigravity-accounts",
     20,
@@ -1056,20 +250,38 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [authFilter, setAuthFilter] = useState<AuthFilter>("all");
   const [groupFilter, setGroupFilter] = useState<AccountGroupFilterValue>(
     EMPTY_ACCOUNT_GROUP_FILTER,
   );
-  const [busy, setBusy] = useState<{ id: number; action: BusyAction } | null>(null);
-  const [testingAccount, setTestingAccount] = useState<AccountRow | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>(DEFAULT_SORT);
+  const [sortDir, setSortDir] = useState<SortDir>(SORT_DEFAULT_DIR[DEFAULT_SORT]);
+  const [showFilters, setShowFilters] = useState(false);
+  const [pageStats, setPageStats] = useState<Record<string, AccountPageStatsItem>>({});
+  const [healthBars, setHealthBars] = useState<Record<string, AccountHealthBucket[]>>({});
 
-  // 代理池 + 代理池开关 + 全局代理:代理徽章的判定输入。本页此前只有纯文本代理
-  // 输入框,没接过代理池,这里补上(拉取失败静默留空,不影响手填)。
+  // ---------- 选择 / 批量 ----------
+  const selected = useMemo(() => new Set(selectedAccountsById.keys()), [selectedAccountsById]);
+  const [batchOperation, setBatchOperation] = useState<BatchOperation | null>(null);
+  const [batchModelsOpen, setBatchModelsOpen] = useState(false);
+  const [manageGroupsOpen, setManageGroupsOpen] = useState(false);
+  const batchBusy = forkBatchBusy || batchOperation !== null || batchModelsOpen;
+
+  // ---------- 行操作与弹窗 ----------
+  const [busy, setBusy] = useState<{ id: number; action: AntigravityRowBusyAction } | null>(null);
+  const [testingAccount, setTestingAccount] = useState<AccountRow | null>(null);
+  const [usageAccount, setUsageAccount] = useState<AccountRow | null>(null);
+  const [editTarget, setEditTarget] = useState<AccountRow | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [showOAuth, setShowOAuth] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  // 代理池 + 代理池开关 + 全局代理:代理徽章的判定输入(拉取失败静默留空,不影响手填)。
   const [proxyPool, setProxyPool] = useState<ProxyRow[]>([]);
   const [proxyPoolEnabled, setProxyPoolEnabled] = useState(false);
   const [globalProxyURL, setGlobalProxyURL] = useState("");
-  const [quickProxyAccount, setQuickProxyAccount] = useState<AccountRow | null>(
-    null,
-  );
+  const [quickProxyAccount, setQuickProxyAccount] = useState<AccountRow | null>(null);
   useEffect(() => {
     let cancelled = false;
     void api
@@ -1105,42 +317,10 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
     [proxyPool, allGroups, proxyPoolEnabled, globalProxyURL],
   );
 
-  const [showImport, setShowImport] = useState(false);
-  const [importMode, setImportMode] = useState<ImportMode>("single");
-  const [importDraft, setImportDraft] = useState<ImportDraft>(EMPTY_IMPORT_DRAFT);
-  const [credentialFiles, setCredentialFiles] = useState<CredentialFile[]>([]);
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<AntigravityImportResponse | null>(null);
-
-  const [showOAuth, setShowOAuth] = useState(false);
-  const [oauthDraft, setOAuthDraft] = useState<OAuthDraft>(EMPTY_OAUTH_DRAFT);
-  const [oauthSession, setOAuthSession] = useState<AntigravityOAuthStartResponse | null>(null);
-  const [oauthStatus, setOAuthStatus] = useState<AntigravityOAuthStatusResponse | null>(null);
-  const [oauthCallbackURL, setOAuthCallbackURL] = useState("");
-  const [oauthModalStatus, setOAuthModalStatus] = useState<OAuthModalStatus>("idle");
-  const [oauthStarting, setOAuthStarting] = useState(false);
-  const [oauthCompleting, setOAuthCompleting] = useState(false);
-  const [oauthCancelling, setOAuthCancelling] = useState(false);
-  const oauthPollTimerRef = useRef<number | null>(null);
-  const oauthPollInFlightRef = useRef(false);
-  const oauthPollGenerationRef = useRef(0);
-
-  const [editingAccount, setEditingAccount] = useState<AccountRow | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({
-    name: "",
-    authKind: "oauth",
-    authJson: "",
-    apiKey: "",
-    models: "",
-    modelMapping: "",
-    proxyUrl: "",
-    groupIds: [],
-  });
-  const [editing, setEditing] = useState(false);
-  const [editingDetailsLoading, setEditingDetailsLoading] = useState(false);
-  const [editingDetailsError, setEditingDetailsError] = useState<string | null>(null);
-  const editLoadGenerationRef = useRef(0);
+  // ---------- 详情抽屉 ----------
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
+  // 同一个详情账号有两种视图:管理抽屉(sheet)与"额度与权限"宽版窗口(quota),共用管理状态。
+  const [detailView, setDetailView] = useState<"sheet" | "quota">("sheet");
   const [managementState, setManagementState] = useState<AntigravityAccountState | null>(null);
   const [managementLoading, setManagementLoading] = useState(false);
   const [managementError, setManagementError] = useState<string | null>(null);
@@ -1148,11 +328,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
   const detailAccountIdRef = useRef<number | null>(null);
   const detailGenerationRef = useRef(0);
   const managementAbortRef = useRef<AbortController | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const detailAccount = useMemo(
-    () => accounts.find((account) => account.id === detailAccountId) ?? null,
-    [accounts, detailAccountId],
-  );
+  const detailNavigationTargetRef = useRef<"first" | "last" | null>(null);
 
   const isCurrentDetailRequest = useCallback(
     (accountId: number, generation: number) =>
@@ -1161,7 +337,12 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
     [],
   );
 
-  const openDetailAccount = useCallback((accountId: number) => {
+  const openDetailAccount = useCallback((accountId: number, view: "sheet" | "quota" = "sheet") => {
+    setDetailView(view);
+    if (detailAccountIdRef.current === accountId) {
+      // 同一账号只切换视图,不重拉管理状态。
+      return;
+    }
     managementAbortRef.current?.abort();
     detailGenerationRef.current += 1;
     detailAccountIdRef.current = accountId;
@@ -1176,6 +357,8 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
     managementAbortRef.current?.abort();
     detailGenerationRef.current += 1;
     detailAccountIdRef.current = null;
+    detailNavigationTargetRef.current = null;
+    setDetailView("sheet");
     setDetailAccountId(null);
     setManagementState(null);
     setManagementError(null);
@@ -1227,6 +410,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
     };
   }, [detailAccountId, isCurrentDetailRequest]);
 
+  // ---------- 加载 ----------
   const reloadGroups = useCallback(async () => {
     const response = await api.listAccountGroups();
     const groups = response.groups ?? [];
@@ -1253,11 +437,12 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
             pageSize,
             search: debouncedSearchQuery,
             status: statusFilter,
+            authKind: authFilter,
             groupInclude: groupFilter.include,
             groupExclude: groupFilter.exclude,
             ungrouped: groupFilter.ungrouped,
-            sort: "updated_at",
-            order: "desc",
+            sort: sortKey,
+            order: sortDir,
           },
           controller.signal,
         );
@@ -1266,7 +451,9 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
         setAccounts(rows);
         setTotalAccounts(response.total ?? 0);
         setServerSummary(response.summary ?? null);
-        if (response.page !== page) setPage(response.page);
+        setDisabledSorts(response.disabled_sorts);
+        setLoadedPage(response.page ?? page);
+        if (response.page && response.page !== page) setPage(response.page);
         setError(null);
       } catch (loadError) {
         if (controller.signal.aborted) return;
@@ -1278,6 +465,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
       }
     },
     [
+      authFilter,
       debouncedSearchQuery,
       groupFilter.exclude,
       groupFilter.include,
@@ -1285,6 +473,8 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
       page,
       pageSize,
       showToast,
+      sortDir,
+      sortKey,
       statusFilter,
     ],
   );
@@ -1314,227 +504,171 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
 
   useEffect(() => {
     setPage(1);
-  }, [groupFilter, statusFilter]);
+  }, [authFilter, groupFilter, sortDir, sortKey, statusFilter]);
 
-  const stopOAuthPolling = useCallback(() => {
-    oauthPollGenerationRef.current += 1;
-    oauthPollInFlightRef.current = false;
-    if (oauthPollTimerRef.current !== null) {
-      window.clearTimeout(oauthPollTimerRef.current);
-      oauthPollTimerRef.current = null;
+  // 当前页的网关侧用量明细(今日 / 5h / 7d)与健康条;失败不阻断列表。
+  const accountIDsKey = useMemo(() => accounts.map((account) => account.id).join(","), [accounts]);
+  useEffect(() => {
+    if (!accountIDsKey) {
+      setPageStats({});
+      setHealthBars({});
+      return;
     }
-  }, []);
+    const ids = accountIDsKey.split(",").map(Number);
+    const controller = new AbortController();
+    void api
+      .getAccountPageStats(ids, controller.signal)
+      .then((res) => {
+        if (!controller.signal.aborted) setPageStats(res.stats ?? {});
+      })
+      .catch(() => undefined);
+    let cancelled = false;
+    void api
+      .getAccountHealthBars(ids)
+      .then((res) => {
+        if (!cancelled) setHealthBars(res.buckets ?? {});
+      })
+      .catch(() => undefined);
+    return () => {
+      controller.abort();
+      cancelled = true;
+    };
+  }, [accountIDsKey]);
 
-  const resetOAuth = useCallback(() => {
-    stopOAuthPolling();
-    setOAuthSession(null);
-    setOAuthStatus(null);
-    setOAuthCallbackURL("");
-    setOAuthDraft(EMPTY_OAUTH_DRAFT);
-    setOAuthModalStatus("idle");
-  }, [stopOAuthPolling]);
-
-  const pollOAuthStatus = useCallback(
-    async (sessionId: string) => {
-      if (oauthPollInFlightRef.current) return;
-      const generation = oauthPollGenerationRef.current;
-      oauthPollInFlightRef.current = true;
-      try {
-        const result = await api.getAntigravityOAuthStatus(sessionId);
-        if (generation !== oauthPollGenerationRef.current) return;
-        setOAuthStatus(result);
-        if (result.status === "completed") {
-          stopOAuthPolling();
-          setOAuthModalStatus("completed");
-          showToast(
-            result.email
-              ? t("antigravity.oauthSuccessWithEmail", { email: result.email })
-              : t("antigravity.oauthSuccess"),
-            result.warning ? "warning" : "success",
-          );
-          setPage(1);
-          await reload({ silent: true });
-          return;
-        }
-        if (result.status === "failed" || result.status === "cancelled") {
-          stopOAuthPolling();
-          setOAuthModalStatus(result.status);
-          if (result.error) showToast(result.error, "error");
-          return;
-        }
-
-        setOAuthModalStatus(result.status === "processing" ? "processing" : "waiting");
-        oauthPollTimerRef.current = window.setTimeout(() => {
-          if (generation !== oauthPollGenerationRef.current) return;
-          oauthPollTimerRef.current = null;
-          void pollOAuthStatus(sessionId);
-        }, 1200);
-      } catch (pollError) {
-        if (generation !== oauthPollGenerationRef.current) return;
-        stopOAuthPolling();
-        const message = getErrorMessage(pollError);
-        setOAuthModalStatus("failed");
-        setOAuthStatus((current) =>
-          current
-            ? { ...current, status: "failed", error: message }
-            : {
-                session_id: sessionId,
-                status: "failed",
-                error: message,
-                expires_at: new Date().toISOString(),
-              },
-        );
-        showToast(message, "error");
-      } finally {
-        oauthPollInFlightRef.current = false;
-      }
-    },
-    [reload, showToast, stopOAuthPolling, t],
+  // 渲染行 = 基础行 + page-stats 补齐(只补缺失字段,基础行已有的以基础行为准)。
+  const displayRows = useMemo(
+    () =>
+      accounts.map((account) => {
+        const stats = pageStats[String(account.id)];
+        if (!stats) return account;
+        const merged = { ...account };
+        if (!merged.usage_today_detail && stats.usage_today_detail) merged.usage_today_detail = stats.usage_today_detail;
+        if (!merged.usage_5h_detail && stats.usage_5h_detail) merged.usage_5h_detail = stats.usage_5h_detail;
+        if (!merged.usage_7d_detail && stats.usage_7d_detail) merged.usage_7d_detail = stats.usage_7d_detail;
+        return merged;
+      }),
+    [accounts, pageStats],
   );
 
-  const handleOAuthStart = useCallback(async () => {
-    // Open synchronously inside the click handler so browsers do not classify
-    // the later OAuth navigation (after the API round trip) as a blocked
-    // popup. The window is only navigated after the server returns a
-    // state-bound authorization URL.
-    const popup = window.open("about:blank", "_blank");
-    setOAuthStarting(true);
-    stopOAuthPolling();
-    setOAuthStatus(null);
-    setOAuthCallbackURL("");
-    setOAuthModalStatus("starting");
-    try {
-      const result = await api.startAntigravityOAuth({
-        name: oauthDraft.name.trim() || undefined,
-        proxy_url: oauthDraft.proxyUrl.trim() || undefined,
-        group_ids: oauthDraft.groupIds,
-      });
-      setOAuthSession(result);
-      setOAuthStatus({
-        session_id: result.session_id,
-        status: "waiting",
-        expires_at: result.expires_at,
-      });
-      setOAuthModalStatus("waiting");
-      if (popup) {
-        try {
-          popup.opener = null;
-          popup.location.href = result.auth_url;
-        } catch {
-          showToast(t("antigravity.oauthPopupBlocked"), "warning");
-        }
-      } else {
-        showToast(t("antigravity.oauthPopupBlocked"), "warning");
-      }
-      oauthPollTimerRef.current = window.setTimeout(() => {
-        oauthPollTimerRef.current = null;
-        void pollOAuthStatus(result.session_id);
-      }, 700);
-    } catch (startError) {
-      try {
-        popup?.close();
-      } catch {
-        // Ignore a popup that the user already closed.
-      }
-      setOAuthModalStatus("failed");
-      showToast(getErrorMessage(startError), "error");
-    } finally {
-      setOAuthStarting(false);
+  // 跨页切换详情时旧页行先消失、新页行随后到达;保留上一次解析到的行,避免抽屉闪关。
+  const lastDetailAccountRef = useRef<AccountRow | null>(null);
+  const detailAccount = useMemo(() => {
+    if (detailAccountId == null) return null;
+    const found = displayRows.find((account) => account.id === detailAccountId);
+    if (found) {
+      lastDetailAccountRef.current = found;
+      return found;
     }
-  }, [oauthDraft.groupIds, oauthDraft.name, oauthDraft.proxyUrl, pollOAuthStatus, showToast, stopOAuthPolling, t]);
+    return lastDetailAccountRef.current?.id === detailAccountId ? lastDetailAccountRef.current : null;
+  }, [displayRows, detailAccountId]);
+  const detailNavIndex = useMemo(
+    () => (detailAccountId == null ? -1 : displayRows.findIndex((account) => account.id === detailAccountId)),
+    [detailAccountId, displayRows],
+  );
+  const totalPages = Math.max(1, Math.ceil(totalAccounts / pageSize));
 
-  const handleOAuthComplete = useCallback(async () => {
-    if (!oauthSession) return;
-    const callbackURL = oauthCallbackURL.trim();
-    if (!callbackURL) {
-      showToast(t("antigravity.oauthCallbackRequired"), "error");
+  const goDetailPrev = useCallback(() => {
+    if (detailNavIndex > 0) {
+      openDetailAccount(displayRows[detailNavIndex - 1].id);
       return;
     }
-    setOAuthCompleting(true);
-    setOAuthModalStatus("processing");
-    setOAuthStatus((current) => (current ? { ...current, status: "processing", error: "" } : current));
-    try {
-      await api.completeAntigravityOAuth({
-        session_id: oauthSession.session_id,
-        callback_url: callbackURL,
-      });
-      setOAuthCallbackURL("");
-      stopOAuthPolling();
-      oauthPollTimerRef.current = window.setTimeout(() => {
-        oauthPollTimerRef.current = null;
-        void pollOAuthStatus(oauthSession.session_id);
-      }, 250);
-    } catch (completeError) {
-      const message = getErrorMessage(completeError);
-      // Validation failures (for example a pasted URL with the wrong state)
-      // leave the server session in `waiting`. Keep that state visible so the
-      // user can correct the URL or cancel it cleanly instead of orphaning a
-      // loopback listener by treating every 4xx as terminal.
-      setOAuthModalStatus("waiting");
-      setOAuthStatus((current) =>
-        current ? { ...current, status: "failed", error: message } : current,
-      );
-      showToast(message, "error");
-      oauthPollTimerRef.current = window.setTimeout(() => {
-        oauthPollTimerRef.current = null;
-        void pollOAuthStatus(oauthSession.session_id);
-      }, 500);
-    } finally {
-      setOAuthCompleting(false);
+    if (page > 1) {
+      detailNavigationTargetRef.current = "last";
+      setPage(page - 1);
     }
-  }, [oauthCallbackURL, oauthSession, pollOAuthStatus, showToast, stopOAuthPolling, t]);
+  }, [detailNavIndex, displayRows, openDetailAccount, page]);
 
-  const handleOAuthCancel = useCallback(async () => {
-    const sessionId = oauthSession?.session_id;
-    stopOAuthPolling();
-    if (!sessionId) {
-      resetOAuth();
-      setShowOAuth(false);
+  const goDetailNext = useCallback(() => {
+    if (detailNavIndex >= 0 && detailNavIndex < displayRows.length - 1) {
+      openDetailAccount(displayRows[detailNavIndex + 1].id);
       return;
     }
-    setOAuthCancelling(true);
-    try {
-      await api.cancelAntigravityOAuth(sessionId);
-      if (oauthStatus?.status !== "completed") {
-        showToast(t("antigravity.oauthCancelled"), "success");
-      }
-    } catch (cancelError) {
-      showToast(getErrorMessage(cancelError), "error");
-    } finally {
-      setOAuthCancelling(false);
-      resetOAuth();
-      setShowOAuth(false);
+    if (page < totalPages) {
+      detailNavigationTargetRef.current = "first";
+      setPage(page + 1);
     }
-  }, [oauthSession, oauthStatus?.status, resetOAuth, showToast, stopOAuthPolling, t]);
+  }, [detailNavIndex, displayRows, openDetailAccount, page, totalPages]);
 
-  const openOAuth = useCallback(() => {
-    resetOAuth();
-    setShowOAuth(true);
-  }, [resetOAuth]);
+  useEffect(() => {
+    const target = detailNavigationTargetRef.current;
+    if (!target || loadedPage !== page || accounts.length === 0) return;
+    const account = target === "first" ? accounts[0] : accounts[accounts.length - 1];
+    detailNavigationTargetRef.current = null;
+    if (account) openDetailAccount(account.id);
+  }, [accounts, loadedPage, openDetailAccount, page]);
 
-  useEffect(() => () => stopOAuthPolling(), [stopOAuthPolling]);
+  // ---------- 选择 ----------
+  const selectedIds = useMemo(() => Array.from(selected), [selected]);
+  const allPageSelected =
+    accounts.length > 0 && accounts.every((account) => selected.has(account.id));
+  const toggleSelect = useCallback((id: number) => {
+    const account = accounts.find((row) => row.id === id);
+    if (account) setAccountSelected(account, !selectedAccountsById.has(id));
+  }, [accounts, selectedAccountsById, setAccountSelected]);
+  const toggleSelectAll = useCallback(() => setVisibleSelected(!allPageSelected), [setVisibleSelected, allPageSelected]);
 
-  const resetImport = useCallback(() => {
-    setImportDraft(EMPTY_IMPORT_DRAFT);
-    setCredentialFiles([]);
-    setImportResult(null);
-    setImportMode("single");
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }, []);
+  const selectedAPIKeyIds = useMemo(
+    () => selectedAccounts.filter((account) => account.antigravity_auth_kind === "api_key").map((account) => account.id),
+    [selectedAccounts],
+  );
 
-  const closeImport = useCallback(() => {
-    if (importing) return;
-    setShowImport(false);
-    resetImport();
-  }, [importing, resetImport]);
+  const filtersActive = Boolean(
+    debouncedSearchQuery ||
+      statusFilter !== "all" ||
+      authFilter !== "all" ||
+      !isAccountGroupFilterEmpty(groupFilter),
+  );
 
+  const currentSelector = useMemo<AccountOperationSelector>(
+    () => ({
+      channel: "antigravity",
+      search: debouncedSearchQuery || undefined,
+      status: statusFilter !== "all" ? statusFilter : undefined,
+      auth_kind: authFilter !== "all" ? authFilter : undefined,
+      group_include: groupFilter.include.length > 0 ? groupFilter.include : undefined,
+      group_exclude: groupFilter.exclude.length > 0 ? groupFilter.exclude : undefined,
+      ungrouped: groupFilter.ungrouped || undefined,
+    }),
+    [authFilter, debouncedSearchQuery, groupFilter, statusFilter],
+  );
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setDebouncedSearchQuery("");
+    setStatusFilter("all");
+    setAuthFilter("all");
+    setGroupFilter(EMPTY_ACCOUNT_GROUP_FILTER);
+    setPage(1);
+  };
+
+  const resolvedDisabledSorts = useMemo(
+    () => resolveDisabledAccountSorts(disabledSorts, serverSummary?.total ?? totalAccounts),
+    [disabledSorts, serverSummary?.total, totalAccounts],
+  );
+  const applySort = useCallback(
+    (key: SortKey, dir?: SortDir) => {
+      if (isLargePoolSortDisabled(key, resolvedDisabledSorts)) {
+        showToast(t("accounts.largePoolSortDisabled"), "warning");
+        return;
+      }
+      setSortKey(key);
+      setSortDir(dir ?? SORT_DEFAULT_DIR[key]);
+    },
+    [resolvedDisabledSorts, showToast, t],
+  );
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((current) => (current === "desc" ? "asc" : "desc"));
+      return;
+    }
+    applySort(key);
+  };
+
+  // ---------- 分组 ----------
   const createAntigravityGroup = useCallback(
     async (name: string): Promise<number | null> => {
       try {
-        const response = await api.createAccountGroup({
-          name: name.trim(),
-          channel: "antigravity",
-        });
+        const response = await api.createAccountGroup({ name: name.trim(), channel: "antigravity" });
         await reloadGroups();
         showToast(t("accounts.groupCreated"), "success");
         return response.id;
@@ -1546,205 +680,11 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
     [reloadGroups, showToast, t],
   );
 
-  const handleCredentialFiles = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    if (files.length === 0) return;
-    try {
-      const contents = await Promise.all(
-        files.map(async (file) => ({ name: file.name, content: await file.text() })),
-      );
-      setCredentialFiles(contents);
-      setImportResult(null);
-    } catch (fileError) {
-      showToast(getErrorMessage(fileError), "error");
-    }
-  };
-
-  const handleImport = async () => {
-    if (importing) return;
-    if (
-      importMode === "single" &&
-      importDraft.authKind === "oauth" &&
-      !importDraft.authJson.trim()
-    ) {
-      showToast(t("antigravity.authJsonRequired"), "error");
-      return;
-    }
-    if (
-      importMode === "single" &&
-      importDraft.authKind === "api_key" &&
-      !importDraft.apiKey.trim()
-    ) {
-      showToast(t("antigravity.apiKeyRequired"), "error");
-      return;
-    }
-    if (importMode === "files" && credentialFiles.length === 0) {
-      showToast(t("antigravity.filesRequired"), "error");
-      return;
-    }
-    setImporting(true);
-    setImportResult(null);
-    try {
-      if (importMode === "single") {
-        const result = await api.addAntigravityAccount({
-          name: importDraft.name.trim() || undefined,
-          auth_kind: importDraft.authKind,
-          auth_json:
-            importDraft.authKind === "oauth"
-              ? importDraft.authJson.trim()
-              : undefined,
-          api_key:
-            importDraft.authKind === "api_key"
-              ? importDraft.apiKey.trim()
-              : undefined,
-          models:
-            importDraft.authKind === "api_key"
-              ? parseModelList(importDraft.models)
-              : undefined,
-          model_mapping:
-            importDraft.authKind === "api_key"
-              ? importDraft.modelMapping.trim()
-              : undefined,
-          proxy_url: importDraft.proxyUrl.trim() || undefined,
-          group_ids: importDraft.groupIds,
-        });
-        const warning = result.warning?.trim();
-        showToast(
-          warning || (result.synced ? t("antigravity.addSuccess") : t("antigravity.addDegraded")),
-          warning || !result.synced ? "warning" : "success",
-        );
-        setShowImport(false);
-        resetImport();
-      } else {
-        const result = await api.importAntigravityAccounts({
-          files: credentialFiles.map((file) => file.content),
-          proxy_url: importDraft.proxyUrl.trim() || undefined,
-          group_ids: importDraft.groupIds,
-          import_proxy: importDraft.importFileProxies || undefined,
-        });
-        setImportResult(result);
-        const needsReview = result.failed > 0 || (result.degraded ?? 0) > 0;
-        const proxyWarning = result.proxy_warning?.trim();
-        // Toast 只有一个槽位,连续调用会互相顶掉——代理结果和告警必须拼进同一条。
-        const summary = needsReview
-          ? t("antigravity.importReview", {
-              imported: result.imported,
-              synced: result.synced ?? 0,
-              degraded: result.degraded ?? 0,
-              failed: result.failed,
-            })
-          : t("antigravity.importDone", {
-              imported: result.imported,
-              total: result.total,
-            });
-        const parts = [summary];
-        if (result.proxies_imported !== undefined) {
-          parts.push(
-            t("accounts.importProxySummary", {
-              imported: result.proxies_imported,
-              skipped: result.proxies_skipped ?? 0,
-            }),
-          );
-          if (proxyWarning) parts.push(proxyWarning);
-        }
-        showToast(
-          parts.join(" "),
-          needsReview || proxyWarning ? "warning" : "success",
-        );
-        if (result.failed === 0 && (result.degraded ?? 0) === 0) {
-          setShowImport(false);
-          resetImport();
-        }
-      }
-      setPage(1);
-      await reload({ silent: true });
-    } catch (importError) {
-      showToast(getErrorMessage(importError), "error");
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const closeEditor = useCallback(() => {
-    if (editing) return;
-    editLoadGenerationRef.current += 1;
-    setEditingAccount(null);
-    setEditingDetailsLoading(false);
-    setEditingDetailsError(null);
-  }, [editing]);
-
-  const openEditor = async (account: AccountRow) => {
-    const generation = editLoadGenerationRef.current + 1;
-    editLoadGenerationRef.current = generation;
-    setEditingAccount(account);
-    setEditingDetailsError(null);
-
-    if (account.detail_loaded !== false) {
-      setEditDraft(editDraftFromAccount(account));
-      setEditingDetailsLoading(false);
-      return;
-    }
-
-    setEditingDetailsLoading(true);
-    try {
-      const detail = await api.getAccount(account.id);
-      if (editLoadGenerationRef.current !== generation) return;
-      if (detail.id !== account.id) throw new Error(t("common.loadFailed"));
-      setEditingAccount(detail);
-      setEditDraft(editDraftFromAccount(detail));
-    } catch (detailError) {
-      if (editLoadGenerationRef.current === generation) {
-        setEditingDetailsError(getErrorMessage(detailError));
-      }
-    } finally {
-      if (editLoadGenerationRef.current === generation) {
-        setEditingDetailsLoading(false);
-      }
-    }
-  };
-
-  const handleEdit = async () => {
-    if (
-      !editingAccount ||
-      editing ||
-      editingDetailsLoading ||
-      editingDetailsError
-    ) return;
-    const payload: UpdateAntigravityAccountRequest = {
-      name: editDraft.name.trim(),
-      proxy_url: editDraft.proxyUrl.trim(),
-      group_ids: editDraft.groupIds,
-    };
-    if (editDraft.authKind === "oauth" && editDraft.authJson.trim()) {
-      payload.auth_json = editDraft.authJson.trim();
-    }
-    if (editDraft.authKind === "api_key") {
-      if (editDraft.apiKey.trim()) payload.api_key = editDraft.apiKey.trim();
-      payload.models = parseModelList(editDraft.models);
-      payload.model_mapping = editDraft.modelMapping.trim();
-    }
-    setEditing(true);
-    try {
-      const result = await api.updateAntigravityAccount(editingAccount.id, payload);
-      showToast(
-        result.warning || t("antigravity.editSuccess"),
-        result.warning ? "warning" : "success",
-      );
-      editLoadGenerationRef.current += 1;
-      setEditingAccount(null);
-      setEditingDetailsError(null);
-      await reload({ silent: true });
-    } catch (editError) {
-      showToast(getErrorMessage(editError), "error");
-    } finally {
-      setEditing(false);
-    }
-  };
-
+  // ---------- 单号操作 ----------
   const runAccountAction = useCallback(
     async (
       account: AccountRow,
-      action: BusyAction,
+      action: AntigravityRowBusyAction,
       operation: () => Promise<{ warning?: string }>,
       successMessage: string,
     ) => {
@@ -1752,10 +692,7 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
       setBusy({ id: account.id, action });
       try {
         const result = await operation();
-        showToast(
-          result.warning || successMessage,
-          result.warning ? "warning" : "success",
-        );
+        showToast(result.warning || successMessage, result.warning ? "warning" : "success");
       } catch (actionError) {
         showToast(getErrorMessage(actionError), "error");
       } finally {
@@ -1766,19 +703,62 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
     [reload, showToast],
   );
 
+  const handleSync = useCallback(
+    (account: AccountRow) =>
+      void runAccountAction(
+        account,
+        "sync",
+        () => api.refreshAntigravityAccount(account.id),
+        t("antigravity.syncSuccess"),
+      ),
+    [runAccountAction, t],
+  );
+
+  const handleToggleEnabled = useCallback(
+    (account: AccountRow) =>
+      void runAccountAction(
+        account,
+        "toggle",
+        () => api.toggleAccountEnabled(account.id, account.enabled === false),
+        account.enabled === false ? t("antigravity.enableSuccess") : t("antigravity.disableSuccess"),
+      ),
+    [runAccountAction, t],
+  );
+
+  const handleToggleLock = useCallback(
+    (account: AccountRow) =>
+      void runAccountAction(
+        account,
+        "lock",
+        () => api.toggleAccountLock(account.id, !account.locked),
+        account.locked ? t("accounts.unlockSuccess") : t("accounts.lockSuccess"),
+      ),
+    [runAccountAction, t],
+  );
+
+  const handleResetStatus = useCallback(
+    (account: AccountRow) =>
+      void runAccountAction(
+        account,
+        "reset",
+        () => api.resetAccountStatus(account.id),
+        t("accounts.resetStatusSuccess"),
+      ),
+    [runAccountAction, t],
+  );
+
   const handleDelete = useCallback(
     async (account: AccountRow) => {
       if (batchBusyRef.current) return;
       const confirmed = await confirm({
         title: t("antigravity.deleteTitle"),
-        description: t("antigravity.deleteDescription", {
-          account: accountLabel(account),
-        }),
+        description: t("antigravity.deleteDescription", { account: accountLabel(account) }),
         confirmText: t("common.delete"),
         tone: "destructive",
         confirmVariant: "destructive",
       });
       if (!confirmed || batchBusyRef.current) return;
+      if (detailAccountIdRef.current === account.id) closeDetailAccount();
       await runAccountAction(
         account,
         "delete",
@@ -1790,14 +770,43 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
         t("antigravity.deleteSuccess"),
       );
     },
-    [confirm, onBatchDeleted, runAccountAction, t],
+    [closeDetailAccount, confirm, onBatchDeleted, runAccountAction, t],
   );
 
-  const filtersActive = Boolean(
-    debouncedSearchQuery ||
-      statusFilter !== "all" ||
-      !isAccountGroupFilterEmpty(groupFilter),
-  );
+  const handleExport = useCallback(async (ids?: number[]) => {
+    if (exporting) return;
+    const exportingAll = !ids || ids.length === 0;
+    if (exportingAll) {
+      const confirmed = await confirm({
+        title: t("antigravity.exportAllConfirmTitle"),
+        description: filtersActive
+          ? t("antigravity.exportAllConfirmFiltered")
+          : t("antigravity.exportAllConfirmDescription"),
+        confirmText: t("antigravity.exportAllConfirmAction"),
+        tone: "warning",
+      });
+      if (!confirmed) return;
+    }
+    setExporting(true);
+    try {
+      const { blob, filename, count: responseCount } =
+        await api.exportAntigravityAccounts(ids);
+      const count = responseCount ?? (ids?.length || undefined);
+      // 导出始终是单个 JSON 文件(多账号为数组,与 Codex 导出一致),服务端文件名缺失时按同样格式兜底。
+      const fallback = `codex2api-antigravity-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${count ?? 0}.json`;
+      downloadAntigravityBlob(blob, filename || fallback);
+      showToast(
+        count === undefined
+          ? t("antigravity.exportSuccessUnknownCount")
+          : t("antigravity.exportSuccess", { count }),
+        "success",
+      );
+    } catch (exportError) {
+      showToast(t("antigravity.exportFailed", { error: getErrorMessage(exportError) }), "error");
+    } finally {
+      setExporting(false);
+    }
+  }, [confirm, exporting, filtersActive, showToast, t]);
 
   const handleStateSync = useCallback(async () => {
     const accountId = detailAccountIdRef.current;
@@ -1846,329 +855,650 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
     }
   }, [isCurrentDetailRequest, managementAction, showToast]);
 
-  const handleExport = useCallback(async (ids?: number[]) => {
-    if (exporting) return;
-    const exportingAll = !ids || ids.length === 0;
-    if (exportingAll) {
+  // ---------- 批量操作 ----------
+  const finishBatch = useCallback(
+    async () => {
+      // Aggregate outcomes cannot identify which selected accounts succeeded.
+      await reload({ silent: true });
+    },
+    [reload],
+  );
+
+  const handleBatchUpdate = async (
+    patch: { enabled?: boolean; locked?: boolean },
+    doneKey: string,
+  ) => {
+    if (selectedIds.length === 0 || batchBusyRef.current) return;
+    onBatchBusyChange(true);
+    setBatchOperation("update");
+    try {
+      const result = await api.batchUpdateAccounts({ ids: selectedIds, ...patch });
+      showToast(
+        t(doneKey, { success: result.success ?? 0, fail: result.failed ?? 0 }),
+        (result.failed ?? 0) > 0 ? "warning" : "success",
+      );
+      await finishBatch();
+    } catch (batchError) {
+      showToast(getErrorMessage(batchError), "error");
+    } finally {
+      setBatchOperation(null);
+      onBatchBusyChange(false);
+    }
+  };
+
+  const handleBatchResetStatus = async () => {
+    if (selectedIds.length === 0 || batchBusyRef.current) return;
+    onBatchBusyChange(true);
+    setBatchOperation("reset");
+    try {
+      const result = await api.batchResetStatus(selectedIds);
+      showToast(t("accounts.batchResetStatusDone", { success: result.success ?? 0, fail: result.failed ?? 0 }));
+      await finishBatch();
+    } catch (batchError) {
+      showToast(getErrorMessage(batchError), "error");
+    } finally {
+      setBatchOperation(null);
+      onBatchBusyChange(false);
+    }
+  };
+
+  // 范围:勾选 → 当前筛选(确认数量)。必须显式传 ids 或 selector,否则后端会跨渠道。
+  const handleBatchTest = async (scope: "selected" | "filtered") => {
+    if (batchBusyRef.current) return;
+    let body: { ids: number[] } | { selector: AccountOperationSelector };
+    if (scope === "selected") {
+      if (selectedIds.length === 0) return;
+      body = { ids: selectedIds };
+    } else {
+      if (totalAccounts === 0) return;
       const confirmed = await confirm({
-        title: t("antigravity.exportAllConfirmTitle"),
-        description: filtersActive
-          ? t("antigravity.exportAllConfirmFiltered")
-          : t("antigravity.exportAllConfirmDescription"),
-        confirmText: t("antigravity.exportAllConfirmAction"),
+        title: t("antigravity.batchTestFilteredTitle"),
+        description: t("antigravity.batchTestFilteredDescription", { count: totalAccounts }),
+        confirmText: t("accounts.batchTest"),
         tone: "warning",
       });
       if (!confirmed) return;
+      body = { selector: currentSelector };
     }
-    setExporting(true);
+    if (batchBusyRef.current) return;
+    onBatchBusyChange(true);
+    setBatchOperation("test");
     try {
-      const { blob, filename, count: responseCount } =
-        await api.exportAntigravityAccounts(ids);
-      const count = responseCount ?? (ids?.length || undefined);
-      const fallback = `codex2api-antigravity-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${blob.type.includes("zip") ? "zip" : "json"}`;
-      downloadAntigravityBlob(blob, filename || fallback);
-      showToast(
-        count === undefined
-          ? t("antigravity.exportSuccessUnknownCount")
-          : t("antigravity.exportSuccess", { count }),
-        "success",
+      const result = await runStreamingOperation(
+        "/accounts/batch-test?stream=true",
+        body,
+        t("accounts.batchTestProgressTitle"),
       );
-    } catch (exportError) {
-      showToast(t("antigravity.exportFailed", { error: getErrorMessage(exportError) }), "error");
+      showToast(
+        t("accounts.batchTestDone", {
+          success: result?.success ?? 0,
+          banned: result?.banned ?? 0,
+          rateLimited: result?.rate_limited ?? 0,
+          failed: result?.failed ?? 0,
+        }),
+      );
+      await finishBatch();
+    } catch (batchError) {
+      showToast(t("accounts.batchTestFailed", { error: getErrorMessage(batchError) }), "error");
     } finally {
-      setExporting(false);
+      setBatchOperation(null);
+      onBatchBusyChange(false);
     }
-  }, [confirm, exporting, filtersActive, showToast, t]);
+  };
 
+  // 同步 = 控制面完整同步(换票 + 项目 + 权限 + 配额)。API Key 号没有控制面,跳过。
+  const handleBatchSync = async (scope: "selected" | "filtered") => {
+    if (batchBusyRef.current) return;
+    let body: { ids: number[] } | { selector: AccountOperationSelector };
+    if (scope === "selected") {
+      const ids = selectedAccounts.filter((account) => account.antigravity_auth_kind === "oauth").map((account) => account.id);
+      if (ids.length === 0) {
+        showToast(t("antigravity.batchSyncNoOAuth"), "warning");
+        return;
+      }
+      body = { ids };
+    } else {
+      if (authFilter === "api_key") {
+        showToast(t("antigravity.batchSyncNoOAuth"), "warning");
+        return;
+      }
+      // 只有"仅 OAuth"或未筛选时才能给出确切的 OAuth 数量;其余情况提示 API Key 会被跳过。
+      const oauthCount =
+        authFilter === "oauth" ? totalAccounts : !filtersActive && serverSummary ? serverSummary.oauth : null;
+      const confirmed = await confirm({
+        title: t("antigravity.batchSyncFilteredTitle"),
+        description:
+          oauthCount !== null
+            ? t("antigravity.batchSyncFilteredDescription", { count: oauthCount })
+            : t("antigravity.batchSyncFilteredDescriptionMixed", { count: totalAccounts }),
+        confirmText: t("antigravity.batchSync"),
+        tone: "warning",
+      });
+      if (!confirmed) return;
+      body = { selector: { ...currentSelector, auth_kind: "oauth" } };
+    }
+    if (batchBusyRef.current) return;
+    onBatchBusyChange(true);
+    setBatchOperation("sync");
+    try {
+      const result = await runStreamingOperation(
+        "/accounts/batch-refresh?stream=true",
+        body,
+        t("antigravity.batchSyncProgressTitle"),
+      );
+      showToast(
+        t("antigravity.batchSyncDone", { success: result?.success ?? 0, fail: result?.failed ?? 0 }),
+        (result?.failed ?? 0) > 0 ? "warning" : "success",
+      );
+      await finishBatch();
+    } catch (batchError) {
+      showToast(t("antigravity.batchSyncFailed", { error: getErrorMessage(batchError) }), "error");
+    } finally {
+      setBatchOperation(null);
+      onBatchBusyChange(false);
+    }
+  };
+
+  // 清理异常 = 按列表口径(封禁 + 错误)选号后批量删除,删除进回收站可恢复。
+  const handleCleanAbnormal = async () => {
+    const count = serverSummary?.abnormal ?? 0;
+    if (batchBusy || count === 0) return;
+    const confirmed = await confirm({
+      title: t("antigravity.cleanAbnormalTitle"),
+      description: t("antigravity.cleanAbnormalDescription", {
+        count,
+        banned: serverSummary?.banned ?? 0,
+        error: serverSummary?.error ?? 0,
+      }),
+      confirmText: t("antigravity.cleanAbnormalConfirm"),
+      tone: "destructive",
+      confirmVariant: "destructive",
+    });
+    if (!confirmed || batchBusyRef.current) return;
+    onBatchBusyChange(true);
+    setBatchOperation("clean");
+    try {
+      const result = await runStreamingOperation(
+        "/accounts/batch-delete?stream=true",
+        { selector: { channel: "antigravity", status: "abnormal" } },
+        t("antigravity.cleanAbnormalProgressTitle"),
+      );
+      showToast(
+        t("accounts.batchDeleteDone", {
+          success: result?.deleted ?? result?.success ?? 0,
+          fail: result?.failed ?? 0,
+        }),
+        (result?.failed ?? 0) > 0 ? "warning" : "success",
+      );
+      closeDetailAccount();
+      await finishBatch();
+    } catch (batchError) {
+      showToast(t("accounts.batchDeleteFailed", { error: getErrorMessage(batchError) }), "error");
+    } finally {
+      setBatchOperation(null);
+      onBatchBusyChange(false);
+    }
+  };
+
+  // ---------- 派生展示 ----------
   const stats = {
     total: serverSummary?.total ?? totalAccounts,
     active: serverSummary?.active ?? 0,
+    rateLimited: serverSummary?.rate_limited ?? 0,
+    abnormal: serverSummary?.abnormal ?? 0,
+    banned: serverSummary?.banned ?? 0,
     error: serverSummary?.error ?? 0,
     disabled: serverSummary?.disabled ?? 0,
+    locked: serverSummary?.locked ?? 0,
+    oauth: serverSummary?.oauth ?? 0,
+    apiKey: serverSummary?.api_key ?? 0,
   };
-  const totalPages = Math.max(1, Math.ceil(totalAccounts / pageSize));
+  const poolEmpty = stats.total === 0 && !filtersActive;
 
-  const clearFilters = () => {
-    setSearchQuery("");
-    setDebouncedSearchQuery("");
-    setStatusFilter("all");
-    setGroupFilter(EMPTY_ACCOUNT_GROUP_FILTER);
-    setPage(1);
-  };
+  const statusChips: Array<{ id: StatusFilter; label: string; count: number }> = [
+    { id: "all", label: t("antigravity.statAll"), count: stats.total },
+    { id: "active", label: t("antigravity.statSchedulable"), count: stats.active },
+    { id: "rate_limited", label: t("antigravity.statRateLimited"), count: stats.rateLimited },
+    { id: "abnormal", label: t("antigravity.statAbnormal"), count: stats.abnormal },
+    { id: "disabled", label: t("antigravity.statDisabled"), count: stats.disabled },
+    { id: "locked", label: t("antigravity.statLocked"), count: stats.locked },
+  ];
+  const authTabs: Array<{ id: AuthFilter; label: string; count?: number }> = [
+    { id: "all", label: t("antigravity.authAll") },
+    { id: "oauth", label: t("antigravity.authKindOAuth"), count: stats.oauth },
+    { id: "api_key", label: t("antigravity.authKindApiKey"), count: stats.apiKey },
+  ];
+  const sortOptions: Array<{ value: SortKey; label: string }> = [
+    { value: "updated_at", label: t("antigravity.sortUpdated") },
+    { value: "usage", label: t("antigravity.sortQuotaUsage") },
+    { value: "today", label: t("antigravity.sortToday") },
+    { value: "requests", label: t("antigravity.sortRequests") },
+    { value: "created_at", label: t("accounts.importTime") },
+    { value: "group", label: t("antigravity.sortGroup") },
+  ];
+  const sortLabel = sortOptions.find((option) => option.value === sortKey)?.label ?? sortKey;
+  const statusLabel = statusChips.find((chip) => chip.id === statusFilter)?.label ?? statusFilter;
 
-  const renderActions = (account: AccountRow) => {
-    const accountBusy = batchBusy || busy?.id === account.id;
-    const isAPIKey = account.antigravity_auth_kind === "api_key";
-    return (
-      <div className="flex items-center justify-end gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          disabled={accountBusy}
-          onClick={() => setTestingAccount(account)}
-          title={t("accounts.testConnection")}
-          aria-label={t("accounts.testConnection")}
-        >
-          <Zap />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          disabled={accountBusy || exporting}
-          onClick={() => void handleExport([account.id])}
-          title={t("antigravity.exportOne")}
-          aria-label={t("antigravity.exportOne")}
-        >
-          <Download />
-        </Button>
-        {!isAPIKey ? (
-          <>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={accountBusy}
-              onClick={() =>
-                void runAccountAction(
-                  account,
-                  "quota",
-                  () => api.refreshAntigravityQuota(account.id),
-                  t("antigravity.quotaRefreshSuccess"),
-                )
-              }
-              title={t("antigravity.refreshQuota")}
-              aria-label={t("antigravity.refreshQuota")}
-            >
-              {busy?.id === account.id && busy.action === "quota" ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <CircleGauge />
-              )}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={accountBusy}
-              onClick={() =>
-                void runAccountAction(
-                  account,
-                  "refresh",
-                  () => api.refreshAntigravityAccount(account.id),
-                  t("antigravity.refreshSuccess"),
-                )
-              }
-              title={t("antigravity.refreshCredential")}
-              aria-label={t("antigravity.refreshCredential")}
-            >
-              {busy?.id === account.id && busy.action === "refresh" ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <RotateCw />
-              )}
-            </Button>
-          </>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          disabled={accountBusy}
-          onClick={() => void openEditor(account)}
-          title={t("common.edit")}
-          aria-label={t("common.edit")}
-        >
-          <Pencil />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          disabled={accountBusy}
-          onClick={() =>
-            void runAccountAction(
-              account,
-              "toggle",
-              () => api.toggleAccountEnabled(account.id, account.enabled === false),
-              account.enabled === false
-                ? t("antigravity.enableSuccess")
-                : t("antigravity.disableSuccess"),
-            )
-          }
-          title={
-            account.enabled === false
-              ? t("antigravity.enableAccount")
-              : t("antigravity.disableAccount")
-          }
-          aria-label={
-            account.enabled === false
-              ? t("antigravity.enableAccount")
-              : t("antigravity.disableAccount")
-          }
-        >
-          {busy?.id === account.id && busy.action === "toggle" ? (
-            <Loader2 className="animate-spin" />
-          ) : account.enabled === false ? (
-            <Power />
-          ) : (
-            <PowerOff />
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          disabled={accountBusy}
-          onClick={() => void handleDelete(account)}
-          title={t("common.delete")}
-          aria-label={t("common.delete")}
-        >
-          {busy?.id === account.id && busy.action === "delete" ? (
-            <Loader2 className="animate-spin" />
-          ) : (
-            <Trash2 className="text-destructive" />
-          )}
-        </Button>
-      </div>
-    );
-  };
+  const manageSections: HeaderActionMenuSection[] = [
+    {
+      key: "maintenance",
+      label: t("accounts.maintenanceActions"),
+      items: [
+        {
+          key: "sync-filtered",
+          label: filtersActive ? t("antigravity.syncFiltered") : t("antigravity.syncAll"),
+          icon: <RotateCw className="size-3.5" />,
+          disabled: batchBusy || totalAccounts === 0,
+          onSelect: () => void handleBatchSync("filtered"),
+        },
+        {
+          key: "test-filtered",
+          label: filtersActive ? t("antigravity.testFiltered") : t("antigravity.testAll"),
+          icon: <FlaskConical className="size-3.5" />,
+          disabled: batchBusy || totalAccounts === 0,
+          onSelect: () => void handleBatchTest("filtered"),
+        },
+        {
+          key: "clean-abnormal",
+          label: t("antigravity.cleanAbnormal", { count: stats.abnormal }),
+          icon: <Trash2 className="size-3.5" />,
+          destructive: true,
+          disabled: batchBusy || stats.abnormal === 0,
+          onSelect: () => void handleCleanAbnormal(),
+        },
+      ],
+    },
+    {
+      key: "data",
+      label: t("accounts.dataActions"),
+      items: [
+        {
+          key: "groups",
+          label: t("accounts.groupManage"),
+          icon: <FolderOpen className="size-3.5" />,
+          onSelect: () => setManageGroupsOpen(true),
+        },
+        {
+          key: "export-all",
+          label: t("antigravity.exportAll"),
+          icon: <Download className="size-3.5" />,
+          disabled: exporting || stats.total === 0,
+          onSelect: () => void handleExport(),
+        },
+      ],
+    },
+  ];
+
+  const renderSortHead = (key: SortKey, label: string, title?: string) => (
+    <TableHead
+      aria-sort={sortKey === key ? (sortDir === "desc" ? "descending" : "ascending") : "none"}
+      title={title}
+    >
+      <button
+        type="button"
+        onClick={() => toggleSort(key)}
+        className={cn(
+          "group inline-flex items-center gap-1.5 rounded py-1 text-[13px] font-semibold outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/50",
+          sortKey === key && "text-primary",
+        )}
+      >
+        {label}
+        {sortKey === key ? (
+          sortDir === "desc" ? <ArrowDown className="size-3.5" /> : <ArrowUp className="size-3.5" />
+        ) : (
+          <ArrowUpDown className="size-3 text-muted-foreground/35 group-hover:text-primary/70" />
+        )}
+      </button>
+    </TableHead>
+  );
+
+  const rowProps = (account: AccountRow, index: number): AntigravityRowProps => ({
+    account,
+    sequence: (page - 1) * pageSize + index + 1,
+    selected: selected.has(account.id),
+    detailOpen: detailAccountId === account.id,
+    columns: visibleColumns,
+    groups: allGroups,
+    healthBuckets: healthBars[String(account.id)],
+    proxyCtx: proxyBindingCtx,
+    busyAction: batchBusy ? "sync" : busy?.id === account.id ? busy.action : null,
+    exporting,
+    onToggleSelect: toggleSelect,
+    onOpenDetail: (target) => openDetailAccount(target.id),
+    onOpenQuota: (target) =>
+      openDetailAccount(target.id, isAntigravityAPIKeyAccount(target) ? "sheet" : "quota"),
+    onTest: (target) => { if (!batchBusyRef.current) setTestingAccount(target); },
+    onSync: handleSync,
+    onEdit: setEditTarget,
+    onUsage: setUsageAccount,
+    onExport: (target) => void handleExport([target.id]),
+    onToggleEnabled: handleToggleEnabled,
+    onToggleLock: handleToggleLock,
+    onResetStatus: handleResetStatus,
+    onEditProxy: setQuickProxyAccount,
+    onDelete: (target) => void handleDelete(target),
+  });
+
+  const refreshDetailAndList = useCallback(async () => {
+    await reload({ silent: true });
+  }, [reload]);
 
   return (
     <div className="relative @container/antigravity-accounts">
       <PageHeader
         title={t("antigravity.pageTitle")}
         description={t("antigravity.pageSubtitle")}
-        hideTitle
+        hideTitle={Boolean(headerSlot)}
         actionsBelow
         titleAdornment={headerSlot}
-        onRefresh={() => void reload()}
         actions={
-          <>
-            <Button variant="outline" size="sm" disabled={exporting || stats.total === 0} onClick={() => void handleExport()}>
-              {exporting ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-              {exporting ? t("antigravity.exporting") : t("antigravity.exportAll")}
-            </Button>
-            <Button variant="outline" size="sm" onClick={openOAuth}>
-              <Link2 className="size-3.5" />
-              {t("antigravity.oauthAddAccount")}
-            </Button>
-            <Button size="sm" onClick={() => setShowImport(true)}>
+          <div className="flex w-full flex-wrap items-center gap-1.5 sm:gap-2 [&>button]:h-8">
+            <Button size="sm" onClick={() => setShowAdd(true)}>
               <Plus className="size-3.5" />
               {t("antigravity.addAccount")}
             </Button>
-          </>
+            <Button
+              variant="outline"
+              size="sm"
+              className="size-8 p-0 md:w-auto md:px-2.5"
+              title={t("antigravity.oauthAddAccount")}
+              aria-label={t("antigravity.oauthAddAccount")}
+              onClick={() => setShowOAuth(true)}
+            >
+              <Link2 className="size-3.5" />
+              <span className="hidden md:inline">{t("antigravity.oauthAddAccount")}</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="size-8 p-0 md:w-auto md:px-2.5"
+              title={t("antigravity.importFiles")}
+              aria-label={t("antigravity.importFiles")}
+              onClick={() => setShowImport(true)}
+            >
+              <Upload className="size-3.5" />
+              <span className="hidden md:inline">{t("antigravity.importFiles")}</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="size-8 p-0 md:w-auto md:px-2.5"
+              title={selectedIds.length > 0 ? t("antigravity.exportSelected") : t("antigravity.exportAll")}
+              aria-label={selectedIds.length > 0 ? t("antigravity.exportSelected") : t("antigravity.exportAll")}
+              disabled={exporting || stats.total === 0}
+              onClick={() => void handleExport(selectedIds.length > 0 ? selectedIds : undefined)}
+            >
+              {exporting ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+              <span className="hidden md:inline">
+                {exporting
+                  ? t("antigravity.exporting")
+                  : selectedIds.length > 0
+                    ? t("antigravity.exportSelectedCount", { count: selectedIds.length })
+                    : t("antigravity.exportAll")}
+              </span>
+            </Button>
+            <HeaderActionMenu
+              label={t("accounts.manageActions")}
+              icon={<SlidersHorizontal className="size-3.5" />}
+              align="end"
+              sections={manageSections}
+              compact
+            />
+            <Button
+              variant="outline"
+              size="icon-sm"
+              title={t("common.refresh")}
+              aria-label={t("common.refresh")}
+              disabled={loading}
+              onClick={() => void reload()}
+            >
+              <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+            </Button>
+          </div>
         }
       />
 
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
+      {error && accounts.length > 0 ? (
+        <div className="mb-2 flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive" role="alert">
+          <span className="truncate">{error}</span>
+          <Button variant="outline" size="sm" onClick={() => void reload()}>{t("common.retry")}</Button>
+        </div>
+      ) : null}
+
+      {/* 统计卡:点击即按状态筛选;异常卡的明细列拆成封禁 / 错误。 */}
+      <div className="mb-4 flex snap-x gap-2 overflow-x-auto pb-1 @4xl/antigravity-accounts:grid @4xl/antigravity-accounts:grid-cols-5 @4xl/antigravity-accounts:gap-3 [&>button]:w-40 [&>button]:shrink-0 [&>button]:snap-start @4xl/antigravity-accounts:[&>button]:w-full">
         <CompactStat
           label={t("antigravity.statTotal")}
+          chipLabel={t("antigravity.statAll")}
           value={stats.total}
           tone="neutral"
           active={statusFilter === "all"}
+          details={[
+            { label: "OAuth", value: stats.oauth },
+            { label: "Key", value: stats.apiKey },
+          ]}
           onClick={() => setStatusFilter("all")}
         />
         <CompactStat
-          label={t("antigravity.statActive")}
+          label={t("antigravity.statActiveLong")}
+          chipLabel={t("antigravity.statSchedulable")}
           value={stats.active}
           tone="success"
           active={statusFilter === "active"}
           onClick={() => setStatusFilter("active")}
         />
         <CompactStat
-          label={t("antigravity.statError")}
-          value={stats.error}
+          label={t("antigravity.statRateLimitedLong")}
+          chipLabel={t("antigravity.statRateLimited")}
+          value={stats.rateLimited}
           tone="warning"
-          active={statusFilter === "error"}
-          onClick={() => setStatusFilter("error")}
+          active={statusFilter === "rate_limited"}
+          onClick={() => setStatusFilter("rate_limited")}
         />
         <CompactStat
-          label={t("antigravity.statDisabled")}
-          value={stats.disabled}
+          label={t("antigravity.statAbnormalLong")}
+          chipLabel={t("antigravity.statAbnormal")}
+          value={stats.abnormal}
           tone="danger"
+          active={statusFilter === "abnormal"}
+          details={[
+            { label: t("accounts.abnormalBannedShort"), value: stats.banned },
+            { label: t("accounts.abnormalErrorShort"), value: stats.error },
+          ]}
+          onClick={() => setStatusFilter("abnormal")}
+        />
+        <CompactStat
+          label={t("antigravity.statDisabledLong")}
+          chipLabel={t("antigravity.statDisabled")}
+          value={stats.disabled}
+          tone="neutral"
           active={statusFilter === "disabled"}
           onClick={() => setStatusFilter("disabled")}
         />
       </div>
 
-      <div className="toolbar-surface mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder={t("antigravity.searchPlaceholder")}
-            className="pl-9"
-          />
-        </div>
-        <div className="w-full sm:w-40">
-          <Select
-            value={statusFilter}
-            onValueChange={(value) => setStatusFilter(value as StatusFilter)}
-            options={[
-              { value: "all", label: t("antigravity.filterAll") },
-              { value: "active", label: t("antigravity.filterActive") },
-              { value: "disabled", label: t("antigravity.filterDisabled") },
-              { value: "error", label: t("antigravity.filterError") },
-            ]}
-          />
-        </div>
-        <AccountGroupFilterSelect
-          groups={antigravityGroups}
-          value={groupFilter}
-          onChange={setGroupFilter}
-          className="w-full sm:w-48"
-        />
-        {filtersActive ? (
-          <Button variant="ghost" size="sm" onClick={clearFilters}>
-            <X className="size-3.5" />
-            {t("antigravity.clearFilters")}
+      {/* 工具栏:搜索 + 状态胶囊一行;认证方式 / 分组 / 排序一行(窄屏折叠);活动筛选药丸一行。 */}
+      <div className="toolbar-surface mb-3 flex flex-col gap-2 px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <div className="relative min-w-0 flex-1 @4xl/antigravity-accounts:w-60 @4xl/antigravity-accounts:flex-none @6xl/antigravity-accounts:w-72">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/70" />
+            <Input
+              className="h-8 rounded-lg bg-background/70 pl-9 pr-8 text-[13px] shadow-none"
+              placeholder={t("antigravity.searchPlaceholder")}
+              aria-label={t("antigravity.searchPlaceholder")}
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                aria-label={t("antigravity.clearSearch")}
+                onClick={() => setSearchQuery("")}
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
+          <div className="order-last flex w-full min-w-0 items-center gap-0.5 overflow-x-auto @4xl/antigravity-accounts:order-none @4xl/antigravity-accounts:w-auto @4xl/antigravity-accounts:flex-1">
+            {statusChips.map((chip) => (
+              <button
+                key={chip.id}
+                type="button"
+                aria-pressed={statusFilter === chip.id}
+                onClick={() => setStatusFilter(chip.id)}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50",
+                  statusFilter === chip.id
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                )}
+              >
+                {chip.label}
+                <span className={cn("min-w-4 rounded px-1 text-center text-[10px] tabular-nums", statusFilter === chip.id ? "bg-primary/10 text-primary" : "bg-muted/70 text-muted-foreground")}>
+                  {chip.count}
+                </span>
+              </button>
+            ))}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-expanded={showFilters}
+            aria-controls="antigravity-account-filters"
+            onClick={() => setShowFilters((current) => !current)}
+            className={cn("h-8 @4xl/antigravity-accounts:hidden", (showFilters || filtersActive) && "border-primary/25 bg-primary/5 text-primary")}
+          >
+            <SlidersHorizontal className="size-3.5" />
+            {t("accounts.filter")}
           </Button>
-        ) : null}
-        {isTableViewport ? (
-          <ColumnSettingsMenu
-            columns={visibleColumns}
-            columnOrder={ANTIGRAVITY_TABLE_COLUMNS}
-            onToggle={toggleColumn}
-            onReset={resetColumns}
-            title={t("accounts.columnSettings")}
-            resetTitle={t("accounts.columnReset")}
-            labels={{
-              project: t("antigravity.columnProject"),
-              permission: t("antigravity.columnPermission"),
-              quota: t("antigravity.columnQuota"),
-              proxy: t("accounts.proxyColumn"),
-              status: t("antigravity.columnStatus"),
-              updatedAt: t("antigravity.columnUpdated"),
-            }}
+          {isTableViewport ? (
+            <div className="ml-auto shrink-0">
+              <ColumnSettingsMenu
+                columns={visibleColumns}
+                columnOrder={ANTIGRAVITY_TABLE_COLUMNS}
+                onToggle={toggleColumn}
+                onReset={resetColumns}
+                title={t("accounts.columnSettings")}
+                resetTitle={t("accounts.columnReset")}
+                labels={{
+                  tier: t("antigravity.columnTier"),
+                  quota: t("antigravity.columnQuota"),
+                  proxy: t("accounts.proxyColumn"),
+                  status: t("antigravity.columnStatus"),
+                  today: t("accounts.todayStats"),
+                  requests: t("accounts.requests"),
+                  updatedAt: t("antigravity.columnUpdated"),
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
+
+        <div
+          id="antigravity-account-filters"
+          className={cn(
+            "flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-border/50 pt-2 @4xl/antigravity-accounts:flex",
+            showFilters ? "flex" : "hidden",
+          )}
+        >
+          <div className={segmentGroupClass} role="group" aria-label={t("antigravity.authKind")}>
+            {authTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                aria-pressed={authFilter === tab.id}
+                onClick={() => setAuthFilter(tab.id)}
+                className={segmentButtonClass(authFilter === tab.id)}
+              >
+                {typeof tab.count === "number" ? `${tab.label} ${tab.count}` : tab.label}
+              </button>
+            ))}
+          </div>
+          <AccountGroupFilterSelect
+            className="min-w-0 w-full sm:w-44"
+            groups={antigravityGroups}
+            value={groupFilter}
+            onChange={setGroupFilter}
           />
+          <div className="flex min-w-0 items-center gap-1 sm:ml-auto">
+            <span className="shrink-0 text-[11px] font-medium text-muted-foreground">{t("antigravity.sortLabel")}</span>
+            <Select
+              className="min-w-0 w-40"
+              compact
+              value={sortKey}
+              onValueChange={(value) => applySort(value as SortKey)}
+              options={sortOptions}
+            />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-primary"
+              title={sortDir === "desc" ? t("antigravity.sortAscending") : t("antigravity.sortDescending")}
+              aria-label={sortDir === "desc" ? t("antigravity.sortAscending") : t("antigravity.sortDescending")}
+              onClick={() => setSortDir((current) => (current === "desc" ? "asc" : "desc"))}
+            >
+              {sortDir === "desc" ? <ArrowDown className="size-3.5" /> : <ArrowUp className="size-3.5" />}
+            </Button>
+          </div>
+        </div>
+
+        {filtersActive || sortKey !== DEFAULT_SORT ? (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2">
+            {debouncedSearchQuery ? (
+              <button type="button" onClick={() => setSearchQuery("")} className={filterPillClass} title={debouncedSearchQuery}>
+                <Search className="size-3 shrink-0" />
+                <span className="max-w-40 truncate">{debouncedSearchQuery}</span>
+                <X className="size-3 shrink-0" />
+              </button>
+            ) : null}
+            {statusFilter !== "all" ? (
+              <button
+                type="button"
+                onClick={() => setStatusFilter("all")}
+                className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15"
+              >
+                {statusLabel}
+                <X className="size-3" />
+              </button>
+            ) : null}
+            {authFilter !== "all" ? (
+              <button type="button" onClick={() => setAuthFilter("all")} className={filterPillClass}>
+                {authTabs.find((tab) => tab.id === authFilter)?.label ?? authFilter}
+                <X className="size-3" />
+              </button>
+            ) : null}
+            {!isAccountGroupFilterEmpty(groupFilter) ? (
+              <button type="button" onClick={() => setGroupFilter(EMPTY_ACCOUNT_GROUP_FILTER)} className={filterPillClass}>
+                {t("accounts.groupsLabel")}
+                <X className="size-3" />
+              </button>
+            ) : null}
+            {sortKey !== DEFAULT_SORT ? (
+              <button
+                type="button"
+                onClick={() => applySort(DEFAULT_SORT)}
+                className={filterPillClass}
+                title={t("antigravity.sortReset")}
+              >
+                {sortDir === "desc" ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />}
+                {sortLabel}
+                <X className="size-3" />
+              </button>
+            ) : null}
+            {filtersActive ? (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="ml-auto text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {t("accounts.clearFilters")}
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
 
-      <div className="toolbar-surface mb-3 flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 text-xs font-medium text-foreground">
-          <SelectionCheckbox
-            checked={selectionSummary.allVisibleSelected}
-            indeterminate={selectionSummary.someVisibleSelected}
-            disabled={batchBusy || loading || accounts.length === 0}
-            label={t("antigravity.selection.selectPage")}
-            onChange={setVisibleSelected}
-          />
-          {t("antigravity.selection.selectPage")}
-        </label>
-        <span className="text-xs text-muted-foreground" aria-live="polite">
-          {t("antigravity.selection.selectedCount", { count: selectedAccounts.length })}
-          {selectionSummary.hiddenSelectedCount > 0 ? (
-            <> · {t("antigravity.selection.hiddenCount", { count: selectionSummary.hiddenSelectedCount })}</>
-          ) : null}
-        </span>
-        {selectedAccounts.length > 0 ? (
-          <Button variant="ghost" size="sm" disabled={batchBusy} onClick={clearSelection}>
-            <X className="size-3.5" />
-            {t("antigravity.selection.clear")}
-          </Button>
-        ) : null}
-        {batchBusy ? (
-          <span className="text-xs text-muted-foreground" role="status">
-            {t("antigravity.selection.busy")}
-          </span>
-        ) : null}
-      </div>
       <AntigravityBatchActions
         selectedAccounts={selectedAccounts}
         hiddenSelectedCount={selectionSummary.hiddenSelectedCount}
@@ -2179,1008 +1509,224 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
         onChanged={onBatchChanged}
         onBusyChange={onBatchBusyChange}
         onDeleted={onBatchDeleted}
+        externalBusy={batchOperation !== null || batchModelsOpen}
+        isExternalBusy={() => batchBusyRef.current}
+      />
+      {selectedIds.length > 0 ? (
+        <div className="mb-3 flex justify-end">
+            <HeaderActionMenu
+              label={t("accounts.batchMore")}
+              icon={<MoreHorizontal className="size-3.5" />}
+              align="end"
+              compact
+              items={[
+                {
+                  key: "lock",
+                  label: t("accounts.lock"),
+                  icon: <Lock className="size-3.5" />,
+                  disabled: batchBusy,
+                  onSelect: () => void handleBatchUpdate({ locked: true }, "accounts.batchLockDone"),
+                },
+                {
+                  key: "unlock",
+                  label: t("accounts.unlock"),
+                  icon: <Unlock className="size-3.5" />,
+                  disabled: batchBusy,
+                  onSelect: () => void handleBatchUpdate({ locked: false }, "accounts.batchUnlockDone"),
+                },
+                {
+                  key: "reset",
+                  label: t("accounts.batchResetStatus"),
+                  icon: <RotateCcw className="size-3.5" />,
+                  disabled: batchBusy,
+                  onSelect: () => void handleBatchResetStatus(),
+                },
+                {
+                  key: "models",
+                  label: t("antigravity.batchModels"),
+                  icon: <Layers className="size-3.5" />,
+                  disabled: batchBusy || selectedAPIKeyIds.length === 0,
+                  title: selectedAPIKeyIds.length === 0 ? t("antigravity.batchModelsNeedsApiKey") : undefined,
+                  onSelect: () => { if (!batchBusyRef.current) { onBatchBusyChange(true); setBatchModelsOpen(true); } },
+                },
+              ]}
+            />
+        </div>
+      ) : null}
+
+      <Card>
+        <CardContent className="p-3 sm:p-4">
+          <StateShell
+            variant="section"
+            loading={loading && accounts.length === 0}
+            error={accounts.length === 0 ? error : null}
+            onRetry={() => void reload()}
+            isEmpty={!loading && !error && accounts.length === 0}
+            emptyIcon={<ChannelLogo channel="antigravity" size={30} />}
+            loadingTitle={t("antigravity.loadingTitle")}
+            loadingDescription={t("antigravity.loadingDescription")}
+            errorTitle={t("antigravity.errorTitle")}
+            emptyTitle={poolEmpty ? t("antigravity.emptyTitle") : t("antigravity.noMatchesTitle")}
+            emptyDescription={poolEmpty ? t("antigravity.emptyDescription") : t("antigravity.noMatchesDescription")}
+            action={
+              poolEmpty ? (
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <Button onClick={() => setShowAdd(true)}>
+                    <Plus className="size-4" />
+                    {t("antigravity.addAccount")}
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowOAuth(true)}>
+                    <Link2 className="size-4" />
+                    {t("antigravity.oauthAddAccount")}
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowImport(true)}>
+                    <Upload className="size-4" />
+                    {t("antigravity.importFiles")}
+                  </Button>
+                </div>
+              ) : (
+                <Button variant="outline" onClick={clearFilters}>
+                  {t("antigravity.clearFilters")}
+                </Button>
+              )
+            }
+          >
+            {isTableViewport ? (
+              <div className={cn("data-table-shell", accounts.length <= pageSize && "account-table-shell-fit-content")}>
+                <Table className="[&_td]:px-2.5 [&_th]:px-2.5 [&_td]:py-3">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10">
+                        <input
+                          type="checkbox"
+                          className="size-4 cursor-pointer accent-primary"
+                          checked={allPageSelected}
+                          onChange={toggleSelectAll}
+                          aria-label={t("accounts.selectAll")}
+                        />
+                      </TableHead>
+                      <TableHead className="w-12 text-[13px] font-semibold">{t("accounts.sequence")}</TableHead>
+                      <TableHead className="text-[13px] font-semibold">{t("antigravity.columnAccount")}</TableHead>
+                      {visibleColumns.tier ? (
+                        <TableHead className="text-[13px] font-semibold">{t("antigravity.columnTier")}</TableHead>
+                      ) : null}
+                      {visibleColumns.quota ? renderSortHead("usage", t("antigravity.columnQuota"), t("antigravity.sortQuotaUsageHint")) : null}
+                      {visibleColumns.proxy ? (
+                        <TableHead className="text-[13px] font-semibold">{t("accounts.proxyColumn")}</TableHead>
+                      ) : null}
+                      {visibleColumns.status ? (
+                        <TableHead className="text-[13px] font-semibold">{t("antigravity.columnStatus")}</TableHead>
+                      ) : null}
+                      {visibleColumns.today ? renderSortHead("today", t("accounts.todayStats"), t("accounts.todayStatsHint")) : null}
+                      {visibleColumns.requests ? renderSortHead("requests", t("accounts.requests")) : null}
+                      {visibleColumns.updatedAt ? renderSortHead("updated_at", t("antigravity.columnUpdated")) : null}
+                      <TableHead data-account-actions className="text-right text-[13px] font-semibold">
+                        {t("antigravity.columnActions")}
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {displayRows.map((account, index) => (
+                      <AntigravityAccountRow key={account.id} {...rowProps(account, index)} />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                {displayRows.map((account, index) => (
+                  <AntigravityAccountCard key={account.id} {...rowProps(account, index)} />
+                ))}
+              </div>
+            )}
+
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              onPageChange={setPage}
+              totalItems={totalAccounts}
+              pageSize={pageSize}
+              onPageSizeChange={(next) => {
+                setPageSize(next);
+                setPage(1);
+              }}
+              pageSizeOptions={DEFAULT_PAGE_SIZE_OPTIONS}
+            />
+          </StateShell>
+        </CardContent>
+      </Card>
+
+      <AntigravityAddModal
+        show={showAdd}
+        proxies={proxyPool}
+        groups={antigravityGroups}
+        onCreateGroup={createAntigravityGroup}
+        onClose={() => setShowAdd(false)}
+        onAdded={async () => {
+          setPage(1);
+          await reload({ silent: true });
+        }}
       />
 
-      <StateShell
-        variant="page"
-        loading={loading && accounts.length === 0}
-        error={accounts.length === 0 ? error : null}
-        onRetry={() => void reload()}
-        isEmpty={!loading && !error && accounts.length === 0}
-        emptyIcon={<ChannelLogo channel="antigravity" size={30} />}
-        loadingTitle={t("antigravity.loadingTitle")}
-        loadingDescription={t("antigravity.loadingDescription")}
-        errorTitle={t("antigravity.errorTitle")}
-        emptyTitle={
-          filtersActive
-            ? t("antigravity.noMatchesTitle")
-            : t("antigravity.emptyTitle")
-        }
-        emptyDescription={
-          filtersActive
-            ? t("antigravity.noMatchesDescription")
-            : t("antigravity.emptyDescription")
-        }
-        action={
-          filtersActive ? (
-            <Button variant="outline" onClick={clearFilters}>
-              {t("antigravity.clearFilters")}
-            </Button>
-          ) : (
-            <Button onClick={() => setShowImport(true)}>
-              <Plus className="size-4" />
-              {t("antigravity.addAccount")}
-            </Button>
-          )
-        }
-      >
-        {/* 与 Codex/Claude/Grok 页同款表格外壳:圆角卡片 + 粘性表头 + 13px 半粗表头 */}
-        <div className="data-table-shell hidden md:block">
-          <Table className="[&_td]:px-2.5 [&_th]:px-2.5 [&_td]:py-3">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-10">
-                  <SelectionCheckbox
-                    checked={selectionSummary.allVisibleSelected}
-                    indeterminate={selectionSummary.someVisibleSelected}
-                    disabled={batchBusy || loading || accounts.length === 0}
-                    label={t("antigravity.selection.selectPage")}
-                    onChange={setVisibleSelected}
-                  />
-                </TableHead>
-                <TableHead className="text-[13px] font-semibold">{t("antigravity.columnAccount")}</TableHead>
-                {visibleColumns.project ? (
-                  <TableHead className="text-[13px] font-semibold">{t("antigravity.columnProject")}</TableHead>
-                ) : null}
-                {visibleColumns.permission ? (
-                  <TableHead className="text-[13px] font-semibold">{t("antigravity.columnPermission")}</TableHead>
-                ) : null}
-                {visibleColumns.quota ? (
-                  <TableHead className="text-[13px] font-semibold">{t("antigravity.columnQuota")}</TableHead>
-                ) : null}
-                {visibleColumns.proxy ? (
-                  <TableHead className="text-[13px] font-semibold">{t("accounts.proxyColumn")}</TableHead>
-                ) : null}
-                {visibleColumns.status ? (
-                  <TableHead className="text-[13px] font-semibold">{t("antigravity.columnStatus")}</TableHead>
-                ) : null}
-                {visibleColumns.updatedAt ? (
-                  <TableHead className="text-[13px] font-semibold">{t("antigravity.columnUpdated")}</TableHead>
-                ) : null}
-                <TableHead className="w-[184px] text-right text-[13px] font-semibold">
-                  {t("antigravity.columnActions")}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {accounts.map((account) => (
-                <TableRow
-                  key={account.id}
-                  data-state={selectedAccountsById.has(account.id) ? "selected" : undefined}
-                  className={cn("cursor-pointer", account.enabled === false && "opacity-65")}
-                  onClick={(event) => {
-                    // 整行可点开详情;命中按钮/链接/输入框/菜单时交给它们自己处理(与 Grok/Claude 页一致)
-                    const target = event.target as HTMLElement | null;
-                    if (target?.closest('button, a, input, label, [role="menuitem"], [role="menu"], [data-slot="button"]')) return;
-                    openDetailAccount(account.id);
-                  }}
-                >
-                  <TableCell className="w-10" onClick={(event) => event.stopPropagation()}>
-                    <SelectionCheckbox
-                      checked={selectedAccountsById.has(account.id)}
-                      disabled={batchBusy || loading}
-                      label={t("antigravity.selection.selectAccount", { account: accountLabel(account) })}
-                      onChange={(selected) => setAccountSelected(account, selected)}
-                    />
-                  </TableCell>
-                  <TableCell className="min-w-[220px]">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <AccountAvatar account={account} size={32} />
-                      <span className="min-w-0">
-                        <span className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openDetailAccount(account.id);
-                            }}
-                            className="block max-w-[220px] truncate text-left text-[13px] font-semibold text-foreground transition-colors hover:text-primary"
-                            title={t("accounts.openDetail")}
-                          >
-                            {account.name || account.email || `#${account.id}`}
-                          </button>
-                          <AntigravityAuthKindChip account={account} />
-                          {identityVerified(account) ? (
-                            <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
-                          ) : null}
-                        </span>
-                        {account.name && account.email ? (
-                          <span className="mt-0.5 block max-w-[220px] truncate text-[11px] text-muted-foreground">
-                            {account.email}
-                          </span>
-                        ) : null}
-                        <GroupChips account={account} groups={allGroups} />
-                      </span>
-                    </div>
-                  </TableCell>
-                  {visibleColumns.project ? (
-                    <TableCell className="max-w-[220px]">
-                      <div className="truncate text-[13px] font-medium text-foreground">
-                        {subscriptionTier(account) || t("antigravity.tierUnknown")}
-                      </div>
-                      <div
-                        className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground"
-                        title={identityProjectID(account)}
-                      >
-                        {identityProjectID(account) || t("antigravity.projectPending")}
-                      </div>
-                    </TableCell>
-                  ) : null}
-                  {visibleColumns.permission ? (
-                    <TableCell className="max-w-[190px]">
-                      <PermissionBadge permissions={account.antigravity_permissions} />
-                      {account.antigravity_permissions?.reason ? (
-                        <div
-                          className="mt-1 max-w-[180px] truncate text-[11px] text-muted-foreground"
-                          title={account.antigravity_permissions.reason}
-                        >
-                          {account.antigravity_permissions.reason}
-                        </div>
-                      ) : null}
-                      <SyncWarningAction warning={account.antigravity_sync_warning} />
-                    </TableCell>
-                  ) : null}
-                  {visibleColumns.quota ? (
-                    <TableCell>
-                      <CompactQuota
-                        account={account}
-                        onOpen={() => openDetailAccount(account.id)}
-                      />
-                    </TableCell>
-                  ) : null}
-                  {visibleColumns.proxy ? (
-                    <TableCell className="min-w-[120px] max-w-[180px]">
-                      <AccountProxyBadge
-                        account={account}
-                        ctx={proxyBindingCtx}
-                        onClick={() => setQuickProxyAccount(account)}
-                      />
-                    </TableCell>
-                  ) : null}
-                  {visibleColumns.status ? (
-                    <TableCell>
-                      <div className="flex flex-col items-start gap-1">
-                        <StatusBadge
-                          status={account.enabled === false ? "paused" : account.status}
-                          errorMessage={account.error_message}
-                        />
-                        <AntigravityCooldownSummary account={account} />
-                        {account.locked ? (
-                          <Badge variant="outline" className="text-[10px]">
-                            <KeyRound className="size-3" />
-                            {t("antigravity.locked")}
-                          </Badge>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                  ) : null}
-                  {visibleColumns.updatedAt ? (
-                    <TableCell className="whitespace-nowrap">
-                      <div className="text-[13px] tabular-nums text-muted-foreground" title={formatBeijingTime(account.updated_at)}>
-                        {formatRelativeTime(account.updated_at, { variant: "compact" })}
-                      </div>
-                    </TableCell>
-                  ) : null}
-                  <TableCell>{renderActions(account)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-
-        <div className="grid gap-2 md:hidden">
-          {accounts.map((account) => (
-            <article
-              key={account.id}
-              className={cn(
-                "rounded-lg border border-border bg-card p-3 shadow-sm",
-                selectedAccountsById.has(account.id) && "border-primary bg-accent/30",
-                account.enabled === false && "opacity-65",
-              )}
-            >
-              <div className="flex items-start gap-3">
-                <SelectionCheckbox
-                  checked={selectedAccountsById.has(account.id)}
-                  disabled={batchBusy || loading}
-                  label={t("antigravity.selection.selectAccount", { account: accountLabel(account) })}
-                  onChange={(selected) => setAccountSelected(account, selected)}
-                />
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                  onClick={() => openDetailAccount(account.id)}
-                >
-                  <AccountAvatar account={account} size={40} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-1.5">
-                      <span className="truncate text-sm font-semibold text-foreground">
-                        {account.name || account.email || `#${account.id}`}
-                      </span>
-                      <AntigravityAuthKindChip account={account} />
-                      {identityVerified(account) ? (
-                        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
-                      ) : null}
-                    </span>
-                    {account.name && account.email ? (
-                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                        {account.email}
-                      </span>
-                    ) : null}
-                    <GroupChips account={account} groups={allGroups} />
-                  </span>
-                </button>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <StatusBadge
-                    status={account.enabled === false ? "paused" : account.status}
-                    errorMessage={account.error_message}
-                  />
-                  <AntigravityCooldownSummary account={account} />
-                </div>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-3 border-t border-border pt-3 text-xs">
-                <div className="min-w-0">
-                  <div className="text-[10px] font-semibold uppercase text-muted-foreground">
-                    {t("antigravity.columnProject")}
-                  </div>
-                  <div className="mt-1 truncate font-medium text-foreground">
-                    {subscriptionTier(account) || t("antigravity.tierUnknown")}
-                  </div>
-                </div>
-                <div className="min-w-0">
-                  <div className="text-[10px] font-semibold uppercase text-muted-foreground">
-                    {t("antigravity.columnPermission")}
-                  </div>
-                  <div className="mt-1">
-                    <PermissionBadge permissions={account.antigravity_permissions} />
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3 border-t border-border pt-3">
-                <CompactQuota
-                  account={account}
-                  onOpen={() => openDetailAccount(account.id)}
-                />
-              </div>
-              <div className="mt-3 flex border-t border-border pt-3">
-                <AccountProxyBadge
-                  account={account}
-                  ctx={proxyBindingCtx}
-                  onClick={() => setQuickProxyAccount(account)}
-                />
-              </div>
-              <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-2">
-                <span className="text-[10px] text-muted-foreground">
-                  {formatRelativeTime(account.updated_at, { variant: "compact" })}
-                </span>
-                {renderActions(account)}
-              </div>
-            </article>
-          ))}
-        </div>
-
-        <Pagination
-          page={page}
-          totalPages={totalPages}
-          onPageChange={setPage}
-          totalItems={totalAccounts}
-          pageSize={pageSize}
-          onPageSizeChange={(next) => {
-            setPageSize(next);
-            setPage(1);
-          }}
-          pageSizeOptions={DEFAULT_PAGE_SIZE_OPTIONS}
-        />
-      </StateShell>
-
-      <Modal
-        show={showOAuth}
-        title={t("antigravity.oauthTitle")}
-        onClose={() => {
-          if (!oauthStarting && !oauthCompleting && !oauthCancelling) {
-            void handleOAuthCancel();
-          }
-        }}
-        contentClassName="sm:max-w-[640px]"
-        footer={
-          <>
-            <Button
-              variant="outline"
-              onClick={() => void handleOAuthCancel()}
-              disabled={oauthStarting || oauthCompleting || oauthCancelling}
-            >
-              {oauthModalStatus === "completed" || oauthModalStatus === "failed" || oauthModalStatus === "cancelled"
-                ? t("common.close")
-                : t("common.cancel")}
-            </Button>
-            {!oauthSession ? (
-              <Button onClick={() => void handleOAuthStart()} disabled={oauthStarting}>
-                {oauthStarting ? <Loader2 className="animate-spin" /> : <Link2 />}
-                {oauthStarting ? t("antigravity.oauthStarting") : t("antigravity.oauthStart")}
-              </Button>
-            ) : oauthModalStatus === "failed" || oauthModalStatus === "cancelled" ? (
-              <Button
-                onClick={() => {
-                  resetOAuth();
-                }}
-                disabled={oauthCancelling}
-              >
-                <RotateCw />
-                {t("antigravity.oauthRetry")}
-              </Button>
-            ) : oauthModalStatus === "completed" ? null : (
-              <Button
-                onClick={() => void handleOAuthComplete()}
-                disabled={oauthCompleting || !oauthCallbackURL.trim()}
-              >
-                {oauthCompleting ? <Loader2 className="animate-spin" /> : <Link2 />}
-                {oauthCompleting
-                  ? t("antigravity.oauthSubmitting")
-                  : t("antigravity.oauthComplete")}
-              </Button>
-            )}
-          </>
-        }
-      >
-        <div className="space-y-4">
-          {!oauthSession ? (
-            <>
-              <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-                <p className="mb-1 font-semibold text-foreground">
-                  {t("antigravity.oauthStep1Title")}
-                </p>
-                <p>{t("antigravity.oauthStep1Description")}</p>
-              </div>
-              <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-muted-foreground">
-                  {t("antigravity.accountName")}
-                </span>
-                <Input
-                  value={oauthDraft.name}
-                  onChange={(event) =>
-                    setOAuthDraft((current) => ({ ...current, name: event.target.value }))
-                  }
-                  placeholder={t("antigravity.accountNamePlaceholder")}
-                />
-              </label>
-              <AccountMetadataFields
-                proxyUrl={oauthDraft.proxyUrl}
-                proxies={proxyPool}
-                onProxyUrlChange={(proxyUrl) =>
-                  setOAuthDraft((current) => ({ ...current, proxyUrl }))
-                }
-                groupIds={oauthDraft.groupIds}
-                onGroupIdsChange={(groupIds) =>
-                  setOAuthDraft((current) => ({ ...current, groupIds }))
-                }
-                groups={antigravityGroups}
-                onCreateGroup={createAntigravityGroup}
-              />
-            </>
-          ) : (
-            <>
-              <div
-                className={cn(
-                  "rounded-xl border px-4 py-3 text-sm",
-                  oauthModalStatus === "failed"
-                    ? "border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-300"
-                    : oauthModalStatus === "completed"
-                      ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
-                      : "border-primary/30 bg-primary/5 text-muted-foreground",
-                )}
-              >
-                <div className="flex items-center gap-2 font-semibold text-foreground">
-                  {oauthModalStatus === "completed" ? (
-                    <CheckCircle2 className="size-4 text-emerald-500" />
-                  ) : oauthModalStatus === "failed" || oauthModalStatus === "cancelled" ? (
-                    <TriangleAlert className="size-4 text-red-500" />
-                  ) : (
-                    <Loader2 className="size-4 animate-spin text-primary" />
-                  )}
-                  {oauthModalStatus === "waiting"
-                    ? t("antigravity.oauthWaiting")
-                    : oauthModalStatus === "processing"
-                      ? t("antigravity.oauthProcessing")
-                      : oauthModalStatus === "completed"
-                        ? t("antigravity.oauthCompleted")
-                        : oauthModalStatus === "cancelled"
-                          ? t("antigravity.oauthCancelled")
-                          : t("antigravity.oauthFailed")}
-                </div>
-                <p className="mt-1 text-xs leading-relaxed">
-                  {oauthModalStatus === "completed"
-                    ? oauthStatus?.email
-                      ? t("antigravity.oauthSuccessWithEmail", { email: oauthStatus.email })
-                      : t("antigravity.oauthSuccess")
-                    : t("antigravity.oauthStep2Description")}
-                </p>
-              </div>
-
-              {oauthSession.auth_url ? (
-                <div className="rounded-xl border border-border px-4 py-3">
-                  <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                    {t("antigravity.oauthOpenLink")}
-                  </p>
-                  <a
-                    href={oauthSession.auth_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-start gap-1.5 text-sm font-semibold text-primary hover:underline"
-                  >
-                    <ExternalLink className="mt-0.5 size-3.5 shrink-0" />
-                    <span className="break-all">{oauthSession.auth_url}</span>
-                  </a>
-                </div>
-              ) : null}
-
-              {oauthModalStatus !== "completed" ? (
-                <label className="block space-y-1.5">
-                  <span className="text-xs font-semibold text-muted-foreground">
-                    {t("antigravity.oauthCallbackLabel")}
-                  </span>
-                  <textarea
-                    value={oauthCallbackURL}
-                    onChange={(event) => setOAuthCallbackURL(event.target.value)}
-                    rows={3}
-                    spellCheck={false}
-                    placeholder={t("antigravity.oauthCallbackPlaceholder")}
-                    className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
-                  />
-                  <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    {t("antigravity.oauthCallbackHint")}
-                  </p>
-                </label>
-              ) : null}
-
-              {oauthStatus?.warning ? (
-                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                  {oauthStatus.warning}
-                </div>
-              ) : null}
-              {oauthStatus?.error ? (
-                <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-700 dark:text-red-300">
-                  {oauthStatus.error}
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-      </Modal>
-
-      <Modal
+      <AntigravityImportModal
         show={showImport}
-        title={t("antigravity.importTitle")}
-        onClose={closeImport}
-        contentClassName="sm:max-w-[620px]"
-        footer={
-          <>
-            <Button variant="outline" onClick={closeImport} disabled={importing}>
-              {t("common.cancel")}
-            </Button>
-            <Button onClick={() => void handleImport()} disabled={importing}>
-              {importing ? <Loader2 className="animate-spin" /> : <Upload />}
-              {importing
-                ? t("antigravity.importing")
-                : importMode === "single"
-                  ? t("antigravity.addAccount")
-                  : t("antigravity.importFiles")}
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 rounded-lg border border-border bg-muted/40 p-0.5">
-            {(
-              [
-                ["single", t("antigravity.singleCredential"), FileJson],
-                ["files", t("antigravity.batchFiles"), FolderOpen],
-              ] as const
-            ).map(([mode, label, Icon]) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => {
-                  setImportMode(mode);
-                  setImportResult(null);
-                }}
-                className={cn(
-                  "inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-colors",
-                  importMode === mode
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="size-4" />
-                {label}
-              </button>
-            ))}
-          </div>
+        proxies={proxyPool}
+        groups={antigravityGroups}
+        onCreateGroup={createAntigravityGroup}
+        onClose={() => setShowImport(false)}
+        onImported={async () => {
+          setPage(1);
+          await reload({ silent: true });
+        }}
+      />
 
-          {importMode === "single" ? (
-            <>
-              <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-muted-foreground">
-                  {t("antigravity.accountName")}
-                </span>
-                <Input
-                  value={importDraft.name}
-                  onChange={(event) =>
-                    setImportDraft((current) => ({ ...current, name: event.target.value }))
-                  }
-                  placeholder={t("antigravity.accountNamePlaceholder")}
-                />
-              </label>
-              <div className="space-y-1.5">
-                <span className="text-xs font-semibold text-muted-foreground">
-                  {t("antigravity.authKind")}
-                </span>
-                <Select
-                  value={importDraft.authKind}
-                  onValueChange={(value) =>
-                    setImportDraft((current) => ({
-                      ...current,
-                      authKind: value as AntigravityAuthKind,
-                    }))
-                  }
-                  options={[
-                    { value: "oauth", label: t("antigravity.authKindOAuth") },
-                    { value: "api_key", label: t("antigravity.authKindApiKey") },
-                  ]}
-                />
-              </div>
-              {importDraft.authKind === "oauth" ? (
-                <label className="block space-y-1.5">
-                  <span className="text-xs font-semibold text-muted-foreground">
-                    {t("antigravity.authJson")}
-                  </span>
-                  <textarea
-                    value={importDraft.authJson}
-                    onChange={(event) =>
-                      setImportDraft((current) => ({
-                        ...current,
-                        authJson: event.target.value,
-                      }))
-                    }
-                    rows={9}
-                    spellCheck={false}
-                    placeholder={t("antigravity.authJsonPlaceholder")}
-                    className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
-                  />
-                  <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    {t("antigravity.authJsonHint")}
-                  </p>
-                </label>
-              ) : (
-                <div className="space-y-4">
-                  <label className="block space-y-1.5">
-                    <span className="text-xs font-semibold text-muted-foreground">
-                      {t("antigravity.apiKey")}
-                    </span>
-                    <Input
-                      type="password"
-                      autoComplete="new-password"
-                      value={importDraft.apiKey}
-                      onChange={(event) =>
-                        setImportDraft((current) => ({ ...current, apiKey: event.target.value }))
-                      }
-                      placeholder={t("antigravity.apiKeyPlaceholder")}
-                    />
-                    <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      {t("antigravity.apiKeyHint")}
-                    </p>
-                  </label>
-                  <label className="block space-y-1.5">
-                    <span className="text-xs font-semibold text-muted-foreground">
-                      {t("antigravity.models")}
-                    </span>
-                    <textarea
-                      value={importDraft.models}
-                      onChange={(event) =>
-                        setImportDraft((current) => ({ ...current, models: event.target.value }))
-                      }
-                      rows={4}
-                      spellCheck={false}
-                      placeholder={t("antigravity.modelsPlaceholder")}
-                      className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
-                    />
-                    <div className="flex flex-wrap gap-1.5">
-                      {ANTIGRAVITY_DEFAULT_MODELS.map((model) => (
-                        <Button
-                          key={model}
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            setImportDraft((current) => ({
-                              ...current,
-                              models: Array.from(
-                                new Set([...parseModelList(current.models), model]),
-                              ).join("\n"),
-                            }))
-                          }
-                        >
-                          {model}
-                        </Button>
-                      ))}
-                    </div>
-                  </label>
-                  <label className="block space-y-1.5">
-                    <span className="text-xs font-semibold text-muted-foreground">
-                      {t("antigravity.modelMapping")}
-                    </span>
-                    <textarea
-                      value={importDraft.modelMapping}
-                      onChange={(event) =>
-                        setImportDraft((current) => ({
-                          ...current,
-                          modelMapping: event.target.value,
-                        }))
-                      }
-                      rows={4}
-                      spellCheck={false}
-                      placeholder={t("antigravity.modelMappingPlaceholder")}
-                      className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
-                    />
-                    <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      {t("antigravity.modelMappingHint")}
-                    </p>
-                  </label>
-                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    {t("antigravity.interactionsExperimental")}
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="space-y-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json,application/json"
-                multiple
-                className="hidden"
-                onChange={(event) => void handleCredentialFiles(event)}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex min-h-[120px] w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-5 py-6 text-center transition-colors hover:border-primary/40 hover:bg-primary/5"
-              >
-                <FolderOpen className="size-7 text-primary" />
-                <span className="text-sm font-semibold text-foreground">
-                  {t("antigravity.chooseFiles")}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {t("antigravity.chooseFilesHint")}
-                </span>
-              </button>
-              {credentialFiles.length > 0 ? (
-                <div className="max-h-28 overflow-y-auto rounded-lg border border-border px-3 py-2">
-                  {credentialFiles.map((file) => (
-                    <div
-                      key={file.name}
-                      className="flex items-center gap-2 py-1 text-xs text-foreground"
-                    >
-                      <FileJson className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">{file.name}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          )}
+      {showOAuth ? (
+        <AntigravityOAuthModal
+          proxies={proxyPool}
+          groups={antigravityGroups}
+          onCreateGroup={createAntigravityGroup}
+          onClose={() => setShowOAuth(false)}
+          onCompleted={async () => {
+            setPage(1);
+            await reload({ silent: true });
+          }}
+        />
+      ) : null}
 
-          <AccountMetadataFields
-            proxyUrl={importDraft.proxyUrl}
-            proxies={proxyPool}
-            onProxyUrlChange={(proxyUrl) =>
-              setImportDraft((current) => ({ ...current, proxyUrl }))
-            }
-            groupIds={importDraft.groupIds}
-            onGroupIdsChange={(groupIds) =>
-              setImportDraft((current) => ({ ...current, groupIds }))
-            }
-            groups={antigravityGroups}
-            onCreateGroup={createAntigravityGroup}
-          />
+      <AntigravityEditModal
+        account={editTarget}
+        proxies={proxyPool}
+        groups={antigravityGroups}
+        onCreateGroup={createAntigravityGroup}
+        onClose={() => setEditTarget(null)}
+        onSaved={refreshDetailAndList}
+      />
 
-          {importMode === "files" ? (
-            <div className="space-y-1">
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  className="size-3.5"
-                  checked={importDraft.importFileProxies}
-                  onChange={(event) =>
-                    setImportDraft((current) => ({
-                      ...current,
-                      importFileProxies: event.target.checked,
-                    }))
-                  }
-                />
-                {t("accounts.importFileProxies")}
-              </label>
-              <p className="text-[11px] text-muted-foreground">
-                {t("antigravity.importFileProxiesHint")}
-              </p>
-            </div>
-          ) : null}
+      <AntigravityBatchModelsModal
+        show={batchModelsOpen}
+        ids={selectedAPIKeyIds}
+        skipped={selectedIds.length - selectedAPIKeyIds.length}
+        onClose={() => { setBatchModelsOpen(false); onBatchBusyChange(false); }}
+        onSaved={async () => { setBatchModelsOpen(false); onBatchBusyChange(false); await finishBatch(); }}
+      />
 
-          {importResult && (importResult.failed > 0 || (importResult.degraded ?? 0) > 0) ? (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-              <div className="text-sm font-semibold text-amber-700 dark:text-amber-300">
-                {t("antigravity.importReview", {
-                  imported: importResult.imported,
-                  synced: importResult.synced ?? 0,
-                  degraded: importResult.degraded ?? 0,
-                  failed: importResult.failed,
-                })}
-              </div>
-              <div className="mt-2 max-h-28 space-y-1 overflow-y-auto text-xs text-muted-foreground">
-                {importResult.items
-                  .filter((item) => !item.ok || !item.synced || item.warning || item.error)
-                  .slice(0, 20)
-                  .map((item) => (
-                    <div
-                      key={`${item.index}-${item.sub_index ?? 0}-${item.email ?? "item"}`}
-                    >
-                      {importItemDisplayLabel(item)}: {item.error || item.warning || t("antigravity.syncPending")}
-                    </div>
-                  ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </Modal>
+      {manageGroupsOpen ? (
+        <AccountGroupManagerModal
+          channel="antigravity"
+          groups={antigravityGroups}
+          title={t("antigravity.manageGroups")}
+          onClose={() => setManageGroupsOpen(false)}
+          onChanged={() => {
+            void reloadGroups();
+            void reload({ silent: true });
+          }}
+        />
+      ) : null}
 
-      <Modal
-        show={editingAccount !== null}
-        title={t("antigravity.editTitle")}
-        onClose={closeEditor}
-        contentClassName="sm:max-w-[580px]"
-        footer={
-          <>
-            <Button
-              variant="outline"
-              onClick={closeEditor}
-              disabled={editing}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button
-              onClick={() => void handleEdit()}
-              disabled={
-                editing || editingDetailsLoading || Boolean(editingDetailsError)
-              }
-            >
-              {editing ? <Loader2 className="animate-spin" /> : <Pencil />}
-              {editing ? t("common.saving") : t("common.save")}
-            </Button>
-          </>
-        }
-      >
-        {editingDetailsLoading ? (
-          <div className="flex min-h-36 items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            {t("antigravity.editDetailsLoading")}
-          </div>
-        ) : editingDetailsError ? (
-          <div className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-            <p>
-              {t("antigravity.editDetailsLoadFailed", {
-                error: editingDetailsError,
-              })}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (editingAccount) void openEditor(editingAccount);
-              }}
-            >
-              <RotateCw className="size-3.5" />
-              {t("common.retry")}
-            </Button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-          <label className="block space-y-1.5">
-            <span className="text-xs font-semibold text-muted-foreground">
-              {t("antigravity.accountName")}
-            </span>
-            <Input
-              value={editDraft.name}
-              onChange={(event) =>
-                setEditDraft((current) => ({ ...current, name: event.target.value }))
-              }
-            />
-          </label>
-          {editDraft.authKind === "oauth" ? (
-            <label className="block space-y-1.5">
-              <span className="text-xs font-semibold text-muted-foreground">
-                {t("antigravity.replacementAuthJson")}
-              </span>
-              <textarea
-                value={editDraft.authJson}
-                onChange={(event) =>
-                  setEditDraft((current) => ({
-                    ...current,
-                    authJson: event.target.value,
-                  }))
-                }
-                rows={7}
-                spellCheck={false}
-                placeholder={t("antigravity.replacementAuthJsonPlaceholder")}
-                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                {t("antigravity.replacementAuthJsonHint")}
-              </p>
-            </label>
-          ) : (
-            <div className="space-y-4">
-              <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-muted-foreground">
-                  {t("antigravity.replacementApiKey")}
-                </span>
-                <Input
-                  type="password"
-                  autoComplete="new-password"
-                  value={editDraft.apiKey}
-                  onChange={(event) =>
-                    setEditDraft((current) => ({ ...current, apiKey: event.target.value }))
-                  }
-                  placeholder={t("antigravity.replacementApiKeyPlaceholder")}
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  {t("antigravity.replacementApiKeyHint")}
-                </p>
-              </label>
-              <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-muted-foreground">
-                  {t("antigravity.models")}
-                </span>
-                <textarea
-                  value={editDraft.models}
-                  onChange={(event) =>
-                    setEditDraft((current) => ({ ...current, models: event.target.value }))
-                  }
-                  rows={4}
-                  spellCheck={false}
-                  placeholder={t("antigravity.modelsPlaceholder")}
-                  className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
-                />
-                <div className="flex flex-wrap gap-1.5">
-                  {ANTIGRAVITY_DEFAULT_MODELS.map((model) => (
-                    <Button
-                      key={model}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setEditDraft((current) => ({
-                          ...current,
-                          models: Array.from(
-                            new Set([...parseModelList(current.models), model]),
-                          ).join("\n"),
-                        }))
-                      }
-                    >
-                      {model}
-                    </Button>
-                  ))}
-                </div>
-              </label>
-              <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-muted-foreground">
-                  {t("antigravity.modelMapping")}
-                </span>
-                <textarea
-                  value={editDraft.modelMapping}
-                  onChange={(event) =>
-                    setEditDraft((current) => ({
-                      ...current,
-                      modelMapping: event.target.value,
-                    }))
-                  }
-                  rows={4}
-                  spellCheck={false}
-                  placeholder={t("antigravity.modelMappingPlaceholder")}
-                  className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  {t("antigravity.modelMappingHint")}
-                </p>
-              </label>
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                {t("antigravity.interactionsExperimental")}
-              </div>
-            </div>
-          )}
-          <AccountMetadataFields
-            proxyUrl={editDraft.proxyUrl}
-            proxies={proxyPool}
-            onProxyUrlChange={(proxyUrl) =>
-              setEditDraft((current) => ({ ...current, proxyUrl }))
-            }
-            groupIds={editDraft.groupIds}
-            onGroupIdsChange={(groupIds) =>
-              setEditDraft((current) => ({ ...current, groupIds }))
-            }
-            groups={antigravityGroups}
-            onCreateGroup={createAntigravityGroup}
-          />
-          </div>
-        )}
-      </Modal>
-
-      <Modal
-        show={detailAccount !== null}
-        title={
-          detailAccount ? (
-            <span className="flex min-w-0 items-center gap-3">
-              <AccountAvatar account={detailAccount} size={36} />
-              <span className="min-w-0">
-                <span className="block truncate">{accountLabel(detailAccount)}</span>
-                {detailAccount.name && detailAccount.email ? (
-                  <span className="mt-0.5 block truncate text-xs font-normal text-muted-foreground">
-                    {detailAccount.email}
-                  </span>
-                ) : null}
-              </span>
-            </span>
-          ) : (
-            t("antigravity.detailsTitle")
-          )
-        }
-        onClose={closeDetailAccount}
-        contentClassName="sm:max-w-[760px]"
-        footer={
-          <Button variant="outline" onClick={closeDetailAccount}>
-            {t("common.close")}
-          </Button>
-        }
-      >
-        {detailAccount ? (
-          <div className="space-y-4">
-            <AntigravityManagementState
-              state={managementState}
-              loading={managementLoading}
-              error={managementError}
-              action={managementAction}
-              onSync={() => void handleStateSync()}
-              onProbe={() => void handleCapabilityProbe()}
-            />
-            <AntigravityCooldownDetails
-              key={detailAccount.id}
-              accountId={detailAccount.id}
-              onChanged={onBatchChanged}
-            />
-            <QuotaDetail account={detailAccount} />
-          </div>
-        ) : null}
-      </Modal>
-
-      {/* 代理徽章直达的快速绑定弹窗：与 Codex / Grok 账号页共用组件 */}
+      {/* 代理徽章直达的快速绑定弹窗:与其他渠道账号页共用组件 */}
       <AccountProxyQuickEditor
         account={quickProxyAccount}
-        accountLabel={
-          quickProxyAccount
-            ? quickProxyAccount.name ||
-              quickProxyAccount.email ||
-              `#${quickProxyAccount.id}`
-            : ""
-        }
+        accountLabel={quickProxyAccount ? accountLabel(quickProxyAccount) : ""}
         proxies={proxyPool}
         ctx={proxyBindingCtx}
         onClose={() => setQuickProxyAccount(null)}
@@ -3191,9 +1737,135 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
         <TestConnectionModal
           account={testingAccount}
           onClose={() => setTestingAccount(null)}
-          onSettled={() => void reload()}
+          onSettled={() => void reload({ silent: true })}
         />
       ) : null}
+
+      {usageAccount ? (
+        <AccountUsageModal
+          account={usageAccount}
+          onClose={() => setUsageAccount(null)}
+          showCreditSettings={false}
+          officialUsage={false}
+        />
+      ) : null}
+
+      <AntigravityQuotaDetailModal
+        account={detailView === "quota" ? detailAccount : null}
+        state={managementState}
+        loading={managementLoading}
+        error={managementError}
+        action={managementAction}
+        onSync={() => void handleStateSync()}
+        onProbe={() => void handleCapabilityProbe()}
+        onClose={closeDetailAccount}
+        onOpenManage={() => setDetailView("sheet")}
+      />
+
+      <AccountDetailSheet
+        account={detailView === "sheet" ? detailAccount : null}
+        groups={
+          detailAccount
+            ? ((detailAccount.group_ids ?? [])
+                .map((id) => allGroups.find((group) => group.id === id))
+                .filter(Boolean) as AccountGroup[])
+            : []
+        }
+        healthBuckets={detailAccount ? healthBars[String(detailAccount.id)] : undefined}
+        sequence={detailNavIndex >= 0 ? (page - 1) * pageSize + detailNavIndex + 1 : undefined}
+        usageSlot={detailAccount ? <AntigravityQuotaOverview account={detailAccount} /> : null}
+        providerSlot={
+          detailAccount ? (
+            <>
+            <AntigravityProviderPanel
+              account={detailAccount}
+              state={managementState}
+              loading={managementLoading}
+              error={managementError}
+              action={managementAction}
+              onSync={() => void handleStateSync()}
+              onProbe={() => void handleCapabilityProbe()}
+              onOpenFullDetail={() => setDetailView("quota")}
+            />
+            <AntigravityCooldownDetails key={detailAccount.id} accountId={detailAccount.id} onChanged={onBatchChanged} />
+            </>
+          ) : null
+        }
+        canGoPrev={detailNavIndex > 0 || page > 1}
+        canGoNext={(detailNavIndex >= 0 && detailNavIndex < displayRows.length - 1) || page < totalPages}
+        refreshing={detailAccount ? busy?.id === detailAccount.id && busy.action === "sync" : false}
+        onClose={closeDetailAccount}
+        onPrev={goDetailPrev}
+        onNext={goDetailNext}
+        onEdit={() => {
+          if (detailAccount) setEditTarget(detailAccount);
+        }}
+        onUsage={() => {
+          if (detailAccount) setUsageAccount(detailAccount);
+        }}
+        onTest={() => {
+          if (detailAccount) setTestingAccount(detailAccount);
+        }}
+        onRefresh={() => {
+          if (detailAccount) handleSync(detailAccount);
+        }}
+        onGenerateAuthJson={() => {
+          if (detailAccount) void handleExport([detailAccount.id]);
+        }}
+        onToggleEnabled={() => {
+          if (detailAccount) handleToggleEnabled(detailAccount);
+        }}
+        onToggleLock={() => {
+          if (detailAccount) handleToggleLock(detailAccount);
+        }}
+        onResetStatus={() => {
+          if (detailAccount) handleResetStatus(detailAccount);
+        }}
+        onSaveModelCooldownPolicy={(data) => {
+          if (!detailAccount) return;
+          void api
+            .updateAccountModelCooldownPolicy(detailAccount.id, data)
+            .then(() => {
+              showToast(t("accounts.modelCooldownPolicySaved"));
+              return reload({ silent: true });
+            })
+            .catch((saveError) =>
+              showToast(t("accounts.modelCooldownPolicySaveFailed", { error: getErrorMessage(saveError) }), "error"),
+            );
+        }}
+        onClearModelCooldown={(model) => {
+          if (!detailAccount) return;
+          void api
+            .clearAccountModelCooldown(detailAccount.id, model)
+            .then(() => {
+              showToast(t("accounts.modelCooldownCleared", { model }));
+              return reload({ silent: true });
+            })
+            .catch((clearError) => showToast(getErrorMessage(clearError), "error"));
+        }}
+        onClearAllModelCooldowns={() => {
+          if (!detailAccount) return;
+          void api
+            .clearAllAccountModelCooldowns(detailAccount.id)
+            .then((result) => {
+              showToast(t("accounts.allModelCooldownsCleared", { count: result.cleared ?? 0 }));
+              return reload({ silent: true });
+            })
+            .catch((clearError) => showToast(getErrorMessage(clearError), "error"));
+        }}
+        onResetCredits={() => undefined}
+        onDelete={() => {
+          if (detailAccount) void handleDelete(detailAccount);
+        }}
+      />
+
+      <OperationProgressToast progress={operationProgress} onClose={closeOperationProgress} />
+      <OperationResultsModal
+        state={showOperationResults ? operationResults : null}
+        accounts={displayRows}
+        channel="antigravity"
+        onClose={closeOperationResults}
+      />
 
       {confirmDialog}
     </div>
@@ -3201,14 +1873,3 @@ function AntigravityAccounts({ headerSlot }: { headerSlot?: ReactNode } = {}) {
 }
 
 export default memo(AntigravityAccounts);
-
-function downloadAntigravityBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}

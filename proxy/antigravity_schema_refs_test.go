@@ -148,7 +148,7 @@ func TestAntigravityGeminiParametersInlinesRefBeforeCleanup(t *testing.T) {
 		"required": []any{"query"},
 	})
 	query, _ := got["properties"].(map[string]any)["query"].(map[string]any)
-	if query["type"] != "STRING" {
+	if query["type"] != "string" {
 		t.Fatalf("query = %#v", query)
 	}
 	if antigravitySchemaHasRef(got) {

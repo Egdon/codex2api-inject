@@ -132,7 +132,7 @@ func antigravityMergeSchemaObjects(dst, src map[string]any) {
 	}
 	if srcType, ok := src["type"].(string); ok {
 		if _, exists := dst["type"]; !exists {
-			dst["type"] = strings.ToUpper(strings.TrimSpace(srcType))
+			dst["type"] = strings.ToLower(strings.TrimSpace(srcType))
 		}
 	}
 }

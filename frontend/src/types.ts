@@ -1244,6 +1244,8 @@ export interface UpdateAntigravityAccountRequest {
 
 export interface AntigravityImportRequest {
   files: string[]
+  /** 每项一个 Google refresh token;与 files 一起交给后端解析器。 */
+  refresh_tokens?: string[]
   proxy_url?: string
   /** 把文件内携带的代理注册进代理池（该渠道一直会采用文件内代理，开关只控制是否入表）。 */
   import_proxy?: boolean

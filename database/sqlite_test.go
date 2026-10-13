@@ -2721,6 +2721,10 @@ func TestUsageStatsBreakdownsRespectExplicitRange(t *testing.T) {
 	if _, err := db.conn.ExecContext(ctx, `UPDATE usage_logs SET created_at = $1 WHERE model = $2`, sqliteTimeParam(oldCreatedAt), "old-model"); err != nil {
 		t.Fatalf("更新旧日志时间失败: %v", err)
 	}
+	// 直接改写已落库日志的时间,小时汇总需要按明细重建。
+	if err := db.RebuildUsageHourlyRollup(ctx); err != nil {
+		t.Fatalf("重建用量小时汇总失败: %v", err)
+	}
 
 	stats, err := db.GetUsageStats(ctx, rangeStart, rangeEnd, "")
 	if err != nil {

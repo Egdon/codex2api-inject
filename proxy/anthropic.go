@@ -268,6 +268,14 @@ func canonicalizeCodexModel(model string, supportedModels []string) string {
 // resolveAnthropicModel 将 Anthropic 模型名解析为 Codex 模型名
 // 优先使用数据库中的动态映射，回退到默认映射
 func resolveAnthropicModel(model string, dynamicMappingJSON string, supportedModels []string) string {
+	return resolveAnthropicModelForRoute(model, dynamicMappingJSON, supportedModels, nil)
+}
+
+// resolveAnthropicModelForRoute 是带请求路由信息的 resolveAnthropicModel。
+// servedDirectly 报告某个模型 ID 是否有本次请求可用的账号以原名服务；命中时内置
+// 默认映射让位，原样保留该 ID。显式配置的映射仍最先生效。servedDirectly 为 nil
+// 或不命中时行为与 resolveAnthropicModel 一致，没有对应账号的部署照旧走 Codex 兜底。
+func resolveAnthropicModelForRoute(model string, dynamicMappingJSON string, supportedModels []string, servedDirectly func(string) bool) string {
 	model = strings.TrimSpace(model)
 
 	// 1. 尝试动态映射（从系统设置，支持精确和 * 通配）
@@ -275,8 +283,13 @@ func resolveAnthropicModel(model string, dynamicMappingJSON string, supportedMod
 		return mapped
 	}
 
-	// 2. 尝试默认映射
+	// 2. 尝试默认映射。默认表只是"没有账号能服务 Claude 模型"时的 Codex 兜底：
+	// 请求的 ID 若有账号以原名服务（如 Antigravity 发布的 claude-sonnet-4-6），
+	// 保留原名，否则 Antigravity 专用 Key 会 503，混用 Key 会静默拿到 GPT 的回答。
 	if mapped, ok := defaultAnthropicModelMap[model]; ok {
+		if servedDirectly != nil && servedDirectly(model) {
+			return model
+		}
 		return canonicalizeCodexModel(mapped, supportedModels)
 	}
 
@@ -343,7 +356,14 @@ func shouldUseCodexPriorityForAnthropicSpeed(speed string) bool {
 // TranslateAnthropicToCodexWithModels 将 Anthropic Messages 请求转换为 Codex Responses 格式
 // 返回: (codex 请求体, 原始 Anthropic model 名, error)
 func TranslateAnthropicToCodexWithModels(rawJSON []byte, modelMappingJSON string, supportedModels []string) ([]byte, string, error) {
-	return translateAnthropicToResponses(rawJSON, modelMappingJSON, supportedModels, false)
+	return translateAnthropicToResponses(rawJSON, modelMappingJSON, supportedModels, false, nil)
+}
+
+// translateAnthropicToCodexForRoute 与 TranslateAnthropicToCodexWithModels 相同，
+// 但模型解析使用请求级的 servedDirectly 判定（见 resolveAnthropicModelForRoute），
+// 使翻译体里的 model 与选号时的路由模型一致。
+func translateAnthropicToCodexForRoute(rawJSON []byte, modelMappingJSON string, supportedModels []string, servedDirectly func(string) bool) ([]byte, string, error) {
+	return translateAnthropicToResponses(rawJSON, modelMappingJSON, supportedModels, false, servedDirectly)
 }
 
 // TranslateAnthropicToResponsesForGrok converts Messages into a canonical
@@ -351,17 +371,17 @@ func TranslateAnthropicToCodexWithModels(rawJSON []byte, modelMappingJSON string
 // Responses can represent. The existing Codex converter intentionally omits
 // these controls because the Codex endpoint rejects them.
 func TranslateAnthropicToResponsesForGrok(rawJSON []byte, modelMappingJSON string, supportedModels []string) ([]byte, string, error) {
-	return translateAnthropicToResponses(rawJSON, modelMappingJSON, supportedModels, true)
+	return translateAnthropicToResponses(rawJSON, modelMappingJSON, supportedModels, true, nil)
 }
 
-func translateAnthropicToResponses(rawJSON []byte, modelMappingJSON string, supportedModels []string, preserveControls bool) ([]byte, string, error) {
+func translateAnthropicToResponses(rawJSON []byte, modelMappingJSON string, supportedModels []string, preserveControls bool, servedDirectly func(string) bool) ([]byte, string, error) {
 	var req anthropicRequest
 	if err := json.Unmarshal(rawJSON, &req); err != nil {
 		return nil, "", fmt.Errorf("parse anthropic request: %w", err)
 	}
 
 	originalModel := req.Model
-	codexModel := resolveAnthropicModel(req.Model, modelMappingJSON, supportedModels)
+	codexModel := resolveAnthropicModelForRoute(req.Model, modelMappingJSON, supportedModels, servedDirectly)
 	if err := validateAnthropicToolReferences(req.Messages); err != nil {
 		return nil, originalModel, err
 	}

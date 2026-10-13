@@ -362,7 +362,7 @@ func TestAntigravityAdapterConvertsStructuredTextOutput(t *testing.T) {
 		t.Fatalf("generation config = %#v", generation)
 	}
 	schema, _ := generation["responseSchema"].(map[string]any)
-	if schema["type"] != "OBJECT" {
+	if schema["type"] != "object" {
 		t.Fatalf("response schema = %#v", schema)
 	}
 }

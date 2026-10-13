@@ -336,6 +336,111 @@ func (h *Handler) nativeClaudeRouteForRequest(c *gin.Context, model string) bool
 	return native
 }
 
+// messagesDirectModelContextKey 是本次请求"模型 ID 有账号以原名服务"判定的缓存键。
+const messagesDirectModelContextKey = "codex2api_messages_direct_model"
+
+type messagesDirectModelDecision struct {
+	model  string
+	direct bool
+}
+
+// messagesModelServedDirectlyForRequest 判断当前 Key 能用的非 Claude 原生账号里，
+// 有没有以原名服务该模型的（Antigravity 发布的公开模型、中转账号声明的模型）。
+// 命中时 /v1/messages 不再套内置的 Claude→Codex 默认映射。与原生路由判定一样
+// 按请求记忆：路由 stub 与选中账号后的翻译体必须拿到同一个结论。
+func (h *Handler) messagesModelServedDirectlyForRequest(c *gin.Context, model string) bool {
+	model = strings.TrimSpace(model)
+	if c == nil {
+		return h.hasDirectMessagesModelAccount(nil, model)
+	}
+	if cached, ok := c.Get(messagesDirectModelContextKey); ok {
+		if decision, ok := cached.(messagesDirectModelDecision); ok && decision.model == model {
+			return decision.direct
+		}
+	}
+	direct := h.hasDirectMessagesModelAccount(c, model)
+	c.Set(messagesDirectModelContextKey, messagesDirectModelDecision{model: model, direct: direct})
+	return direct
+}
+
+// messagesDirectModelCheck 把请求级判定包装成 resolveAnthropicModelForRoute 的回调。
+func (h *Handler) messagesDirectModelCheck(c *gin.Context) func(string) bool {
+	return func(model string) bool {
+		return h.messagesModelServedDirectlyForRequest(c, model)
+	}
+}
+
+// hasDirectMessagesModelAccount 扫一遍号池。账号可见性与该 Key 的 /v1/models
+// 同源（accountVisibleToAPIKey），所以"该 Key 的模型列表里有、且由非 Codex 账号
+// 提供"的 ID 不会再被改写成别的模型。只看结构性条件，不看冷却/限流这类瞬时状态：
+// 同一个模型名不该因为号池一时忙就换成另一家的模型，号都在冷却时客户端拿到的
+// 是可重试的错误。Claude 原生账号由 nativeClaudeRouteForRequest 负责，Codex 账号
+// 不以原名发布 claude-*，二者都不计入。
+func (h *Handler) hasDirectMessagesModelAccount(c *gin.Context, model string) bool {
+	if h == nil || h.store == nil || model == "" {
+		return false
+	}
+	channel := requestUpstreamChannel(c)
+	if channel == database.UpstreamChannelClaude {
+		return false
+	}
+	apiKeyID := requestAPIKeyID(c)
+	var groupFilter auth.AccountFilter
+	if c != nil && c.Request != nil {
+		rawBody, _ := rawRequestBodyFromContext(c)
+		rawBody = ingressRequestBody(c, rawBody)
+		groupFilter = applyAffinityGroupRouting(c, resolveRequestSessionIdentity(c.Request.Header, rawBody), nil)
+	}
+	now := time.Now()
+	for _, account := range h.store.Accounts() {
+		if account == nil || account.IsClaudeOAuth() || !h.accountVisibleToAPIKey(account, apiKeyID, now) {
+			continue
+		}
+		// 与 applyUpstreamChannelFilter 的渠道硬门一致（不带其中的限流判断）。
+		switch channel {
+		case database.UpstreamChannelAntigravity:
+			if !account.IsAntigravityAPI() {
+				continue
+			}
+		case database.UpstreamChannelGrok:
+			if !account.IsGrokAPI() {
+				continue
+			}
+		case database.UpstreamChannelCodex:
+			if account.IsGrokAPI() || account.IsAntigravityAPI() {
+				continue
+			}
+		}
+		if groupFilter != nil && !groupFilter(account) {
+			continue
+		}
+		if accountServesModelDirectly(account, model) {
+			return true
+		}
+	}
+	return false
+}
+
+// accountServesModelDirectly 是 /v1/messages 选号过滤器
+// （accountFilterForResponsesModelResolver）里 Antigravity 与中转分支的能力部分。
+func accountServesModelDirectly(account *auth.Account, model string) bool {
+	switch {
+	case account.IsAntigravityAPI():
+		if !account.AntigravityDispatchEnabled() {
+			return false
+		}
+		_, supported := antigravityResolvePublicModelForAccount(account, model)
+		return supported
+	case account.IsRelayStyle():
+		routedModel := model
+		if mappedModel, ok := resolveAccountModelMapping(account, model); ok && mappedModel != "" {
+			routedModel = mappedModel
+		}
+		return relayAccountSupportsModel(account, routedModel)
+	}
+	return false
+}
+
 // resolveNativeClaudeRequestModel resolves an optional client alias to a
 // Claude-native target for the native Messages path. OpenAI/Codex mappings are
 // intentionally ignored when the requested ID is already claude-*.
@@ -368,13 +473,13 @@ func (h *Handler) resolveMessagesRoutingBodyForRequest(c *gin.Context, rawBody [
 	}
 	nativeClaudeModel := h.resolveNativeClaudeRequestModel(c, requestedModel)
 	nativeClaudeRoute := h.nativeClaudeRouteForRequest(c, requestedModel)
-	mapped := resolveAnthropicModel(requestedModel, mappingJSON, supportedModels)
 	// 原生 Claude 路由:若存在能服务该模型的 Claude Code OAuth 账号,则保持原生
-	// 模型 ID,交由 claude 账号原生透传;否则维持既有 Codex 翻译兜底(claude-* →
-	// gpt-5.5 / haiku → gpt-5.6-luna),不影响没有 claude 账号、靠 Codex 服务
-	// /v1/messages 的用户。
-	if nativeClaudeRoute {
-		mapped = nativeClaudeModel
+	// 模型 ID,交由 claude 账号原生透传。否则同样先看有没有 Antigravity/中转账号
+	// 以原名服务该 ID,都没有才维持既有 Codex 翻译兜底(claude-* → gpt-5.5 /
+	// haiku → gpt-5.6-luna),不影响没有这些账号、靠 Codex 服务 /v1/messages 的用户。
+	mapped := nativeClaudeModel
+	if !nativeClaudeRoute {
+		mapped = resolveAnthropicModelForRoute(requestedModel, mappingJSON, supportedModels, h.messagesDirectModelCheck(c))
 	}
 	stub, err := sjson.SetBytes([]byte(`{}`), "model", mapped)
 	if err != nil {
@@ -406,33 +511,27 @@ type anthropicCodexTranslation struct {
 	done bool
 }
 
-func (h *Handler) translateAnthropicMessagesToCodexOnce(state *anthropicCodexTranslation, rawBody []byte, supportedModels []string) ([]byte, error) {
-	if state == nil {
-		mappingJSON := ""
-		if h != nil && h.store != nil {
-			mappingJSON = h.store.GetModelMapping()
-		}
-		body, _, err := TranslateAnthropicToCodexWithModels(rawBody, mappingJSON, supportedModels)
-		if err != nil {
-			return nil, err
-		}
-		return h.applyMessagesModelMapping(body, supportedModels), nil
-	}
-	if state.done {
+func (h *Handler) translateAnthropicMessagesToCodexOnce(c *gin.Context, state *anthropicCodexTranslation, rawBody []byte, supportedModels []string) ([]byte, error) {
+	if state != nil && state.done {
 		return state.body, state.err
 	}
-	state.done = true
 	mappingJSON := ""
 	if h != nil && h.store != nil {
 		mappingJSON = h.store.GetModelMapping()
 	}
-	body, _, err := TranslateAnthropicToCodexWithModels(rawBody, mappingJSON, supportedModels)
-	if err != nil {
-		state.err = err
-		return nil, err
+	// 模型解析带上与路由 stub 相同的请求级判定，翻译体的 model（以及按 model
+	// 归一的 effort）才与选号时一致。
+	body, _, err := translateAnthropicToCodexForRoute(rawBody, mappingJSON, supportedModels, h.messagesDirectModelCheck(c))
+	if err == nil {
+		body = h.applyMessagesModelMapping(body, supportedModels)
+	} else {
+		body = nil
 	}
-	state.body = h.applyMessagesModelMapping(body, supportedModels)
-	return state.body, nil
+	if state != nil {
+		state.done = true
+		state.body, state.err = body, err
+	}
+	return body, err
 }
 
 // ==================== /v1/messages Handler ====================
@@ -774,7 +873,7 @@ func (h *Handler) Messages(c *gin.Context) {
 			upstreamBody := routingBody
 			if !account.IsGrokAPI() {
 				var translateErr error
-				upstreamBody, translateErr = h.translateAnthropicMessagesToCodexOnce(&codexTranslation, canonicalBody, supportedModels)
+				upstreamBody, translateErr = h.translateAnthropicMessagesToCodexOnce(c, &codexTranslation, canonicalBody, supportedModels)
 				if translateErr != nil {
 					ttftGuard.Stop()
 					h.store.Release(account)
@@ -808,7 +907,7 @@ func (h *Handler) Messages(c *gin.Context) {
 				})
 			}
 		} else {
-			codexBody, translateErr := h.translateAnthropicMessagesToCodexOnce(&codexTranslation, canonicalBody, supportedModels)
+			codexBody, translateErr := h.translateAnthropicMessagesToCodexOnce(c, &codexTranslation, canonicalBody, supportedModels)
 			if translateErr != nil {
 				ttftGuard.Stop()
 				h.store.Release(account)

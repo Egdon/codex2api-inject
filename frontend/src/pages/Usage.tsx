@@ -1831,22 +1831,33 @@ export default function Usage() {
   // 后续筛选变化由下方 useEffect 用 reloadSilently 原地静默刷新,搜索框焦点不丢失。
   const statsFilterParamsRef = useRef(buildDimensionFilterParams)
   statsFilterParamsRef.current = buildDimensionFilterParams
+  // 每次维度筛选变化加一;加载结果带上发起时的版本号,用来判断卡片上的数字是不是当前筛选的。
+  const statsFiltersVersionRef = useRef(0)
+  const [statsFiltersVersion, setStatsFiltersVersion] = useState(0)
+  const [statsLoadError, setStatsLoadError] = useState<string | null>(null)
 
   const loadStats = useCallback(async () => {
+    const version = statsFiltersVersionRef.current
     const [stats, settings] = await Promise.all([
       api.getUsageStats(statsFilterParamsRef.current()),
       api.getSettings().catch((): SystemSettings | null => null),
     ])
-    return { stats, settings }
+    return { stats, settings, version }
   }, [])
 
   const { data, loading, error, reload, reloadSilently } = useDataLoader<{
     stats: UsageStats | null
     settings: SystemSettings | null
+    version: number
   }>({
-    initialData: { stats: null, settings: null },
+    initialData: { stats: null, settings: null, version: 0 },
     load: loadStats,
+    onError: setStatsLoadError,
   })
+
+  useEffect(() => {
+    setStatsLoadError(null)
+  }, [data])
 
   // 维度筛选(时间范围/账号/密钥/模型/端点/搜索/形态)变化时,静默原地刷新统计卡片:
   // 保留页面与搜索框焦点,避免整页骨架屏闪烁;首次加载已由 useDataLoader 全页骨架屏承担。
@@ -1856,6 +1867,9 @@ export default function Usage() {
       statsFiltersFirstRunRef.current = false
       return
     }
+    statsFiltersVersionRef.current += 1
+    setStatsFiltersVersion(statsFiltersVersionRef.current)
+    setStatsLoadError(null)
     void reloadSilently()
   }, [buildDimensionFilterParams, reloadSilently])
 
@@ -1946,6 +1960,10 @@ export default function Usage() {
   }, [showAnalysis])
 
   const { stats, settings } = data
+  // 卡片还停留在上一组筛选的结果上:加载中先压暗,加载失败(慢库超时等)就遮住旧数字,
+  // 不能让旧区间的数字顶着新区间的标签显示。
+  const statsOutdated = data.version !== statsFiltersVersion
+  const statsOutdatedFailed = statsOutdated && statsLoadError !== null
   const showFullUsageNumbers = settings?.show_full_usage_numbers ?? false
   const showUpstreamModelMismatch = settings?.show_upstream_model_mismatch !== false
   showUpstreamModelMismatchRef.current = showUpstreamModelMismatch
@@ -2141,6 +2159,23 @@ export default function Usage() {
         />
 
         <div key={channel || 'all'} className="space-y-6 animate-channel-switch-in">
+        <div className="relative space-y-6">
+        {statsOutdatedFailed && (
+          <div role="alert" className="absolute inset-0 z-10 flex items-start justify-center rounded-xl bg-background/85 p-6 backdrop-blur-sm">
+            <div className="flex max-w-xl flex-col items-center gap-3 text-center text-sm">
+              <div className="flex items-center gap-2 font-semibold text-foreground">
+                <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+                {t('usage.statsLoadFailed')}
+              </div>
+              <div className="break-words text-xs text-muted-foreground">{statsLoadError}</div>
+              <Button size="sm" variant="outline" onClick={() => { setStatsLoadError(null); void reloadSilently() }}>
+                <RefreshCw className="size-3.5" />
+                {t('common.retry')}
+              </Button>
+            </div>
+          </div>
+        )}
+        <div className={cn('space-y-6 transition-opacity', statsOutdated && 'opacity-60')} aria-busy={statsOutdated && !statsOutdatedFailed}>
         {/* Stat overview: 6 metrics in a single row */}
         <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
           <Card className="min-w-0 py-0">
@@ -2253,6 +2288,8 @@ export default function Usage() {
             <APIKeyStatsPanel stats={apiKeyStats} totalRequests={rangeRequests} showFullUsageNumbers={showFullUsageNumbers} />
           </section>
         )}
+        </div>
+        </div>
 
         {/* Logs table */}
         <Card>

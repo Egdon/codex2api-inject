@@ -102,7 +102,7 @@ func TestAntigravityExportAPIKeyIsExplicitAndSecretBearing(t *testing.T) {
 	}
 }
 
-func TestAntigravityExportSelectedAccountsZIPAndWrongChannelNotFound(t *testing.T) {
+func TestAntigravityExportSelectedAccountsJSONArrayZIPAndWrongChannelNotFound(t *testing.T) {
 	db := newTestAdminDB(t)
 	store := auth.NewStore(db, nil, nil)
 	t.Cleanup(store.Stop)
@@ -121,11 +121,14 @@ func TestAntigravityExportSelectedAccountsZIPAndWrongChannelNotFound(t *testing.
 		t.Fatal(err)
 	}
 
+	ids := strconv.FormatInt(first, 10) + "," + strconv.FormatInt(second, 10) + "," + strconv.FormatInt(notExportable, 10)
+
+	// 默认导出:多个账号合成一个 JSON 数组文件,导入器可原样读回。
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/admin/accounts/antigravity/export?ids="+strconv.FormatInt(first, 10)+","+strconv.FormatInt(second, 10)+","+strconv.FormatInt(notExportable, 10), nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/admin/accounts/antigravity/export?ids="+ids, nil)
 	handler.ExportAntigravityAccounts(c)
-	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "application/zip" {
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "application/json; charset=utf-8" {
 		t.Fatalf("status=%d content-type=%q body=%s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
 	}
 	if recorder.Header().Get("Cache-Control") != "no-store, max-age=0" || recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
@@ -133,6 +136,31 @@ func TestAntigravityExportSelectedAccountsZIPAndWrongChannelNotFound(t *testing.
 	}
 	if recorder.Header().Get("X-Export-Count") != "2" {
 		t.Fatalf("X-Export-Count = %q, want actual credential count 2", recorder.Header().Get("X-Export-Count"))
+	}
+	if disposition := recorder.Header().Get("Content-Disposition"); !strings.Contains(disposition, ".json") || !strings.Contains(disposition, "-2.json") {
+		t.Fatalf("Content-Disposition = %q, want a single -2.json download", disposition)
+	}
+	var array []map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &array); err != nil || len(array) != 2 {
+		t.Fatalf("json array len=%d err=%v body=%s", len(array), err, recorder.Body.String())
+	}
+	for _, item := range array {
+		if item["type"] != "antigravity" {
+			t.Fatalf("invalid array item: %#v", item)
+		}
+	}
+	documents, err := parseAntigravityImportDocuments(recorder.Body.String(), antigravityImportDefaults{})
+	if err != nil || len(documents) != 2 {
+		t.Fatalf("round-trip documents=%d err=%v", len(documents), err)
+	}
+
+	// format=zip 仍保留每账号一个文件的压缩包。
+	recorder = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/admin/accounts/antigravity/export?format=zip&ids="+ids, nil)
+	handler.ExportAntigravityAccounts(c)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "application/zip" {
+		t.Fatalf("zip status=%d content-type=%q body=%s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
 	}
 	reader, err := zip.NewReader(bytes.NewReader(recorder.Body.Bytes()), int64(recorder.Body.Len()))
 	if err != nil || len(reader.File) != 2 {
@@ -152,6 +180,14 @@ func TestAntigravityExportSelectedAccountsZIPAndWrongChannelNotFound(t *testing.
 		if json.Unmarshal(data, &decoded) != nil || decoded["type"] != "antigravity" {
 			t.Fatalf("invalid member %q: %s", member.Name, data)
 		}
+	}
+
+	badFormat := httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(badFormat)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/admin/accounts/antigravity/export?format=tar", nil)
+	handler.ExportAntigravityAccounts(c)
+	if badFormat.Code != http.StatusBadRequest {
+		t.Fatalf("unknown format status = %d", badFormat.Code)
 	}
 
 	notFound := httptest.NewRecorder()

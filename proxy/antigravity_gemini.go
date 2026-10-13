@@ -34,11 +34,22 @@ func ExecuteAntigravityGeminiRequest(ctx context.Context, account *auth.Account,
 		return nil, err
 	}
 	_ = bearer
+	jsonMode := antigravityClaudeJSONModeRequest(payload)
 	return executeAntigravityOAuthRequest(ctx, account, payload, antigravityOAuthGenerateCall(stream), proxyURL, wireModel, func(resp *http.Response, stream bool, _ string) (*http.Response, error) {
 		if stream {
-			resp.Body = newAntigravityNativeGeminiSSEResponseBody(resp.Body, reverseNameMap)
+			sse := newAntigravityNativeGeminiSSEResponseBody(resp.Body, reverseNameMap)
+			sse.jsonMode = jsonMode
+			resp.Body = sse
 			resp.Header.Set("Content-Type", "text/event-stream; charset=utf-8")
 			return resp, nil
+		}
+		if jsonMode {
+			raw, readErr := readBoundedAntigravityBody(resp.Body, antigravityResponseBodyLimit)
+			if readErr != nil {
+				return nil, fmt.Errorf("read Antigravity Gemini JSON response: %w", readErr)
+			}
+			raw, _ = antigravityRewriteJSONModeFrame(raw, false)
+			resp.Body = io.NopCloser(bytes.NewReader(raw))
 		}
 		converted, convertErr := newAntigravityNativeGeminiJSONResponseBody(resp.Body, reverseNameMap)
 		if convertErr != nil {
@@ -881,9 +892,13 @@ type antigravityNativeGeminiSSEBody struct {
 	reverseNameMap map[string]string
 	terminalErr    error
 	sawTerminal    bool
+	// jsonMode reads every event through antigravityRewriteJSONModeFrame;
+	// jsonModeToolCalled is its cross-event state.
+	jsonMode           bool
+	jsonModeToolCalled bool
 }
 
-func newAntigravityNativeGeminiSSEResponseBody(r io.ReadCloser, reverseNameMap map[string]string) io.ReadCloser {
+func newAntigravityNativeGeminiSSEResponseBody(r io.ReadCloser, reverseNameMap map[string]string) *antigravityNativeGeminiSSEBody {
 	return &antigravityNativeGeminiSSEBody{source: r, events: newAntigravitySSEReader(bufio.NewReader(r)), reverseNameMap: reverseNameMap}
 }
 
@@ -971,6 +986,9 @@ func (b *antigravityNativeGeminiSSEBody) Read(p []byte) (int, error) {
 		if bytes.Equal(trimmed, []byte("[DONE]")) {
 			b.terminalErr = b.endError(readErr)
 			continue
+		}
+		if b.jsonMode {
+			trimmed, b.jsonModeToolCalled = antigravityRewriteJSONModeFrame(trimmed, b.jsonModeToolCalled)
 		}
 		payload, err := antigravityNativeGeminiStreamPayload(trimmed)
 		if err != nil {

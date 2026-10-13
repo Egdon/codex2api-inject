@@ -105,6 +105,20 @@ func antigravitySchedulingUsedPercent(q AntigravityQuotaSnapshot) (float64, bool
 	return clampSchedulingPercent((1 - sum/float64(len(q.Models))) * 100), true
 }
 
+// AntigravityQuotaUsedPercent 把持久化的 antigravity_quota 凭据折算成已用百分比，
+// 口径与调度排序键一致（不看观测时效）。快照为空、无法解析或被拒绝访问时 ok=false。
+func AntigravityQuotaUsedPercent(raw string) (float64, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	var snapshot AntigravityQuotaSnapshot
+	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+		return 0, false
+	}
+	return antigravitySchedulingUsedPercent(snapshot)
+}
+
 // applyAntigravityQuotaSchedulingLocked 把持久化的 antigravity_quota 凭据投影成
 // 内存里的调度排序键,并顺带记下各模型的最大输出上限。调用方持有 a.mu 或账号尚未发布。
 func (a *Account) applyAntigravityQuotaSchedulingLocked(raw string) {

@@ -314,7 +314,7 @@
     "exportAll": "匯出憑據",
     "exportOne": "匯出此憑據",
     "exporting": "正在匯出...",
-    "exportSuccess": "已匯出 {{count}} 份含密鑰的憑據檔案",
+    "exportSuccess": "已匯出 {{count}} 個帳號的憑據（單個 JSON 檔案，含密鑰）",
     "exportSuccessUnknownCount": "Antigravity 憑據已匯出",
     "exportFailed": "憑據匯出失敗：{{error}}",
     "exportAllConfirmTitle": "匯出全部 Antigravity 憑據？",

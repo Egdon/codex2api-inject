@@ -30,9 +30,11 @@ export interface AntigravityBatchActionsProps {
   onChanged: () => Promise<void>;
   onBusyChange?: (busy: boolean) => void;
   onDeleted?: (ids: number[]) => void;
+  externalBusy?: boolean;
+  isExternalBusy?: () => boolean;
 }
 
-export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount, proxies, groups, onCreateGroup, onClearSelection, onChanged, onBusyChange, onDeleted }: AntigravityBatchActionsProps) {
+export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount, proxies, groups, onCreateGroup, onClearSelection, onChanged, onBusyChange, onDeleted, externalBusy = false, isExternalBusy }: AntigravityBatchActionsProps) {
   const { t } = useTranslation();
   const mounted = useRef(true);
   useEffect(() => {
@@ -54,10 +56,10 @@ export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount,
   const { operationProgress, operationResults, reportOperationEvent, closeOperationResults } = useOperationProgress(true);
   const targets = freezeAntigravityTargets(selectedAccounts);
   const refresh = antigravityRefreshTargets(targets);
-  const blocked = busy || confirmation !== null;
+  const blocked = busy || confirmation !== null || externalBusy;
   const title = (action: Action) => t(`antigravity.batch.${action}`);
   const acquire = (phase: "confirm" | "running") => {
-    if (lock.current !== "idle") return false;
+    if (lock.current !== "idle" || externalBusy || isExternalBusy?.()) return false;
     lock.current = phase;
     onBusyChange?.(true);
     return true;
@@ -132,7 +134,7 @@ export function AntigravityBatchActions({ selectedAccounts, hiddenSelectedCount,
         const anchor = document.createElement("a");
         try {
           anchor.href = url;
-          anchor.download = file.filename || "antigravity-accounts.zip";
+          anchor.download = file.filename || "antigravity-accounts.json";
           document.body.appendChild(anchor);
           anchor.click();
         } finally {

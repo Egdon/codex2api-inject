@@ -7,6 +7,14 @@ const accountsSource = readFileSync(
   new URL('../pages/AntigravityAccounts.tsx', import.meta.url),
   'utf8',
 )
+const editModalSource = readFileSync(
+  new URL('../pages/antigravity/AntigravityEditModal.tsx', import.meta.url),
+  'utf8',
+)
+const importModalSource = readFileSync(
+  new URL('../pages/antigravity/AntigravityImportModal.tsx', import.meta.url),
+  'utf8',
+)
 const dashboardSource = readFileSync(
   new URL('../pages/Dashboard.tsx', import.meta.url),
   'utf8',
@@ -19,7 +27,7 @@ const apiSource = readFileSync(new URL('../api.ts', import.meta.url), 'utf8')
 const typesSource = readFileSync(new URL('../types.ts', import.meta.url), 'utf8')
 
 test('API-key editing hydrates lite rows before initializing secret-bearing settings', () => {
-  const openEditor = extractBalancedBody(accountsSource, 'const openEditor = async')
+  const openEditor = extractBalancedBody(editModalSource, 'const openEditor = async')
   for (const fragment of [
     'account.detail_loaded !== false',
     'setEditingDetailsLoading(true)',
@@ -29,7 +37,7 @@ test('API-key editing hydrates lite rows before initializing secret-bearing sett
   ]) {
     assert.equal(openEditor.includes(fragment), true, `missing safe edit hydration: ${fragment}`)
   }
-  assert.equal(accountsSource.includes('editing || editingDetailsLoading || Boolean(editingDetailsError)'), true)
+  assert.equal(editModalSource.includes('editing || editingDetailsLoading || Boolean(editingDetailsError)'), true)
 })
 
 test('detail management requests are account-and-generation scoped', () => {
@@ -59,9 +67,9 @@ test('detail management requests are account-and-generation scoped', () => {
 
 test('batch import identity includes sub-index in both React key and visible source label', () => {
   assert.equal(typesSource.includes('sub_index?: number'), true)
-  assert.equal(accountsSource.includes('item.sub_index ?? 0'), true)
-  assert.equal(accountsSource.includes('`#${item.index}${suffix}`'), true)
-  assert.equal(accountsSource.includes('importItemDisplayLabel(item)'), true)
+  assert.equal(importModalSource.includes('item.sub_index ?? 0'), true)
+  assert.equal(importModalSource.includes('`#${item.index}${suffix}`'), true)
+  assert.equal(importModalSource.includes('importItemDisplayLabel(item)'), true)
 })
 
 test('dashboard pool analysis follows the selected channel and rejects stale responses', () => {
